@@ -16,8 +16,8 @@ No usa dependencias de producción ni módulos nativos.
 ## Instalación
 
 ```bash
-git clone <REPOSITORY_URL>
-cd heroes-of-misery-rpg
+git clone https://github.com/DaekkoCorvus/homrolep.git
+cd homrolep
 npm install
 npm start
 ```
@@ -35,8 +35,8 @@ npm run dev
 ```bash
 pkg update
 pkg install git nodejs
-git clone <REPOSITORY_URL>
-cd heroes-of-misery-rpg
+git clone https://github.com/DaekkoCorvus/homrolep.git
+cd homrolep
 npm install
 npm start
 ```
