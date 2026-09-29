@@ -38,12 +38,26 @@ h1,h2,h3,p { margin-top:0; }
 .event { display:grid; grid-template-columns:95px 1fr; gap:.7rem; padding:.6rem 0; border-bottom:1px solid var(--line); font-size:.85rem; }
 .event:last-child { border:0; }
 .event time { color:var(--accent); }
+.event-story summary { cursor:pointer; }
+.event-story p { white-space:pre-wrap; color:var(--muted); line-height:1.55; margin:.7rem 0 0; }
 .stats { display:grid; grid-template-columns:repeat(2,1fr); gap:.7rem; }
 .stat { padding:.8rem; background:#0d1017; border-radius:10px; }
 .stat small { display:block; color:var(--muted); margin-bottom:.25rem; }
 #toast { position:fixed; left:50%; bottom:90px; transform:translateX(-50%) translateY(20px); opacity:0; background:#f1ede4; color:#17120c; padding:.75rem 1rem; border-radius:10px; transition:.2s; z-index:10; width:max-content; max-width:90%; }
 #toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
 .error { color:var(--danger); }
+[hidden] { display:none !important; }
+.settings-card { width:min(100%,520px); text-align:left; line-height:1.5; }
+.settings-card a { color:var(--accent); }
+.connection-status { border-left:2px solid var(--accent); padding:.7rem 1rem; background:#ffffff08; overflow-wrap:anywhere; }
+.settings-shortcut { padding:.4rem; min-width:44px; min-height:44px; }
+.topbar .clock { margin-left:auto; }
+.topbar { gap:.55rem; }
+.creation-settings { margin-top:1rem; width:100%; }
+.narrative-card p:last-child { white-space:pre-wrap; line-height:1.7; margin-bottom:0; }
+.narrative-card { border-left:2px solid var(--accent); }
+#action-status:empty { display:none; }
+.settings-card input,.narrative-card,.event { overflow-wrap:anywhere; }
 @media (min-width:600px) { .actions,.place-list { grid-template-columns:repeat(3,1fr); } .shell { padding-inline:1.5rem; } }
 
 /* El umbral: una escena ligera, dibujada solo con CSS. */

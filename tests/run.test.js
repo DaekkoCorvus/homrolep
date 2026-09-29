@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRun, setPrologue, applyAction, addPost } from '../src/server/game/run.js';
-import { generatePrologue } from '../src/server/ai/provider.js';
 
 const world = { locations: [
   { id:'apartment', travelMinutes:0 },
@@ -30,13 +29,6 @@ test('prologue location is constrained by the world data', () => {
   assert.equal(run.player.locationId, 'apartment');
   assert.equal(run.prologue.locationId, 'apartment');
   assert.equal(run.eventLog.at(-1).type, 'prologue_created');
-});
-
-test('local prologue uses the story to choose an available location', async () => {
-  const proposal = await generatePrologue(createRun({ ...character, origin:'Busqué un café para conocer gente.' }).player, world);
-  const run = setPrologue(createRun(character), proposal, world);
-  assert.equal(run.player.locationId, 'cafe');
-  assert.match(run.prologue.text, /Mara/);
 });
 
 test('travel updates location, time and semantic event log', () => {

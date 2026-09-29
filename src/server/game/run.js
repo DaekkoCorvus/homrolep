@@ -37,7 +37,7 @@ export function setPrologue(run, proposal, worldData) {
   const next = structuredClone(run);
   const allowed = worldData.locations.find((location) => location.id === proposal.locationId);
   const locationId = allowed?.id ?? 'apartment';
-  const text = String(proposal.text ?? '').trim().slice(0, 900);
+  const text = String(proposal.text ?? '').trim().slice(0, 3000);
   if (!text) throw new Error('No se pudo crear el prólogo.');
   next.player.locationId = locationId;
   next.prologue = { text, locationId, source: proposal.source === 'ai' ? 'ai' : 'local' };
@@ -74,7 +74,7 @@ export function applyAction(run, action, worldData) {
   } else {
     const text = String(action.text ?? '').trim().slice(0, 500);
     if (!text) throw new Error('Escribe una acción.');
-    event = { type: 'player_action', data: { text, response: 'La ciudad toma nota. Algo puede cambiar a partir de esta decisión.' } };
+    event = { type: 'player_action', data: { text } };
   }
 
   next.world = advanceTime(next.world, minutes);

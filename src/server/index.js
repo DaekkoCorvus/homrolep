@@ -1,9 +1,10 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRun, setPrologue, applyAction, addPost } from './game/run.js';
-import { generatePrologue } from './ai/provider.js';
+import { createNanoGPT, AIError } from './ai/provider.js';
+import { createSettingsStore } from './ai/settings.js';
 import { saveRun, loadRun, listRuns } from './saves/store.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -23,34 +24,74 @@ async function readBody(request) {
   let raw = '';
   for await (const chunk of request) {
     raw += chunk;
-    if (raw.length > 1_000_000) throw new Error('Solicitud demasiado grande.');
+    if (raw.length > 32_000) throw new Error('Solicitud demasiado grande.');
   }
   return raw ? JSON.parse(raw) : {};
 }
 
+export function createAppServer({ ai = createNanoGPT(), settings = createSettingsStore(), store = { saveRun, loadRun, listRuns } } = {}) {
+const active = new Set();
+async function exclusive(key, operation) {
+  if (active.has(key)) throw new AIError('Ya hay una petición en curso. Espera a que termine.', 'REQUEST_BUSY', 409);
+  active.add(key);
+  try { return await operation(); } finally { active.delete(key); }
+}
+
 async function api(request, response, pathname) {
+  if (request.method === 'GET' && pathname === '/api/ai/settings') return sendJson(response, 200, await settings.status());
+  if (request.method === 'POST' && pathname === '/api/ai/models') {
+    const key = await settings.key(await readBody(request));
+    return sendJson(response, 200, { models:await ai.models(key) });
+  }
+  if (pathname === '/api/ai/settings' && request.method === 'POST') {
+    const input = await readBody(request);
+    return exclusive('settings', async () => {
+      const candidate = await settings.candidate(input);
+      await ai.verify(candidate);
+      return sendJson(response, 200, await settings.save(candidate));
+    });
+  }
+  if (pathname === '/api/ai/settings' && request.method === 'DELETE') {
+    return exclusive('settings', async () => sendJson(response, 200, await settings.clear()));
+  }
   if (request.method === 'GET' && pathname === '/api/world') return sendJson(response, 200, worldData);
-  if (request.method === 'GET' && pathname === '/api/runs') return sendJson(response, 200, await listRuns());
+  if (request.method === 'GET' && pathname === '/api/runs') return sendJson(response, 200, await store.listRuns());
   if (request.method === 'POST' && pathname === '/api/runs') {
-    const draft = createRun(await readBody(request));
-    const run = setPrologue(draft, await generatePrologue(draft.player, worldData), worldData);
-    await saveRun(run);
-    return sendJson(response, 201, run);
+    const input = await readBody(request);
+    return exclusive('creation', async () => {
+      const config = await settings.require();
+      const draft = createRun(input);
+      const run = setPrologue(draft, await ai.prologue(draft.player, worldData, config), worldData);
+      await store.saveRun(run);
+      return sendJson(response, 201, run);
+    });
   }
   const match = pathname.match(/^\/api\/runs\/([0-9a-f-]{36})(?:\/(action|posts))?$/i);
   if (!match) return sendJson(response, 404, { error: 'Ruta no encontrada.' });
   const [, id, operation] = match;
-  if (request.method === 'GET' && !operation) return sendJson(response, 200, await loadRun(id));
+  if (request.method === 'GET' && !operation) return sendJson(response, 200, await store.loadRun(id));
   if (request.method === 'POST' && operation === 'action') {
-    const run = applyAction(await loadRun(id), await readBody(request), worldData);
-    await saveRun(run);
-    return sendJson(response, 200, run);
+    const input = await readBody(request);
+    return exclusive(id, async () => {
+      const config = await settings.require();
+      const before = await store.loadRun(id);
+      const run = applyAction(before, input, worldData);
+      const narrative = await ai.narrate(before, run, worldData, config);
+      const event = run.eventLog.at(-1);
+      event.data = { ...event.data, response:narrative };
+      run.narrative = { text:narrative, time:event.time };
+      await store.saveRun(run);
+      return sendJson(response, 200, run);
+    });
   }
   if (request.method === 'POST' && operation === 'posts') {
     const body = await readBody(request);
-    const run = addPost(await loadRun(id), body.text);
-    await saveRun(run);
-    return sendJson(response, 200, run);
+    return exclusive(id, async () => {
+      await settings.require();
+      const run = addPost(await store.loadRun(id), body.text);
+      await store.saveRun(run);
+      return sendJson(response, 200, run);
+    });
   }
   return sendJson(response, 405, { error: 'Método no permitido.' });
 }
@@ -59,7 +100,7 @@ async function staticFile(response, pathname) {
   const route = pathname === '/' ? '/index.html' : pathname;
   const base = ['/app.js', '/styles.css', '/index.html'].includes(route) ? clientDir : publicDir;
   const target = path.resolve(base, `.${route}`);
-  if (!target.startsWith(base)) throw Object.assign(new Error('Ruta inválida.'), { code: 'ENOENT' });
+  if (!target.startsWith(base + path.sep)) throw Object.assign(new Error('Ruta inválida.'), { code: 'ENOENT' });
   const content = await readFile(target);
   response.writeHead(200, { 'content-type': mimeTypes[path.extname(target)] ?? 'application/octet-stream' });
   response.end(content);
@@ -67,15 +108,27 @@ async function staticFile(response, pathname) {
 
 const server = http.createServer(async (request, response) => {
   try {
-    const pathname = new URL(request.url, `http://${request.headers.host || 'localhost'}`).pathname;
-    if (pathname.startsWith('/api/')) await api(request, response, pathname);
+    const host = request.headers.host || '';
+    const url = new URL(request.url, `http://${host}`);
+    if (!['localhost','127.0.0.1','[::1]'].includes(url.hostname)) throw new AIError('Abre el juego desde localhost.', 'LOCAL_ONLY', 403);
+    const pathname = url.pathname;
+    if (pathname.startsWith('/api/')) {
+      if (request.headers['sec-fetch-site'] === 'cross-site' || (request.headers.origin && request.headers.origin !== `http://${host}`)) throw new AIError('Origen de solicitud no permitido.', 'INVALID_ORIGIN', 403);
+      if (['POST','DELETE'].includes(request.method) && !request.headers['content-type']?.startsWith('application/json')) throw new AIError('Se requiere una solicitud JSON.', 'INVALID_REQUEST', 415);
+      await api(request, response, pathname);
+    }
     else await staticFile(response, pathname);
   } catch (error) {
-    const status = error.code === 'ENOENT' ? 404 : error instanceof SyntaxError ? 400 : 400;
-    if (!response.headersSent) sendJson(response, status, { error: error.message });
+    const status = error.status || (error.code === 'ENOENT' ? 404 : 400);
+    const message = error instanceof SyntaxError ? 'Solicitud JSON inválida.' : error.message;
+    if (!response.headersSent) sendJson(response, status, { error:message, code:error.code || 'INVALID_REQUEST' });
   }
 });
+return server;
+}
 
-server.listen(port, '0.0.0.0', () => {
-  console.log(`HOM RPG disponible en http://localhost:${port}`);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  createAppServer().listen(port, '127.0.0.1', () => {
+    console.log(`HOM RPG disponible en http://localhost:${port}`);
+  });
+}
