@@ -6,6 +6,8 @@ Prototipo mobile-first de un simulador social y RPG narrativo ambientado en el u
 
 **Prototype / MVP.** Incluye creación y persistencia de Runs, reloj de mundo, navegación por Northfortress, acciones libres con respuesta mock, Event Log semántico, feed social y un shell PWA adaptable a teléfonos.
 
+El prototipo jugable está en la rama `dev`. La rama `main` conserva el bootstrap hasta que se revise y fusione el PR.
+
 ## Requisitos
 
 - Node.js 20 o posterior
@@ -18,6 +20,7 @@ No usa dependencias de producción ni módulos nativos.
 ```bash
 git clone https://github.com/DaekkoCorvus/homrolep.git
 cd homrolep
+git switch dev
 npm install
 npm start
 ```
@@ -37,6 +40,7 @@ pkg update
 pkg install git nodejs
 git clone https://github.com/DaekkoCorvus/homrolep.git
 cd homrolep
+git switch dev
 npm install
 npm start
 ```
