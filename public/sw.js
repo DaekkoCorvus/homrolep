@@ -1,4 +1,4 @@
-const CACHE = 'hom-rpg-v4';
+const CACHE = 'hom-rpg-v5';
 const ASSETS = ['/', '/styles.css', '/app.js', '/manifest.json'];
 
 self.addEventListener('install', (event) => {

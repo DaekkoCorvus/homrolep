@@ -60,7 +60,7 @@ async function api(request, response, pathname) {
     const profile={
       age:String(input.age ?? '').slice(0,3), gender:String(input.gender ?? '').slice(0,20),
       genderCustom:String(input.genderCustom ?? '').slice(0,40),
-      appearance:String(input.appearance ?? '').slice(0,300), origin:String(input.origin ?? '').slice(0,600)
+      origin:String(input.origin ?? '').slice(0,600)
     };
     return exclusive('creation-whispers', async () => {
       const config=await settings.require();
