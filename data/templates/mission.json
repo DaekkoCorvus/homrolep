@@ -1,0 +1,7 @@
+{
+  "id": "mission_id",
+  "type": "investigation",
+  "objectives": [{"intent":"obtain_information","subject":"example"}],
+  "deadline": null,
+  "status": "active"
+}
