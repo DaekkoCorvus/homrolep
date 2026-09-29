@@ -2,6 +2,8 @@
 
 Prototipo mobile-first de un simulador social y RPG narrativo ambientado en el universo de Heroes of Misery. Esta primera versión ofrece un pequeño mundo funcional; no pretende implementar todavía el lore, combate ni dirección narrativa con IA completos.
 
+La dirección del proyecto, las decisiones tomadas en «HOM ROLEPLAY» y lo que sigue pendiente están en [la visión del simulador](HOM_SIMULATOR_VISION.md). Ese documento guía las siguientes implementaciones y sustituye como referencia de diseño al plan inicial de bootstrap.
+
 ## Estado
 
 **Prototype / MVP.** Incluye creación de personaje por escenas, prólogo y narración de acciones con NanoGPT, llegada a una ubicación de Northfortress, persistencia de Runs, reloj de mundo, Event Log semántico, feed social y un shell PWA adaptable a teléfonos.
@@ -95,7 +97,7 @@ El código es autoridad para dinero, inventario, tiempo, estadísticas, acceso, 
 
 ## Filosofía futura del GM
 
-El GM observará un resumen compacto del Run State, propondrá hooks y eventos causales, adaptará historias al rol del jugador e interpretará acciones sin alterar hechos duros. El jugador podrá ignorar un hook; el sistema no deberá forzarlo inmediatamente.
+El Director Narrativo observará un resumen compacto del Run State, propondrá oportunidades causales, adaptará historias al rol emergente del jugador e interpretará acciones sin alterar hechos duros. El jugador podrá ignorar un gancho y el mundo seguirá avanzando. Los límites de intervención sobre sucesos canónicos aún requieren definición; véase [la visión del simulador](HOM_SIMULATOR_VISION.md).
 
 ## Roadmap
 
