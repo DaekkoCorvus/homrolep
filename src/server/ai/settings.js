@@ -2,6 +2,12 @@ import { mkdir, readFile, rename, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { AIError } from './provider.js';
 
+export const GM_MODELS = Object.freeze({
+  spark:'meta/muse-spark-1.3-contributor',
+  deepseek:'deepseek/deepseek-v4.1-flash'
+});
+const supportedModels = new Set(Object.values(GM_MODELS));
+
 export function createSettingsStore(directory = path.resolve('.local')) {
   const target = path.join(directory, 'ai.json');
   async function read() {
@@ -12,7 +18,9 @@ export function createSettingsStore(directory = path.resolve('.local')) {
     }
   }
   function publicStatus(config) {
-    return { provider:'nanogpt', configured:Boolean(config?.apiKey && config?.model && config?.verifiedAt), model:config?.model || '', verifiedAt:config?.verifiedAt || null };
+    const hasKey=Boolean(config?.apiKey);
+    const configured=Boolean(hasKey && supportedModels.has(config?.model) && config?.verifiedAt);
+    return { provider:'nanogpt', configured, hasKey, model:config?.model || '', verifiedAt:configured?config.verifiedAt:null };
   }
   return {
     async status() { return publicStatus(await read()); },
@@ -21,7 +29,7 @@ export function createSettingsStore(directory = path.resolve('.local')) {
       const apiKey = typeof input.apiKey === 'string' && input.apiKey.trim() ? input.apiKey.trim() : previous?.apiKey;
       const model = typeof input.model === 'string' ? input.model.trim() : previous?.model;
       if (!apiKey || apiKey.length > 4096 || /\s/.test(apiKey)) throw new AIError('Introduce una API key válida de NanoGPT.', 'AI_CONFIGURATION_REQUIRED', 428);
-      if (!model || model.length > 200 || /\s/.test(model)) throw new AIError('Selecciona o escribe el ID del modelo.', 'AI_MODEL', 400);
+      if (!supportedModels.has(model)) throw new AIError('Selecciona uno de los GM disponibles.', 'AI_MODEL', 400);
       return { apiKey, model };
     },
     async key(input = {}) {

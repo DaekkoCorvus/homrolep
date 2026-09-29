@@ -55,6 +55,22 @@ async function api(request, response, pathname) {
     return exclusive('settings', async () => sendJson(response, 200, await settings.clear()));
   }
   if (request.method === 'GET' && pathname === '/api/world') return sendJson(response, 200, worldData);
+  if (request.method === 'POST' && pathname === '/api/creation/whispers') {
+    const input=await readBody(request);
+    const profile={
+      age:String(input.age ?? '').slice(0,3), gender:String(input.gender ?? '').slice(0,20),
+      genderCustom:String(input.genderCustom ?? '').slice(0,40),
+      appearance:String(input.appearance ?? '').slice(0,300), origin:String(input.origin ?? '').slice(0,600)
+    };
+    return exclusive('creation-whispers', async () => {
+      const config=await settings.require();
+      try { return sendJson(response, 200, await ai.introduction(profile, config)); }
+      catch { return sendJson(response, 200, { whispers:[
+        'Es bueno tenerte aquí. Ya casi estás listo para continuar.',
+        'Perfecto… vamos a conocernos un poco antes de cruzar.'
+      ] }); }
+    });
+  }
   if (request.method === 'GET' && pathname === '/api/runs') return sendJson(response, 200, await store.listRuns());
   if (request.method === 'POST' && pathname === '/api/runs') {
     const input = await readBody(request);

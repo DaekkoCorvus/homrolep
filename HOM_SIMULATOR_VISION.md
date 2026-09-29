@@ -20,7 +20,7 @@ Un inicio adecuado presenta días relativamente tranquilos y oportunidades peque
 
 ## Personaje y comienzo de una Run
 
-El umbral de creación es místico: una entidad o portal pregunta secuencialmente nombre, edad, género (hombre, mujer o personalizado), raza (humana en esta primera etapa) y «cuéntame quién eres». Con esos datos, la IA crea un prólogo breve y sitúa al personaje en un lugar válido del mapa. La ocupación y la aspiración **no** se preguntan en la creación: se descubren, eligen y transforman jugando.
+El umbral de creación es místico: tras confirmar una nueva partida, el portal se abre y la entidad pregunta edad, género (hombre, mujer o personalizado), apariencia y una historia personal que se puede dejar en misterio. Después pregunta el nombre, cuando el personaje ya está a punto de cruzar. Por ahora la raza humana se asigna como única opción disponible sin pedir al jugador una elección redundante. El GM elegido usa esos datos para crear un prólogo breve y situar al personaje en la estación de Northfortress. La ocupación y la aspiración **no** se preguntan en la creación: se descubren, eligen y transforman jugando.
 
 Una nueva Run y las acciones de juego requieren conexión NanoGPT verificada. Ajustes y partidas guardadas siguen accesibles sin ella. Si falla una llamada de IA, no se crea ni avanza la Run. La clave permanece en el servidor local, nunca en el cliente ni en Git.
 

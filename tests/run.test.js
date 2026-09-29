@@ -20,7 +20,7 @@ test('createRun initializes a versioned state and event log', () => {
 test('character creation validates identity, race and backstory', () => {
   assert.throws(() => createRun({ ...character, gender:'custom' }), /género/);
   assert.throws(() => createRun({ ...character, race:'elf' }), /humano/);
-  assert.throws(() => createRun({ ...character, origin:'breve' }), /10 caracteres/);
+  assert.equal(createRun({ ...character, origin:'' }).player.origin, '');
   assert.equal(createRun({ ...character, gender:'custom', genderCustom:'No binario' }).player.genderCustom, 'No binario');
 });
 

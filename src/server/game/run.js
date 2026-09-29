@@ -13,14 +13,14 @@ export function createRun(input = {}) {
   const genderCustom = String(input.genderCustom ?? '').trim().slice(0, 40);
   if (gender === 'custom' && !genderCustom) throw new Error('Cuéntanos cómo describes tu género.');
   if (input.race !== 'human') throw new Error('Por ahora solo se puede comenzar como humano.');
+  const appearance = String(input.appearance ?? '').trim().slice(0, 300);
   const origin = String(input.origin ?? '').trim().slice(0, 600);
-  if (origin.length < 10) throw new Error('Cuéntanos un poco más sobre tu personaje (al menos 10 caracteres).');
   const now = new Date().toISOString();
   const run = {
     id: randomUUID(), version: 1, createdAt: now, updatedAt: now,
     player: {
       name, age,
-      gender, genderCustom: gender === 'custom' ? genderCustom : '', race: 'human', origin,
+      gender, genderCustom: gender === 'custom' ? genderCustom : '', race: 'human', appearance, origin,
       occupation: null, aspiration: null,
       money: 60,
       reputation: 0,
@@ -35,7 +35,8 @@ export function createRun(input = {}) {
 
 export function setPrologue(run, proposal, worldData) {
   const next = structuredClone(run);
-  const allowed = worldData.locations.find((location) => location.id === proposal.locationId);
+  const allowed = worldData.locations.find((location) => location.id === 'station')
+    ?? worldData.locations.find((location) => location.id === proposal.locationId);
   const locationId = allowed?.id ?? 'apartment';
   const text = String(proposal.text ?? '').trim().slice(0, 3000);
   if (!text) throw new Error('No se pudo crear el prólogo.');

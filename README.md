@@ -57,11 +57,11 @@ npm test
 
 ## Configuración y seguridad
 
-En la pantalla inicial, abre **Ajustes**, pega tu API key de NanoGPT, pulsa **Cargar modelos** y selecciona uno. Pulsa **Probar y guardar**: se realiza una pequeña llamada de Chat Completions y solo si responde se habilita **Nueva Run**. La prueba y las narraciones pueden consumir saldo o cuota de NanoGPT. No envíes tu key por chat ni la introduzcas en archivos del repositorio.
+En la pantalla inicial, abre **Ajustes**, pega tu API key de NanoGPT y elige un GM: **Spark 1.3** (interpretativo y estricto) o **DeepSeek** (creativo y más suave). Pulsa **Probar y guardar**: se realiza una llamada de Chat Completions y solo si responde se habilita **Nueva partida**. La prueba, las frases de la entidad y las narraciones pueden consumir saldo o cuota de NanoGPT. No envíes tu key por chat ni la introduzcas en archivos del repositorio.
 
-La key se guarda en `.local/ai.json` en el servidor local, fuera de Git y de las partidas; el navegador nunca la guarda en localStorage ni la recibe de vuelta por la API. **Olvidar API key** la elimina. Este prototipo es para uso local de una persona; mantén protegidos el dispositivo y esa carpeta. La historia inicial, el personaje, las acciones y hasta 12 eventos recientes se envían a NanoGPT para crear el prólogo y narrar cada acción. El modelo seleccionado se utiliza en `https://api.nano-gpt.com/api/v1/chat/completions`. Si NanoGPT falla, la Run no se crea o la acción no avanza el reloj ni guarda cambios. Las partidas existentes se pueden leer sin conexión configurada.
+La key se guarda en `.local/ai.json` en el servidor local, fuera de Git y de las partidas; el navegador nunca la guarda en localStorage ni la recibe de vuelta por la API. **Olvidar API key** la elimina. Este prototipo es para uso local de una persona; mantén protegidos el dispositivo y esa carpeta. La historia inicial, el personaje, las acciones y hasta 12 eventos recientes se envían a NanoGPT. Las frases breves y personalizadas de la entidad usan `deepseek/deepseek-v4.1-flash`; el GM que elijas narra la llegada a la estación y las acciones. Si NanoGPT falla al crear la partida o narrar una acción, no se guarda ningún avance; las frases de la entidad tienen un texto de respaldo. Las partidas existentes se pueden leer sin conexión configurada.
 
-La creación pide nombre, edad, género, raza (solo humano por ahora) e historia personal. Ocupación y aspiración quedan sin definir al inicio: se desarrollarán durante el juego en futuras iteraciones. El atajo de trabajo solo funciona en partidas que ya tengan la ocupación `worker`.
+La creación pregunta edad, género, apariencia e historia personal opcional; el nombre se pide justo antes de cruzar. La raza humana se asigna automáticamente por ser la única disponible. El prólogo comienza en la estación. Ocupación y aspiración quedan sin definir al inicio y se desarrollarán durante el juego. El atajo de trabajo solo funciona en partidas que ya tengan la ocupación `worker`.
 
 ## Arquitectura
 
@@ -85,6 +85,7 @@ El código es autoridad para dinero, inventario, tiempo, estadísticas, acceso, 
 ## API local
 
 - `GET /api/world` — mundo de prueba
+- `POST /api/creation/whispers` — frases breves de la entidad durante la creación
 - `GET /api/ai/settings` — estado de la conexión, sin devolver la key
 - `POST /api/ai/models` — modelos disponibles en NanoGPT
 - `POST /api/ai/settings` — probar y guardar key y modelo

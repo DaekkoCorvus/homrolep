@@ -36,7 +36,7 @@ test('settings gate, generation, persistence, failures and concurrent requests w
     if(fail) return {ok:false,status:401};
     if(url.endsWith('/models')) return {ok:true,json:async()=>({data:[{id:'test-model'}]})};
     const body=JSON.parse(options.body);
-    assert.equal(body.model,'test-model');
+    assert.equal(body.model,'meta/muse-spark-1.3-contributor');
     assert.equal(body.stream,false);
     assert.ok(body.max_tokens>0);
     assert.ok(!options.body.includes('test-secret'));
@@ -63,10 +63,10 @@ test('settings gate, generation, persistence, failures and concurrent requests w
   assert.equal((await api('/api/ai/models','POST',{apiKey:'test-secret'})).body.models[0].id,'test-model');
   assert.equal((await api('/api/ai/settings')).body.configured,false);
   fail=true;
-  assert.equal((await api('/api/ai/settings','POST',{apiKey:'test-secret',model:'test-model'})).status,403);
+  assert.equal((await api('/api/ai/settings','POST',{apiKey:'test-secret',model:'meta/muse-spark-1.3-contributor'})).status,403);
   assert.equal((await settings.status()).configured,false);
   fail=false;
-  const saved=await api('/api/ai/settings','POST',{apiKey:'test-secret',model:'test-model'});
+  const saved=await api('/api/ai/settings','POST',{apiKey:'test-secret',model:'meta/muse-spark-1.3-contributor'});
   assert.equal(saved.body.configured,true);
   assert.ok(!JSON.stringify(saved).includes('test-secret'));
   assert.equal((await createSettingsStore(directory).status()).configured,true);

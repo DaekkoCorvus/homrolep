@@ -1,4 +1,8 @@
 const state = { run:null, world:null, screen:'home', creation:null };
+const GM_PROFILES = [
+  { id:'meta/muse-spark-1.3-contributor', name:'Spark 1.3', tagline:'Inteligente e interpretativo', description:'Mantiene la identidad de los personajes sin sesgo positivo. Es más estricto y ofrece una experiencia completa.' },
+  { id:'deepseek/deepseek-v4.1-flash', name:'DeepSeek', tagline:'Creativo y con chispa', description:'Más piadoso contigo y con menos restricciones. Una experiencia suave.' }
+];
 const app = document.querySelector('#app');
 const toast = document.querySelector('#toast');
 
@@ -25,8 +29,8 @@ function place(id) { return state.world.locations.find((item) => item.id === id)
 function escapeHtml(value='') { const node=document.createElement('span'); node.textContent=value; return node.innerHTML.replace(/"/g, '&quot;'); }
 
 function landing() {
-  app.innerHTML = `<main class="threshold"><div class="portal" aria-hidden="true"><div class="portal-core"></div></div><section class="threshold-content landing-card scene-enter"><p class="eyebrow">Un mundo aguarda tu nombre</p><h1 class="title">Heroes of<br><em>Misery</em></h1><p class="subtitle">Toda historia comienza al cruzar un umbral.</p><div class="menu"><button class="primary" data-start>Nueva Run <span aria-hidden="true">✧</span></button><button data-continue>Continuar</button><button data-settings>Ajustes</button></div><p class="muted" id="landing-message"></p></section></main>`;
-  app.querySelector('[data-start]').onclick = () => startCreation();
+  app.innerHTML = `<main class="threshold"><div class="portal" aria-hidden="true"><div class="portal-core"></div></div><section class="threshold-content landing-card scene-enter"><p class="eyebrow">Un mundo aguarda tu nombre</p><h1 class="title">Heroes of<br><em>Misery</em></h1><p class="subtitle">Toda historia comienza al cruzar un umbral.</p><div class="menu"><button class="primary" data-start>Nueva partida <span aria-hidden="true">✧</span></button><button data-continue>Continuar</button><button data-settings>Ajustes</button></div><p class="muted" id="landing-message"></p></section></main>`;
+  app.querySelector('[data-start]').onclick = confirmNewGame;
   app.querySelector('[data-continue]').onclick = continueRun;
   app.querySelector('[data-settings]').onclick = () => openSettings(landing);
 }
@@ -35,23 +39,20 @@ async function openSettings(onDone = landing, message = '', onBack = onDone) {
   let settings;
   try { settings = await request('/api/ai/settings'); }
   catch (error) { notify(error.message); return; }
-  app.innerHTML = `<main class="landing"><section class="settings-card card scene-enter"><p class="eyebrow">La voz de tu mundo</p><h1>Ajustes de IA</h1><p>Conecta tu cuenta de <a href="https://nano-gpt.com" target="_blank" rel="noopener noreferrer">NanoGPT</a> y elige el modelo que narrará la partida.</p><p class="connection-status" id="connection-status">${settings.configured?`Conexión comprobada · ${escapeHtml(settings.model)}`:'Aún no hay una conexión configurada.'}</p>${message?`<p class="field-note">${escapeHtml(message)}</p>`:''}<form class="form" id="ai-settings"><label>API key de NanoGPT<input name="apiKey" type="password" autocomplete="off" spellcheck="false" maxlength="4096" placeholder="${settings.configured?'Guardada · deja vacío para conservarla':'Pega aquí tu API key'}" ${settings.configured?'':'required'}></label><button type="button" data-models>Cargar modelos</button><label>Modelo<input name="model" list="nanogpt-models" maxlength="200" autocomplete="off" placeholder="Selecciona o escribe el ID del modelo" value="${escapeHtml(settings.model)}" required><datalist id="nanogpt-models"></datalist></label><p class="field-note">La prueba y las narraciones consumen el saldo o la cuota de tu cuenta. Tu personaje, acciones e historia reciente se envían a NanoGPT. La key se guarda en el servidor local de este dispositivo, fuera de las partidas.</p><p id="settings-message" role="status" aria-live="polite"></p><button class="primary" type="submit">Probar y guardar</button><button type="button" data-forget ${settings.configured?'':'hidden'}>Olvidar API key</button><button type="button" data-done>${settings.configured?'Volver al juego':'Volver'}</button></form></section></main>`;
+  const selectedModel = GM_PROFILES.some(({id})=>id===settings.model) ? settings.model : GM_PROFILES[0].id;
+  const selectedProfile = GM_PROFILES.find(({id})=>id===settings.model);
+  const hasKey=settings.hasKey ?? settings.configured;
+  const connectionLabel=settings.configured?`Conexión comprobada · ${selectedProfile?.name || 'GM'}`:hasKey?'API key guardada · Elige y comprueba tu GM':'Aún no hay una conexión configurada.';
+  app.innerHTML = `<main class="landing"><section class="settings-card card scene-enter"><p class="eyebrow">La voz de tu mundo</p><h1>Ajustes de IA</h1><p>Conecta tu cuenta de <a href="https://nano-gpt.com" target="_blank" rel="noopener noreferrer">NanoGPT</a> y elige quién narrará tu partida.</p><p class="connection-status" id="connection-status">${connectionLabel}</p>${message?`<p class="field-note">${escapeHtml(message)}</p>`:''}<form class="form" id="ai-settings"><label>API key de NanoGPT<input name="apiKey" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="text" maxlength="4096" placeholder="${hasKey?'Guardada · deja vacío para conservarla':'Pega aquí tu API key'}" ${hasKey?'':'required'}></label><fieldset class="gm-options"><legend>Elige tu GM</legend>${GM_PROFILES.map((profile)=>`<label class="gm-option"><input type="radio" name="model" value="${profile.id}" ${selectedModel===profile.id?'checked':''} required><span class="gm-copy"><strong>${profile.name}</strong><small class="gm-tagline">${profile.tagline}</small><small>${profile.description}</small></span><span class="gm-check" aria-hidden="true">✧</span></label>`).join('')}</fieldset><p class="field-note">La prueba, las frases de la entidad y las narraciones pueden consumir saldo o cuota. Tu personaje, acciones e historia reciente se envían a NanoGPT. La API key se guarda en este dispositivo, fuera de las partidas.</p><p id="settings-message" role="status" aria-live="polite"></p><button class="primary" type="submit">Probar y guardar</button><button type="button" data-forget ${hasKey?'':'hidden'}>Olvidar API key</button><button type="button" data-done>Volver</button></form></section></main>`;
   window.scrollTo(0, 0);
   const form = app.querySelector('#ai-settings');
   const feedback = app.querySelector('#settings-message');
   const keyInput = form.elements.apiKey;
   function busy(value) { form.querySelectorAll('button, input').forEach((element) => element.disabled=value); }
   function status(text, error = false) { feedback.textContent=text; feedback.className=error?'error':'field-note'; }
-  form.querySelector('[data-done]').onclick = () => settings.configured ? onDone() : onBack();
-  form.querySelector('[data-models]').onclick = async () => {
-    const apiKey = keyInput.value;
-    busy(true); status('Consultando los modelos…');
-    try {
-      const result = await request('/api/ai/models', { method:'POST', body:JSON.stringify({ apiKey }) });
-      form.querySelector('datalist').innerHTML = result.models.map(({id})=>`<option value="${escapeHtml(id)}"></option>`).join('');
-      status(`${result.models.length} modelos disponibles. Escribe en Modelo para buscarlos.`);
-    } catch (error) { status(error.message, true); }
-    finally { busy(false); }
+  form.querySelector('[data-done]').onclick = () => {
+    const supported = GM_PROFILES.some(({id})=>id===settings.model);
+    if (settings.configured && supported) onDone(); else onBack();
   };
   form.onsubmit = async (event) => {
     event.preventDefault();
@@ -60,10 +61,10 @@ async function openSettings(onDone = landing, message = '', onBack = onDone) {
     try {
       settings = await request('/api/ai/settings', { method:'POST', body:JSON.stringify(input) });
       keyInput.value=''; keyInput.required=false; keyInput.placeholder='Guardada · deja vacío para conservarla';
-      app.querySelector('#connection-status').textContent=`Conexión comprobada · ${settings.model}`;
+      app.querySelector('#connection-status').textContent=`Conexión comprobada · ${GM_PROFILES.find(({id})=>id===settings.model)?.name || 'GM'}`;
       form.querySelector('[data-forget]').hidden=false;
-      form.querySelector('[data-done]').textContent='Continuar';
       status('Conexión correcta. Ya puedes continuar.');
+      form.querySelector('[data-done]').textContent='Continuar';
     } catch (error) { status(error.message, true); }
     finally { busy(false); }
   };
@@ -80,68 +81,109 @@ async function openSettings(onDone = landing, message = '', onBack = onDone) {
   };
 }
 
+function confirmNewGame() {
+  app.innerHTML = `<main class="threshold confirmation"><div class="portal" aria-hidden="true"><div class="portal-core"></div></div><section class="threshold-content confirmation-card scene-enter"><div class="entity-mark" aria-hidden="true">✧</div><p class="eyebrow">La voz del umbral</p><h1>¿Quieres comenzar una nueva partida?</h1><p class="subtitle">Una nueva historia te espera al otro lado.</p><div class="creation-buttons"><button type="button" data-cancel>Volver</button><button class="primary" type="button" data-confirm>Cruzar el umbral</button></div></section></main>`;
+  app.querySelector('[data-cancel]').onclick=landing;
+  app.querySelector('[data-confirm]').onclick=async(event)=>{const button=event.currentTarget;button.disabled=true;await startCreation();if(button.isConnected)button.disabled=false;};
+}
+
 const creationSteps = [
-  { title:'¿Cuál es tu nombre?', whisper:'Todo empieza con una palabra. La tuya.', field:'name' },
-  { title:'¿Cuántos años tienes?', whisper:'El tiempo te ha traído hasta este lugar.', field:'age' },
-  { title:'¿Cómo te reconoces?', whisper:'Tu identidad te pertenece. Yo solo escucharé.', field:'gender' },
-  { title:'¿Cuál es tu raza?', whisper:'Por ahora, las puertas se abren a los humanos.', field:'race' },
-  { title:'Cuéntame quién eres.', whisper:'No necesito saber qué serás. Solo de dónde nace tu historia.', field:'origin' },
-  { title:'El umbral te espera.', whisper:'Perfecto… la ciudad ya percibe tu presencia. ¿Estás listo para cruzar?', field:null }
+  { title:'¿Cuántos años tienes?', whisper:'Es bueno tenerte aquí. Ya casi estás listo para continuar.', field:'age' },
+  { title:'¿Cómo te reconoces?', whisper:'Tu identidad te pertenece. Yo escucharé.', field:'gender' },
+  { title:'¿Cómo te ves?', whisper:'Antes de cruzar, déjame imaginarte.', field:'appearance' },
+  { title:'Ahora sí, cuéntame un poco de ti.', whisper:'Tu pasado puede acompañarte… o permanecer en silencio.', field:'origin' },
+  { title:'Oh, antes de que te vayas… ¿cuál es tu nombre?', whisper:'Vaya. No soy la única misteriosa por aquí.', field:'name' }
+];
+
+const fallbackWhispers = [
+  'Es bueno tenerte aquí. Ya casi estás listo para continuar.',
+  'Perfecto… la ciudad aguarda al otro lado. Vamos a conocerte un poco.'
 ];
 
 async function startCreation() {
   try {
     const settings = await request('/api/ai/settings');
-    if (!settings.configured) return openSettings(() => startCreation(), 'Antes de crear tu personaje, conecta y comprueba tu API key.', landing);
+    if (!settings.configured || !GM_PROFILES.some(({id})=>id===settings.model)) return openSettings(() => startCreation(), 'Antes de crear tu personaje, conecta NanoGPT y elige uno de los GM disponibles.', confirmNewGame);
   } catch (error) { notify(error.message); return; }
-  state.creation = { step:0, data:{ name:'', age:'', gender:'', genderCustom:'', race:'human', origin:'' } };
-  renderCreation();
+  app.querySelector('.confirmation')?.classList.add('portal-opening');
+  state.creation = { step:-1, data:{ name:'', age:'', gender:'', genderCustom:'', race:'human', appearance:'', origin:'' }, whispers:fallbackWhispers };
+  await new Promise((resolve)=>setTimeout(resolve,650));
+  renderIntro();
 }
 
 function creationField(step, data) {
-  if (step === 0) return `<label class="creation-label" for="character-name">Tu nombre</label><input id="character-name" name="name" autocomplete="off" maxlength="60" placeholder="Escribe tu nombre…" value="${escapeHtml(data.name)}" required>`;
-  if (step === 1) return `<label class="creation-label" for="character-age">Tu edad</label><input id="character-age" name="age" type="number" inputmode="numeric" min="13" max="120" placeholder="¿Cuántos años tienes?" value="${escapeHtml(data.age)}" required><p class="field-note">Entre 13 y 120 años.</p>`;
-  if (step === 2) return `<fieldset class="choices"><legend>Selecciona una opción</legend>${[['man','Hombre'],['woman','Mujer'],['custom','Custom']].map(([value,label])=>`<label class="choice"><input type="radio" name="gender" value="${value}" ${data.gender===value?'checked':''} required><span>${label}</span></label>`).join('')}</fieldset><label class="creation-label custom-gender" for="gender-custom" ${data.gender==='custom'?'':'hidden'}>¿Cómo lo describes?<input id="gender-custom" name="genderCustom" maxlength="40" placeholder="Tus propias palabras" value="${escapeHtml(data.genderCustom)}" ${data.gender==='custom'?'required':''}></label>`;
-  if (step === 3) return `<fieldset class="choices"><legend>Raza disponible</legend><label class="choice"><input type="radio" name="race" value="human" checked><span>Humano <small>Una vida nueva en Northfortress</small></span></label></fieldset><p class="field-note">Otras razas podrán abrirse más adelante.</p>`;
-  if (step === 4) return `<label class="creation-label" for="character-story">Tu historia hasta hoy</label><textarea id="character-story" name="origin" maxlength="600" minlength="10" placeholder="Tal vez acabas de llegar, buscas a alguien o huyes de algo…" required>${escapeHtml(data.origin)}</textarea><p class="field-note">No elijas aún una ocupación ni una aspiración. La historia decidirá contigo.</p>`;
-  return `<div class="creation-recap"><p><span>Nombre</span><strong>${escapeHtml(data.name)}</strong></p><p><span>Edad</span><strong>${escapeHtml(data.age)}</strong></p><p><span>Identidad</span><strong>${escapeHtml(data.gender==='custom'?data.genderCustom:data.gender==='man'?'Hombre':'Mujer')}</strong></p><p><span>Raza</span><strong>Humano</strong></p></div><p class="muted">Al cruzar, una breve historia te recibirá en algún lugar de Northfortress.</p>`;
+  if (step === 0) return `<label class="creation-label" for="character-age">Tu edad</label><input id="character-age" name="age" type="number" inputmode="numeric" min="13" max="120" value="${escapeHtml(data.age)}" required>`;
+  if (step === 1) return `<fieldset class="choices gender-choices"><legend>¿Cómo te reconoces?</legend>${[['man','Hombre'],['woman','Mujer'],['custom','Personalizado']].map(([value,label])=>`<label class="choice"><input type="radio" name="gender" value="${value}" ${data.gender===value?'checked':''} required><span>${label}</span></label>`).join('')}</fieldset><label class="creation-label custom-gender" for="gender-custom" ${data.gender==='custom'?'':'hidden'}><input id="gender-custom" name="genderCustom" maxlength="40" placeholder="¿Cómo te describes?" value="${escapeHtml(data.genderCustom)}" ${data.gender==='custom'?'required':''}></label>`;
+  if (step === 2) return `<label class="creation-label" for="character-appearance">Tu apariencia</label><textarea id="character-appearance" name="appearance" maxlength="300" placeholder="" required>${escapeHtml(data.appearance)}</textarea>`;
+  if (step === 3) return `<label class="creation-label" for="character-story">Tu historia</label><textarea id="character-story" name="origin" maxlength="600">${escapeHtml(data.origin)}</textarea><button class="skip-story" type="button" data-skip-story>Prefiero dejarla en misterio</button>`;
+  return `<label class="creation-label" for="character-name">El nombre que te acompañará</label><input id="character-name" name="name" autocomplete="off" autocapitalize="words" maxlength="60" value="${escapeHtml(data.name)}" required>`;
 }
 
 function collectCreation(form) {
-  if (!form || state.creation.step === 5) return;
+  if (!form || state.creation.step < 0) return;
   const data = state.creation.data;
   for (const [key, value] of new FormData(form)) data[key] = String(value).trim();
-  if (state.creation.step === 2 && data.gender !== 'custom') data.genderCustom = '';
+  if (state.creation.step === 1 && data.gender !== 'custom') data.genderCustom = '';
 }
 
 function renderCreation() {
   const { step, data } = state.creation;
   const current = creationSteps[step];
-  app.innerHTML = `<main class="threshold creation"><div class="portal" aria-hidden="true"><div class="portal-core"></div></div><section class="threshold-content creation-layout scene-enter"><div class="entity-mark" aria-hidden="true">✧</div><p class="eyebrow">La voz del umbral <span class="step-count">${step + 1} / ${creationSteps.length}</span></p><div class="progress" role="progressbar" aria-valuenow="${step + 1}" aria-valuemin="1" aria-valuemax="${creationSteps.length}" aria-label="Progreso de creación"><span style="width:${((step+1)/creationSteps.length)*100}%"></span></div><div class="entity-message"><p class="entity-whisper">${current.whisper}</p><h1>${current.title}</h1></div><form id="creation-form" class="creation-form"><div class="step-field">${creationField(step, data)}</div><p class="error" id="creation-error" role="alert"></p><div class="creation-buttons"><button type="button" data-back>${step===0?'Salir':'Atrás'}</button><button class="primary" type="submit">${step===5?'Cruzar el umbral':'Continuar <span aria-hidden="true">→</span>'}</button></div></form></section></main>`;
+  app.innerHTML = `<main class="threshold creation"><div class="portal" aria-hidden="true"><div class="portal-core"></div></div><section class="threshold-content creation-layout scene-enter"><div class="entity-mark" aria-hidden="true">✧</div><p class="eyebrow">La voz del umbral</p><div class="entity-message"><p class="entity-whisper">${current.whisper}</p><h1>${current.title}</h1></div><form id="creation-form" class="creation-form"><div class="step-field">${creationField(step, data)}</div><p class="error" id="creation-error" role="alert"></p><div class="creation-buttons"><button type="button" data-back>${step===0?'Salir':'Atrás'}</button><button class="primary" type="submit">${step===creationSteps.length-1?'Avanzar hacia la luz':'Continuar'}</button></div></form></section></main>`;
   window.scrollTo(0, 0);
   const form = app.querySelector('#creation-form');
   form.querySelectorAll('[name="gender"]').forEach((input)=>input.onchange=()=>{const custom=form.querySelector('.custom-gender'); const selected=input.value==='custom' && input.checked; custom.hidden=!selected; custom.querySelector('input').required=selected;});
   app.querySelector('[data-back]').onclick = () => { collectCreation(form); if (step===0) landing(); else { state.creation.step--; renderCreation(); } };
+  app.querySelector('[data-skip-story]')?.addEventListener('click',()=>{collectCreation(form);state.creation.data.origin='';personalizeBeforeName();});
   form.onsubmit = async (event) => {
     event.preventDefault();
     collectCreation(form);
-    if (step < 5) { state.creation.step++; renderCreation(); return; }
+    if (step===3) { personalizeBeforeName(); return; }
+    if (step < creationSteps.length-1) { state.creation.step++; renderCreation(); return; }
     const submit = form.querySelector('[type="submit"]');
     form.querySelectorAll('button').forEach((button)=>button.disabled=true);
-    submit.textContent = 'El umbral se abre…';
+    app.querySelector('.creation-layout').classList.add('portal-crossing');
+    app.querySelector('.creation').classList.add('portal-opening');
+    submit.textContent = 'El portal se abre…';
     try {
       state.run = await request('/api/runs', { method:'POST', body:JSON.stringify(data) });
       localStorage.setItem('hom:lastRun', state.run.id);
       showArrival();
-    } catch (error) { app.querySelector('#creation-error').textContent=error.message; form.querySelectorAll('button').forEach((button)=>button.disabled=false); submit.textContent='Cruzar el umbral'; }
+    } catch (error) { app.querySelector('.creation-layout').classList.remove('portal-crossing'); app.querySelector('.creation').classList.remove('portal-opening'); app.querySelector('#creation-error').textContent=error.message; form.querySelectorAll('button').forEach((button)=>button.disabled=false); submit.textContent='Avanzar hacia la luz'; }
   };
-  if (step===5) {
-    const settingsButton = document.createElement('button');
-    settingsButton.type='button'; settingsButton.textContent='Ajustes de IA'; settingsButton.className='creation-settings';
-    settingsButton.onclick=()=>openSettings(renderCreation);
-    form.append(settingsButton);
-  }
-  if (step===0 || step===1 || step===4) form.querySelector('input, textarea')?.focus({ preventScroll:true });
+  if (step===0 || step===2 || step===3 || step===4) form.querySelector('input, textarea')?.focus({ preventScroll:true });
+}
+
+function renderIntro() {
+  if (state.creation.introLine===undefined) state.creation.introLine=0;
+  const line=fallbackWhispers[state.creation.introLine];
+  app.innerHTML=`<main class="threshold creation intro"><div class="portal" aria-hidden="true"><div class="portal-core"></div></div><section class="threshold-content creation-layout scene-enter"><div class="entity-mark" aria-hidden="true">✧</div><p class="eyebrow">La voz del umbral</p><div class="entity-message"><p class="entity-whisper">${escapeHtml(line)}</p></div><div class="creation-buttons"><button type="button" data-cancel>Volver</button><button class="primary" type="button" data-next>${state.creation.introLine===0?'Escuchar':'Conocernos'} <span aria-hidden="true">→</span></button></div></section></main>`;
+  app.querySelector('[data-cancel]').onclick=landing;
+  app.querySelector('[data-next]').onclick=()=>{
+    if(state.creation.introLine===0){state.creation.introLine=1;renderIntro();return;}
+    state.creation.step=0;renderCreation();
+  };
+}
+
+async function personalizeBeforeName() {
+  const { data }=state.creation;
+  state.creation.step=-2;
+  app.innerHTML=`<main class="threshold creation"><div class="portal" aria-hidden="true"><div class="portal-core"></div></div><section class="threshold-content creation-layout scene-enter"><div class="entity-mark" aria-hidden="true">✧</div><p class="eyebrow">La voz del umbral</p><div class="entity-message"><p class="entity-whisper">La entidad escucha lo que le has confiado…</p></div></section></main>`;
+  try {
+    const result=await request('/api/creation/whispers',{method:'POST',body:JSON.stringify({age:data.age,gender:data.gender,genderCustom:data.genderCustom,appearance:data.appearance,origin:data.origin})});
+    if (Array.isArray(result.whispers) && result.whispers.length===2) state.creation.whispers=result.whispers;
+  } catch { /* La historia se puede terminar con frases de respaldo. */ }
+  state.creation.bridgeLine=0;
+  renderPersonalizedBridge();
+}
+
+function renderPersonalizedBridge() {
+  const line=state.creation.whispers[state.creation.bridgeLine];
+  app.innerHTML=`<main class="threshold creation"><div class="portal" aria-hidden="true"><div class="portal-core"></div></div><section class="threshold-content creation-layout scene-enter"><div class="entity-mark" aria-hidden="true">✧</div><p class="eyebrow">La voz del umbral</p><div class="entity-message"><p class="entity-whisper">${escapeHtml(line)}</p></div><button class="primary bridge-next" type="button" data-next>${state.creation.bridgeLine===0?'La entidad continúa':'Continuar'} <span aria-hidden="true">→</span></button></section></main>`;
+  app.querySelector('[data-next]').onclick=()=>{
+    if(state.creation.bridgeLine===0){state.creation.bridgeLine=1;renderPersonalizedBridge();return;}
+    state.creation.step=4;renderCreation();
+  };
 }
 
 function showArrival() {
@@ -168,7 +210,7 @@ function homeScreen() {
 }
 
 function eventText(event) {
-  if (event.type==='run_started') return 'La Run comenzó en Northfortress.';
+  if (event.type==='run_started') return 'La partida comenzó en Northfortress.';
   if (event.type==='prologue_created') return `Tu historia comenzó en ${escapeHtml(place(event.data.locationId)?.name || event.data.locationId)}.`;
   if (event.type==='location_changed') return `Viajaste de ${place(event.from)?.name || event.from} a ${place(event.to)?.name || event.to}.`;
   if (event.type==='player_action') return escapeHtml(event.data.text);
@@ -191,7 +233,7 @@ function socialScreen() {
 function characterScreen() {
   const player=state.run.player, location=place(player.locationId);
   const gender=player.gender==='custom'?player.genderCustom:player.gender==='man'?'Hombre':player.gender==='woman'?'Mujer':'Sin definir';
-  return `<h1>Personaje</h1><section class="card hero"><p class="eyebrow">${escapeHtml(player.race==='human'?'Humano':'Historia en curso')}</p><h2 class="location">${escapeHtml(player.name)}</h2><p>${escapeHtml(player.origin || 'Una historia todavía por escribir.')}</p></section><section class="card stats"><div class="stat"><small>Edad</small>${escapeHtml(player.age)}</div><div class="stat"><small>Identidad</small>${escapeHtml(gender)}</div><div class="stat"><small>Dinero</small>$${escapeHtml(player.money)}</div><div class="stat"><small>Reputación</small>${escapeHtml(player.reputation)}</div><div class="stat"><small>Ubicación</small>${escapeHtml(location.name)}</div><div class="stat"><small>Ocupación</small>${escapeHtml(player.occupation || 'Por descubrir')}</div><div class="stat"><small>Aspiración</small>${escapeHtml(player.aspiration || 'Por descubrir')}</div><div class="stat"><small>Relaciones</small>Próximamente</div></section>`;
+  return `<h1>Personaje</h1><section class="card hero"><p class="eyebrow">${escapeHtml(player.race==='human'?'Humano':'Historia en curso')}</p><h2 class="location">${escapeHtml(player.name)}</h2><p>${escapeHtml(player.origin || 'Una historia todavía por escribir.')}</p>${player.appearance?`<p class="character-appearance">${escapeHtml(player.appearance)}</p>`:''}</section><section class="card stats"><div class="stat"><small>Edad</small>${escapeHtml(player.age)}</div><div class="stat"><small>Identidad</small>${escapeHtml(gender)}</div><div class="stat"><small>Dinero</small>$${escapeHtml(player.money)}</div><div class="stat"><small>Reputación</small>${escapeHtml(player.reputation)}</div><div class="stat"><small>Ubicación</small>${escapeHtml(location.name)}</div><div class="stat"><small>Ocupación</small>${escapeHtml(player.occupation || 'Por descubrir')}</div><div class="stat"><small>Aspiración</small>${escapeHtml(player.aspiration || 'Por descubrir')}</div><div class="stat"><small>Relaciones</small>Próximamente</div></section>`;
 }
 
 function missionsScreen() { return `<h1>Misiones</h1><section class="card"><p class="muted">No tienes misiones activas. El sistema semántico está preparado para futuras historias.</p></section>`; }
