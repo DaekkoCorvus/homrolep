@@ -2,7 +2,8 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRun, applyAction, addPost } from './game/run.js';
+import { createRun, setPrologue, applyAction, addPost } from './game/run.js';
+import { generatePrologue } from './ai/provider.js';
 import { saveRun, loadRun, listRuns } from './saves/store.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -31,7 +32,8 @@ async function api(request, response, pathname) {
   if (request.method === 'GET' && pathname === '/api/world') return sendJson(response, 200, worldData);
   if (request.method === 'GET' && pathname === '/api/runs') return sendJson(response, 200, await listRuns());
   if (request.method === 'POST' && pathname === '/api/runs') {
-    const run = createRun(await readBody(request));
+    const draft = createRun(await readBody(request));
+    const run = setPrologue(draft, await generatePrologue(draft.player, worldData), worldData);
     await saveRun(run);
     return sendJson(response, 201, run);
   }

@@ -4,7 +4,7 @@ Prototipo mobile-first de un simulador social y RPG narrativo ambientado en el u
 
 ## Estado
 
-**Prototype / MVP.** Incluye creación y persistencia de Runs, reloj de mundo, navegación por Northfortress, acciones libres con respuesta mock, Event Log semántico, feed social y un shell PWA adaptable a teléfonos.
+**Prototype / MVP.** Incluye creación de personaje por escenas, prólogo y llegada a una ubicación de Northfortress, persistencia de Runs, reloj de mundo, acciones libres con respuesta mock, Event Log semántico, feed social y un shell PWA adaptable a teléfonos.
 
 El prototipo jugable está en la rama `dev`. La rama `main` conserva el bootstrap hasta que se revise y fusione el PR.
 
@@ -55,9 +55,11 @@ npm test
 
 ## Configuración y seguridad
 
-Copia `.env.example` a `.env` cuando se incorporen proveedores externos. `.env` está ignorado por Git. Las futuras llamadas de IA deben pasar por el servidor: nunca incluyas `AI_API_KEY` ni otros secretos en `src/client`.
+El juego funciona sin credenciales: genera un prólogo local a partir del personaje y su historia. Para usar un proveedor compatible con Chat Completions, define en el entorno del **servidor** `AI_PROVIDER=openai-compatible`, `AI_BASE_URL` (URL base, por ejemplo terminada en `/v1/`), `AI_MODEL` y `AI_API_KEY` antes de iniciar. `.env.example` sirve de referencia, pero este prototipo no carga automáticamente un archivo `.env`.
 
-El proveedor actual es un mock local; el juego funciona sin IA.
+La historia del personaje se envía al proveedor configurado únicamente al crear una Run; nunca se envía la clave al navegador. Si el proveedor falla o propone una ubicación inexistente, se usa el prólogo local. El texto generado se guarda en la partida, no modifica el canon. Las acciones libres posteriores aún usan una respuesta mock.
+
+La creación pide nombre, edad, género, raza (solo humano por ahora) e historia personal. Ocupación y aspiración quedan sin definir al inicio: se desarrollarán durante el juego en futuras iteraciones. El atajo de trabajo solo funciona en partidas que ya tengan la ocupación `worker`.
 
 ## Arquitectura
 
@@ -76,7 +78,7 @@ tests/                  pruebas de reglas de juego
 
 `CANON` describe el estado base. Cada `RUN STATE` guarda únicamente los cambios de una partida. Una Run nunca modifica los archivos canon.
 
-El código es autoridad para dinero, inventario, tiempo, estadísticas, acceso y persistencia. La IA futura se limitará a interpretación, diálogo, narrativa y eventos dinámicos.
+El código es autoridad para dinero, inventario, tiempo, estadísticas, acceso, ubicación válida y persistencia. La IA se limita al prólogo narrativo en esta versión; la interpretación del resto del juego sigue pendiente.
 
 ## API local
 

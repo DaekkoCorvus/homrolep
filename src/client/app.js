@@ -1,4 +1,4 @@
-const state = { run:null, world:null, screen:'home' };
+const state = { run:null, world:null, screen:'home', creation:null };
 const app = document.querySelector('#app');
 const toast = document.querySelector('#toast');
 
@@ -25,23 +25,71 @@ function place(id) { return state.world.locations.find((item) => item.id === id)
 function escapeHtml(value='') { const node=document.createElement('span'); node.textContent=value; return node.innerHTML; }
 
 function landing() {
-  app.innerHTML = `<main class="landing"><section class="landing-card"><p class="eyebrow">Narrative social RPG</p><h1 class="title">Heroes of<br>Misery</h1><p class="subtitle">Un pequeño mundo que recuerda tus decisiones.</p><div class="menu"><button class="primary" data-start>Nueva Run</button><button data-continue>Continuar</button><button data-settings>Ajustes</button></div><p class="muted" id="landing-message"></p></section></main>`;
-  app.querySelector('[data-start]').onclick = newRunForm;
+  app.innerHTML = `<main class="threshold"><div class="portal" aria-hidden="true"><div class="portal-core"></div></div><section class="threshold-content landing-card scene-enter"><p class="eyebrow">Un mundo aguarda tu nombre</p><h1 class="title">Heroes of<br><em>Misery</em></h1><p class="subtitle">Toda historia comienza al cruzar un umbral.</p><div class="menu"><button class="primary" data-start>Nueva Run <span aria-hidden="true">✧</span></button><button data-continue>Continuar</button><button data-settings>Ajustes</button></div><p class="muted" id="landing-message"></p></section></main>`;
+  app.querySelector('[data-start]').onclick = startCreation;
   app.querySelector('[data-continue]').onclick = continueRun;
   app.querySelector('[data-settings]').onclick = () => notify('Los ajustes llegarán en una versión futura.');
 }
 
-function newRunForm() {
-  app.innerHTML = `<main class="landing"><section class="landing-card card"><p class="eyebrow">Northfortress</p><h1>Nueva Run</h1><form class="form" id="new-run"><label>Nombre<input name="name" maxlength="60" required></label><label>Edad<input name="age" type="number" min="13" max="120" required></label><label>Pronombres / género (opcional)<input name="pronouns" maxlength="40"></label><label>Origen / descripción<textarea name="origin" maxlength="300"></textarea></label><label>Ocupación<select name="occupation"><option value="unemployed">Desempleado</option><option value="worker">Trabajador</option><option value="student">Estudiante</option></select></label><label>Aspiración<input name="aspiration" maxlength="160" placeholder="¿Qué deseas conseguir?"></label><label>Ciudad<input value="Northfortress" disabled></label><button class="primary">Comenzar</button><button type="button" data-back>Volver</button><p class="error" id="form-error"></p></form></section></main>`;
-  app.querySelector('[data-back]').onclick = landing;
-  app.querySelector('form').onsubmit = async (event) => {
+const creationSteps = [
+  { title:'¿Cuál es tu nombre?', whisper:'Todo empieza con una palabra. La tuya.', field:'name' },
+  { title:'¿Cuántos años tienes?', whisper:'El tiempo te ha traído hasta este lugar.', field:'age' },
+  { title:'¿Cómo te reconoces?', whisper:'Tu identidad te pertenece. Yo solo escucharé.', field:'gender' },
+  { title:'¿Cuál es tu raza?', whisper:'Por ahora, las puertas se abren a los humanos.', field:'race' },
+  { title:'Cuéntame quién eres.', whisper:'No necesito saber qué serás. Solo de dónde nace tu historia.', field:'origin' },
+  { title:'El umbral te espera.', whisper:'Perfecto… la ciudad ya percibe tu presencia. ¿Estás listo para cruzar?', field:null }
+];
+
+function startCreation() {
+  state.creation = { step:0, data:{ name:'', age:'', gender:'', genderCustom:'', race:'human', origin:'' } };
+  renderCreation();
+}
+
+function creationField(step, data) {
+  if (step === 0) return `<label class="creation-label" for="character-name">Tu nombre</label><input id="character-name" name="name" autocomplete="off" maxlength="60" placeholder="Escribe tu nombre…" value="${escapeHtml(data.name)}" required>`;
+  if (step === 1) return `<label class="creation-label" for="character-age">Tu edad</label><input id="character-age" name="age" type="number" inputmode="numeric" min="13" max="120" placeholder="¿Cuántos años tienes?" value="${escapeHtml(data.age)}" required><p class="field-note">Entre 13 y 120 años.</p>`;
+  if (step === 2) return `<fieldset class="choices"><legend>Selecciona una opción</legend>${[['man','Hombre'],['woman','Mujer'],['custom','Custom']].map(([value,label])=>`<label class="choice"><input type="radio" name="gender" value="${value}" ${data.gender===value?'checked':''} required><span>${label}</span></label>`).join('')}</fieldset><label class="creation-label custom-gender" for="gender-custom" ${data.gender==='custom'?'':'hidden'}>¿Cómo lo describes?<input id="gender-custom" name="genderCustom" maxlength="40" placeholder="Tus propias palabras" value="${escapeHtml(data.genderCustom)}" ${data.gender==='custom'?'required':''}></label>`;
+  if (step === 3) return `<fieldset class="choices"><legend>Raza disponible</legend><label class="choice"><input type="radio" name="race" value="human" checked><span>Humano <small>Una vida nueva en Northfortress</small></span></label></fieldset><p class="field-note">Otras razas podrán abrirse más adelante.</p>`;
+  if (step === 4) return `<label class="creation-label" for="character-story">Tu historia hasta hoy</label><textarea id="character-story" name="origin" maxlength="600" minlength="10" placeholder="Tal vez acabas de llegar, buscas a alguien o huyes de algo…" required>${escapeHtml(data.origin)}</textarea><p class="field-note">No elijas aún una ocupación ni una aspiración. La historia decidirá contigo.</p>`;
+  return `<div class="creation-recap"><p><span>Nombre</span><strong>${escapeHtml(data.name)}</strong></p><p><span>Edad</span><strong>${escapeHtml(data.age)}</strong></p><p><span>Identidad</span><strong>${escapeHtml(data.gender==='custom'?data.genderCustom:data.gender==='man'?'Hombre':'Mujer')}</strong></p><p><span>Raza</span><strong>Humano</strong></p></div><p class="muted">Al cruzar, una breve historia te recibirá en algún lugar de Northfortress.</p>`;
+}
+
+function collectCreation(form) {
+  if (!form || state.creation.step === 5) return;
+  const data = state.creation.data;
+  for (const [key, value] of new FormData(form)) data[key] = String(value).trim();
+  if (state.creation.step === 2 && data.gender !== 'custom') data.genderCustom = '';
+}
+
+function renderCreation() {
+  const { step, data } = state.creation;
+  const current = creationSteps[step];
+  app.innerHTML = `<main class="threshold creation"><div class="portal" aria-hidden="true"><div class="portal-core"></div></div><section class="threshold-content creation-layout scene-enter"><div class="entity-mark" aria-hidden="true">✧</div><p class="eyebrow">La voz del umbral <span class="step-count">${step + 1} / ${creationSteps.length}</span></p><div class="progress" role="progressbar" aria-valuenow="${step + 1}" aria-valuemin="1" aria-valuemax="${creationSteps.length}" aria-label="Progreso de creación"><span style="width:${((step+1)/creationSteps.length)*100}%"></span></div><div class="entity-message"><p class="entity-whisper">${current.whisper}</p><h1>${current.title}</h1></div><form id="creation-form" class="creation-form"><div class="step-field">${creationField(step, data)}</div><p class="error" id="creation-error" role="alert"></p><div class="creation-buttons"><button type="button" data-back>${step===0?'Salir':'Atrás'}</button><button class="primary" type="submit">${step===5?'Cruzar el umbral':'Continuar <span aria-hidden="true">→</span>'}</button></div></form></section></main>`;
+  window.scrollTo(0, 0);
+  const form = app.querySelector('#creation-form');
+  form.querySelectorAll('[name="gender"]').forEach((input)=>input.onchange=()=>{const custom=form.querySelector('.custom-gender'); const selected=input.value==='custom' && input.checked; custom.hidden=!selected; custom.querySelector('input').required=selected;});
+  app.querySelector('[data-back]').onclick = () => { collectCreation(form); if (step===0) landing(); else { state.creation.step--; renderCreation(); } };
+  form.onsubmit = async (event) => {
     event.preventDefault();
-    const submit = event.submitter; submit.disabled = true;
+    collectCreation(form);
+    if (step < 5) { state.creation.step++; renderCreation(); return; }
+    const submit = form.querySelector('[type="submit"]');
+    submit.disabled = true;
+    submit.textContent = 'El umbral se abre…';
     try {
-      state.run = await request('/api/runs', { method:'POST', body:JSON.stringify(Object.fromEntries(new FormData(event.currentTarget))) });
-      localStorage.setItem('hom:lastRun', state.run.id); state.screen='home'; render();
-    } catch (error) { app.querySelector('#form-error').textContent=error.message; submit.disabled=false; }
+      state.run = await request('/api/runs', { method:'POST', body:JSON.stringify(data) });
+      localStorage.setItem('hom:lastRun', state.run.id);
+      showArrival();
+    } catch (error) { app.querySelector('#creation-error').textContent=error.message; submit.disabled=false; submit.textContent='Cruzar el umbral'; }
   };
+  if (step===0 || step===1 || step===4) form.querySelector('input, textarea')?.focus({ preventScroll:true });
+}
+
+function showArrival() {
+  const location = place(state.run.player.locationId);
+  app.innerHTML = `<main class="threshold arrival"><div class="portal" aria-hidden="true"><div class="portal-core"></div></div><section class="threshold-content arrival-card scene-enter"><p class="eyebrow">Día 1 · Northfortress</p><h1>Ya estás aquí, <em>${escapeHtml(state.run.player.name)}</em>.</h1><p class="arrival-lore">${escapeHtml(state.run.prologue?.text || 'Tu historia acaba de comenzar.')}</p><p class="arrival-place">El camino te deja en <strong>${escapeHtml(location?.name || 'Northfortress')}</strong>.</p><button class="primary" data-enter>Entrar en la ciudad <span aria-hidden="true">→</span></button></section></main>`;
+  app.querySelector('[data-enter]').onclick = () => { state.screen='home'; render(); };
+  window.scrollTo(0, 0);
 }
 
 async function continueRun() {
@@ -57,11 +105,12 @@ async function continueRun() {
 function homeScreen() {
   const location = place(state.run.player.locationId);
   const events = state.run.eventLog.slice(-6).reverse().map((event) => `<div class="event"><time>${escapeHtml(event.time.replace('DAY_','D').replace('_',' · '))}</time><span>${eventText(event)}</span></div>`).join('');
-  return `<section class="card hero"><p class="eyebrow">${escapeHtml(location.district)}</p><h1 class="location">${escapeHtml(location.name)}</h1><p>${escapeHtml(location.description)}</p><div class="chips">${location.tags.map((tag)=>`<span class="chip">${escapeHtml(tag)}</span>`).join('')}</div></section><section class="card"><h2>¿Qué haces?</h2><form id="action-form" class="form"><textarea name="text" maxlength="500" placeholder="Describe libremente tu acción…" required></textarea><button class="primary">Actuar · 10 min</button></form></section><section class="card"><h2>Acciones rápidas</h2><div class="actions"><button data-action="wait">Esperar 30 min</button><button data-action="sleep">Dormir 8 h</button><button data-action="work">Trabajar 6 h</button></div></section><section class="card"><h2>Eventos recientes</h2>${events || '<p class="muted">La historia acaba de comenzar.</p>'}</section>`;
+  return `<section class="card hero"><p class="eyebrow">${escapeHtml(location.district)} · Northfortress</p><h1 class="location">${escapeHtml(location.name)}</h1><p>${escapeHtml(location.description)}</p><div class="chips">${location.tags.map((tag)=>`<span class="chip">${escapeHtml(tag)}</span>`).join('')}</div></section>${state.run.prologue?`<details class="card prologue-card"><summary>Recordar el comienzo</summary><p>${escapeHtml(state.run.prologue.text)}</p></details>`:''}<section class="card"><h2>¿Qué haces?</h2><form id="action-form" class="form"><textarea name="text" maxlength="500" placeholder="Describe libremente tu acción…" required></textarea><button class="primary">Actuar · 10 min</button></form></section><section class="card"><h2>Acciones rápidas</h2><div class="actions"><button data-action="wait">Esperar 30 min</button><button data-action="sleep">Dormir 8 h</button>${state.run.player.occupation==='worker'?'<button data-action="work">Trabajar 6 h</button>':''}</div></section><section class="card"><h2>Eventos recientes</h2>${events || '<p class="muted">La historia acaba de comenzar.</p>'}</section>`;
 }
 
 function eventText(event) {
   if (event.type==='run_started') return 'La Run comenzó en Northfortress.';
+  if (event.type==='prologue_created') return `Tu historia comenzó en ${escapeHtml(place(event.data.locationId)?.name || event.data.locationId)}.`;
   if (event.type==='location_changed') return `Viajaste de ${place(event.from)?.name || event.from} a ${place(event.to)?.name || event.to}.`;
   if (event.type==='player_action') return `${escapeHtml(event.data.text)} — ${escapeHtml(event.data.response)}`;
   if (event.type==='time_waited') return `Esperaste ${event.data.minutes} minutos.`;
@@ -82,7 +131,8 @@ function socialScreen() {
 
 function characterScreen() {
   const player=state.run.player, location=place(player.locationId);
-  return `<h1>Personaje</h1><section class="card hero"><p class="eyebrow">${escapeHtml(player.occupation)}</p><h2 class="location">${escapeHtml(player.name)}</h2><p>${escapeHtml(player.origin || 'Una historia todavía por escribir.')}</p></section><section class="card stats"><div class="stat"><small>Edad</small>${player.age}</div><div class="stat"><small>Dinero</small>$${player.money}</div><div class="stat"><small>Reputación</small>${player.reputation}</div><div class="stat"><small>Ubicación</small>${escapeHtml(location.name)}</div><div class="stat"><small>Aspiración</small>${escapeHtml(player.aspiration || 'Sin definir')}</div><div class="stat"><small>Relaciones</small>Próximamente</div></section>`;
+  const gender=player.gender==='custom'?player.genderCustom:player.gender==='man'?'Hombre':player.gender==='woman'?'Mujer':'Sin definir';
+  return `<h1>Personaje</h1><section class="card hero"><p class="eyebrow">${escapeHtml(player.race==='human'?'Humano':'Historia en curso')}</p><h2 class="location">${escapeHtml(player.name)}</h2><p>${escapeHtml(player.origin || 'Una historia todavía por escribir.')}</p></section><section class="card stats"><div class="stat"><small>Edad</small>${escapeHtml(player.age)}</div><div class="stat"><small>Identidad</small>${escapeHtml(gender)}</div><div class="stat"><small>Dinero</small>$${escapeHtml(player.money)}</div><div class="stat"><small>Reputación</small>${escapeHtml(player.reputation)}</div><div class="stat"><small>Ubicación</small>${escapeHtml(location.name)}</div><div class="stat"><small>Ocupación</small>${escapeHtml(player.occupation || 'Por descubrir')}</div><div class="stat"><small>Aspiración</small>${escapeHtml(player.aspiration || 'Por descubrir')}</div><div class="stat"><small>Relaciones</small>Próximamente</div></section>`;
 }
 
 function missionsScreen() { return `<h1>Misiones</h1><section class="card"><p class="muted">No tienes misiones activas. El sistema semántico está preparado para futuras historias.</p></section>`; }
@@ -102,6 +152,7 @@ function render() {
   app.querySelectorAll('[data-travel]').forEach((button)=>button.onclick=()=>runAction({type:'travel',locationId:button.dataset.travel}));
   app.querySelector('#action-form')?.addEventListener('submit',(event)=>{event.preventDefault();runAction({type:'freeform',text:new FormData(event.currentTarget).get('text')});});
   app.querySelector('#post-form')?.addEventListener('submit',async(event)=>{event.preventDefault();try{state.run=await request(`/api/runs/${state.run.id}/posts`,{method:'POST',body:JSON.stringify({text:new FormData(event.currentTarget).get('text')})});render();notify('Publicación guardada.');}catch(error){notify(error.message);}});
+  window.scrollTo(0, 0);
 }
 
 async function boot() {

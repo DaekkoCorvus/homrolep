@@ -1,21 +1,46 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRun, applyAction, addPost } from '../src/server/game/run.js';
+import { createRun, setPrologue, applyAction, addPost } from '../src/server/game/run.js';
+import { generatePrologue } from '../src/server/ai/provider.js';
 
 const world = { locations: [
   { id:'apartment', travelMinutes:0 },
   { id:'cafe', travelMinutes:20 }
 ] };
+const character = { name:'Mara', age:'24', gender:'woman', race:'human', origin:'Llegué a la ciudad buscando respuestas.' };
 
 test('createRun initializes a versioned state and event log', () => {
-  const run = createRun({ name:'Mara', age:'24', occupation:'student', aspiration:'Comprender la ciudad' });
+  const run = createRun({ ...character, occupation:'worker', aspiration:'Comprender la ciudad' });
   assert.equal(run.version, 1);
   assert.equal(run.player.locationId, 'apartment');
+  assert.equal(run.player.occupation, null);
+  assert.equal(run.player.aspiration, null);
   assert.equal(run.eventLog[0].type, 'run_started');
 });
 
+test('character creation validates identity, race and backstory', () => {
+  assert.throws(() => createRun({ ...character, gender:'custom' }), /género/);
+  assert.throws(() => createRun({ ...character, race:'elf' }), /humano/);
+  assert.throws(() => createRun({ ...character, origin:'breve' }), /10 caracteres/);
+  assert.equal(createRun({ ...character, gender:'custom', genderCustom:'No binario' }).player.genderCustom, 'No binario');
+});
+
+test('prologue location is constrained by the world data', () => {
+  const run = setPrologue(createRun(character), { text:'Una nueva llegada.', locationId:'unofficial', source:'ai' }, world);
+  assert.equal(run.player.locationId, 'apartment');
+  assert.equal(run.prologue.locationId, 'apartment');
+  assert.equal(run.eventLog.at(-1).type, 'prologue_created');
+});
+
+test('local prologue uses the story to choose an available location', async () => {
+  const proposal = await generatePrologue(createRun({ ...character, origin:'Busqué un café para conocer gente.' }).player, world);
+  const run = setPrologue(createRun(character), proposal, world);
+  assert.equal(run.player.locationId, 'cafe');
+  assert.match(run.prologue.text, /Mara/);
+});
+
 test('travel updates location, time and semantic event log', () => {
-  const run = createRun({ name:'Mara', age:'24' });
+  const run = createRun(character);
   const moved = applyAction(run, { type:'travel', locationId:'cafe' }, world);
   assert.equal(moved.player.locationId, 'cafe');
   assert.deepEqual(moved.world, { day:1, hour:8, minute:20, cityId:'northfortress' });
@@ -23,7 +48,11 @@ test('travel updates location, time and semantic event log', () => {
 });
 
 test('social posts persist in state and create an event', () => {
-  const run = addPost(createRun({ name:'Mara', age:'24' }), 'Primera mañana.');
+  const run = addPost(createRun(character), 'Primera mañana.');
   assert.equal(run.social.posts[0].text, 'Primera mañana.');
   assert.equal(run.eventLog.at(-1).type, 'social_post_created');
+});
+
+test('a new character cannot use the work shortcut before finding a job', () => {
+  assert.throws(() => applyAction(createRun(character), { type:'work' }, world), /trabajo/);
 });
