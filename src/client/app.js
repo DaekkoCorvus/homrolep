@@ -87,7 +87,7 @@ function confirmNewGame() {
   app.querySelector('[data-confirm]').onclick=async(event)=>{const button=event.currentTarget;button.disabled=true;await startCreation();if(button.isConnected)button.disabled=false;};
 }
 
-const openingLines = ['Te esperaba.','Permíteme darte forma, poco a poco.'];
+const openingLines = ['Te esperaba.','Aún no tienes forma… ni nombre.','Permíteme dártela, poco a poco.'];
 const fallbackWhispers = ['Vaya, no soy la única misteriosa por aquí.','Dejaremos que ese silencio te acompañe.'];
 const answeredWhispers = ['Lo que has contado empieza a tomar forma.','Hay caminos que nacen de un solo deseo.'];
 const creationSteps = [
@@ -97,119 +97,214 @@ const creationSteps = [
   { question:'Ahora sí, cuéntame un poco de ti.', field:'origin' },
   { question:'Oh… antes de que cruces, ¿cuál es tu nombre?', field:'name' }
 ];
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+const vortex = (values) => document.getElementById('vortex-layer')?.contentWindow?.postMessage({ type:'vortex', ...values }, location.origin);
+const vortexPulse = async (strength=.32) => { vortex({ flash:strength, rate:7 }); await sleep(260); vortex({ flash:0, rate:1.3 }); };
+const alive = (token) => state.creation?.token === token;
 
 async function startCreation() {
   try {
     const settings = await request('/api/ai/settings');
     if (!settings.configured || !GM_PROFILES.some(({id})=>id===settings.model)) return openSettings(() => startCreation(), 'Antes de crear tu personaje, conecta NanoGPT y elige uno de los GM disponibles.', confirmNewGame);
   } catch (error) { notify(error.message); return; }
+  const token = (state.creation?.token || 0) + 1;
+  state.creation = { token, data:{ name:'', age:'', gender:'', genderCustom:'', race:'human', appearance:'', origin:'' }, creationError:'' };
   app.querySelector('.confirmation')?.classList.add('portal-opening');
-  state.creation = { step:-1, data:{ name:'', age:'', gender:'', genderCustom:'', race:'human', appearance:'', origin:'' }, whispers:fallbackWhispers, dialogueToken:0 };
-  await new Promise((resolve)=>setTimeout(resolve,650));
-  renderIntro();
+  vortex({ zoom:2.4, flash:1, rate:2.2 });
+  await sleep(reducedMotion() ? 200 : 1500);
+  if (!alive(token)) return;
+  vortex({ zoom:1, flash:0, rate:.9 });
+  runCreation(token);
+}
+
+function abandonCreation() {
+  if (state.creation) state.creation.token++;
+  vortex({ zoom:1, flash:0, rate:2 });
+  landing();
+}
+
+function stage(className='') {
+  let main = app.querySelector('.cinematic');
+  if (!main) {
+    app.innerHTML = `<main class="threshold creation cinematic"><section class="cinematic-layout"><p id="entity-line" class="dialogue-text" role="status" aria-live="polite"></p><form id="creation-form" class="creation-form" hidden></form></section></main>`;
+    main = app.querySelector('.cinematic');
+  }
+  main.className = `threshold creation cinematic ${className}`;
+  return main;
+}
+
+async function say(text, token, { hold=false }={}) {
+  const line = app.querySelector('#entity-line');
+  if (!line || !alive(token)) return false;
+  line.className = 'dialogue-text';
+  line.textContent = '';
+  line.setAttribute('aria-label', text);
+  const reduce = reducedMotion();
+  const length = Array.from(text).length;
+  const step = reduce ? 0 : Math.min(46, 2600 / length);
+  let index = 0;
+  text.split(/(\s+)/).forEach((chunk) => {
+    if (!chunk) return;
+    if (/^\s+$/.test(chunk)) { line.append(' '); index += chunk.length; return; }
+    const word = document.createElement('span');
+    word.className = 'dialogue-word';
+    word.setAttribute('aria-hidden', 'true');
+    for (const character of Array.from(chunk)) {
+      const glyph = document.createElement('span');
+      glyph.className = 'dialogue-glyph';
+      glyph.textContent = character;
+      glyph.style.setProperty('--d', `${Math.round(index++ * step)}ms`);
+      glyph.style.setProperty('--phase', `${-Math.round(Math.random() * 6000)}ms`);
+      glyph.style.setProperty('--dur', `${(5 + Math.random() * 3).toFixed(1)}s`);
+      glyph.style.setProperty('--amp', `${(1.2 + Math.random() * 2).toFixed(1)}px`);
+      glyph.style.setProperty('--rot', `${((Math.random() - .5) * 2.6).toFixed(1)}deg`);
+      word.append(glyph);
+    }
+    line.append(word);
+  });
+  const words = text.split(/\s+/).length;
+  await sleep(length * step + 900 + (hold ? 0 : reduce ? 300 : Math.max(1500, words * 340)));
+  if (!alive(token)) return false;
+  if (hold) return true;
+  line.classList.add('leaving');
+  await sleep(reduce ? 0 : 1000);
+  return alive(token);
+}
+
+async function dismissForm(token) {
+  const form = app.querySelector('#creation-form');
+  const line = app.querySelector('#entity-line');
+  form?.classList.remove('is-ready');
+  line?.classList.add('leaving');
+  await sleep(reducedMotion() ? 0 : 900);
+  return alive(token);
 }
 
 function creationField(step, data) {
   if (step === 0) return `<input id="character-age" name="age" type="number" inputmode="numeric" min="13" max="120" aria-label="Edad" value="${escapeHtml(data.age)}" required>`;
-  if (step === 1) return `<fieldset class="choices gender-choices"><legend class="visually-hidden">Género</legend>${[['man','Hombre'],['woman','Mujer'],['custom','Personalizado']].map(([value,label])=>`<label class="choice"><input type="radio" name="gender" value="${value}" ${data.gender===value?'checked':''} required><span>${label}</span></label>`).join('')}</fieldset><label class="visually-hidden custom-gender" for="gender-custom" ${data.gender==='custom'?'':'hidden'}>Identidad personalizada<input id="gender-custom" name="genderCustom" maxlength="40" placeholder="¿Cómo te describes?" value="${escapeHtml(data.genderCustom)}" ${data.gender==='custom'?'required':''}></label>`;
-  if (step === 2) return `<textarea id="character-appearance" name="appearance" maxlength="300" aria-label="Apariencia" required>${escapeHtml(data.appearance)}</textarea>`;
-  if (step === 3) return `<textarea id="character-story" name="origin" maxlength="600" aria-label="Historia personal (opcional)">${escapeHtml(data.origin)}</textarea>`;
+  if (step === 1) return `<fieldset class="choices gender-choices"><legend class="visually-hidden">Género</legend>${[['man','Hombre'],['woman','Mujer'],['custom','Otro']].map(([value,label])=>`<label class="choice"><input type="radio" name="gender" value="${value}" ${data.gender===value?'checked':''} required><span>${label}</span></label>`).join('')}</fieldset><label class="visually-hidden custom-gender" for="gender-custom" ${data.gender==='custom'?'':'hidden'}>Identidad personalizada<input id="gender-custom" name="genderCustom" maxlength="40" placeholder="¿cómo te describes?" value="${escapeHtml(data.genderCustom)}" ${data.gender==='custom'?'required':''}></label>`;
+  if (step === 2) return `<textarea id="character-appearance" name="appearance" maxlength="300" rows="2" aria-label="Apariencia" required>${escapeHtml(data.appearance)}</textarea>`;
+  if (step === 3) return `<textarea id="character-story" name="origin" maxlength="600" rows="3" aria-label="Historia personal (opcional)">${escapeHtml(data.origin)}</textarea>`;
   return `<input id="character-name" name="name" autocomplete="off" autocapitalize="words" maxlength="60" aria-label="Nombre" value="${escapeHtml(data.name)}" required>`;
 }
 
 function collectCreation(form) {
-  if (!form || state.creation.step < 0) return;
   const data = state.creation.data;
   for (const [key, value] of new FormData(form)) data[key] = String(value).trim();
-  if (state.creation.step === 1 && data.gender !== 'custom') data.genderCustom = '';
+  if (data.gender !== 'custom') data.genderCustom = '';
 }
 
-function renderCreation() {
-  const { step, data } = state.creation;
-  const current = creationSteps[step];
-  app.innerHTML = `<main class="threshold creation cinematic ${step===4?'name-interruption':''}"><div class="portal" aria-hidden="true"><div class="portal-core"></div></div><section class="cinematic-layout scene-enter"><div class="entity-presence" aria-hidden="true"></div><div class="entity-dialogue"><p id="entity-line" class="dialogue-text" role="status" aria-live="polite"></p></div><form id="creation-form" class="creation-form"><div class="step-field">${creationField(step, data)}</div><p class="error" id="creation-error" role="alert">${escapeHtml(state.creation.creationError || '')}</p><div class="creation-controls"><button class="back-link" type="button" data-back>${step===0?'Volver':'Atrás'}</button><button class="creation-continue" type="submit">${step===creationSteps.length-1?'Cruzar el umbral':'Continuar'} <span aria-hidden="true">→</span></button></div></form></section></main>`;
-  state.creation.creationError='';
-  window.scrollTo(0, 0);
-  const form = app.querySelector('#creation-form');
-  const continueButton=form.querySelector('.creation-continue');
-  const updateContinue=()=>{
-    const hasResponse=step===3 || [...new FormData(form).values()].some((value)=>String(value).trim());
-    continueButton.classList.toggle('is-visible',hasResponse);
-    continueButton.disabled=!form.checkValidity();
+// Muestra una pregunta de la entidad y espera la respuesta. Devuelve 'next', 'back' o 'cancelled'.
+async function ask(step, token) {
+  const { data } = state.creation;
+  const main = stage(step === 4 ? 'question-scene name-interruption' : 'question-scene');
+  const form = main.querySelector('#creation-form');
+  form.hidden = false;
+  form.className = 'creation-form';
+  const error = state.creation.creationError;
+  state.creation.creationError = '';
+  form.innerHTML = `<div class="step-field">${creationField(step, data)}</div><p class="error" role="alert">${escapeHtml(error)}</p><div class="creation-controls"><button class="back-link" type="button" data-back>${step===0?'Volver':'Atrás'}</button><button class="creation-continue" type="submit">${step===creationSteps.length-1?'Cruzar':'Continuar'} <span aria-hidden="true">→</span></button></div>`;
+  const continueButton = form.querySelector('.creation-continue');
+  let optionalTimer;
+  const update = () => {
+    const filled = [...new FormData(form).values()].some((value) => String(value).trim());
+    continueButton.classList.toggle('is-visible', filled || continueButton.dataset.revealed === 'true');
+    continueButton.disabled = !form.checkValidity();
   };
-  form.addEventListener('input',updateContinue);
-  form.addEventListener('change',updateContinue);
-  form.querySelectorAll('[name="gender"]').forEach((input)=>input.onchange=()=>{const custom=form.querySelector('.custom-gender');const customInput=custom.querySelector('input');const selected=input.value==='custom'&&input.checked;custom.hidden=!selected;customInput.required=selected;updateContinue();});
-  app.querySelector('[data-back]').onclick = () => { collectCreation(form); if (step===0) landing(); else { state.creation.step--; renderCreation(); } };
-  form.onsubmit = async (event) => {
-    event.preventDefault();
-    collectCreation(form);
-    if (!form.checkValidity()) return;
-    if (step===3) { personalizeBeforeName(); return; }
-    if (step < creationSteps.length-1) { state.creation.step++; renderCreation(); return; }
-    crossPortal();
-  };
-  renderEntityLine(current.question,()=>{form.classList.add('is-ready');updateContinue();form.querySelector('input,textarea')?.focus({preventScroll:true});},'question-scene',true);
+  form.addEventListener('input', update);
+  form.addEventListener('change', update);
+  form.querySelectorAll('[name="gender"]').forEach((input) => input.onchange = () => {
+    const custom = form.querySelector('.custom-gender'); const customInput = custom.querySelector('input');
+    const selected = input.value === 'custom' && input.checked;
+    custom.hidden = !selected; customInput.required = selected;
+    if (selected) customInput.focus({ preventScroll:true });
+    update();
+  });
+  const shown = await say(creationSteps[step].question, token, { hold:true });
+  if (!shown) return 'cancelled';
+  form.classList.add('is-ready');
+  update();
+  if (step === 3) optionalTimer = setTimeout(() => { continueButton.dataset.revealed = 'true'; update(); }, 3200);
+  form.querySelector('input:not([type="radio"]),textarea')?.focus({ preventScroll:true });
+  return new Promise((resolve) => {
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      if (!form.checkValidity()) return;
+      clearTimeout(optionalTimer);
+      collectCreation(form);
+      resolve('next');
+    };
+    form.querySelector('[data-back]').onclick = () => { clearTimeout(optionalTimer); collectCreation(form); resolve('back'); };
+  });
 }
 
-function renderIntro() {
-  renderDialogueSequence(openingLines,()=>{state.creation.step=0;renderCreation();},'opening-scene');
-}
-
-async function personalizeBeforeName() {
-  const { data }=state.creation;
-  const moldingBeat=new Promise((resolve)=>renderEntityLine(data.origin?'Tus palabras empiezan a tomar forma…':'Tu silencio también tiene forma.',resolve,'molding-scene'));
-  if(data.origin){
-    try {
-      const result=await request('/api/creation/whispers',{method:'POST',body:JSON.stringify({age:data.age,gender:data.gender,genderCustom:data.genderCustom,origin:data.origin})});
-      if(Array.isArray(result.whispers)&&result.whispers.length===2) state.creation.whispers=result.whispers;
-      else state.creation.whispers=answeredWhispers;
-    } catch { state.creation.whispers=answeredWhispers; }
-  } else state.creation.whispers=fallbackWhispers;
-  await moldingBeat;
-  renderDialogueSequence(state.creation.whispers,()=>{
-    app.querySelector('.creation')?.classList.add('name-interrupted');
-    setTimeout(()=>{state.creation.step=4;renderCreation();},850);
-  },'personalized-scene');
-}
-
-function renderDialogueSequence(lines,onComplete,className='') {
-  let index=0;
-  const next=()=>{
-    if(index>=lines.length){onComplete();return;}
-    renderEntityLine(lines[index++],()=>setTimeout(next,450),className);
-  };
-  next();
-}
-
-function renderEntityLine(text,onComplete,className='',preserveCurrent=false) {
-  const token=++state.creation.dialogueToken;
-  if(!preserveCurrent) app.innerHTML=`<main class="threshold creation cinematic ${className}"><div class="portal" aria-hidden="true"><div class="portal-core"></div></div><section class="cinematic-layout scene-enter"><div class="entity-presence" aria-hidden="true"></div><div class="entity-dialogue"><p id="entity-line" class="dialogue-text" role="status" aria-live="polite"></p></div></section></main>`;
-  else app.querySelector('.creation')?.classList.add(className);
-  const line=app.querySelector('#entity-line');
-  if(!line) return;
-  line.setAttribute('aria-label',text);
-  for(const [index,character] of Array.from(text).entries()){
-    const glyph=document.createElement('span');glyph.className='dialogue-glyph';glyph.textContent=character===' '?'\u00a0':character;glyph.setAttribute('aria-hidden','true');glyph.style.setProperty('--glyph-delay',`${Math.min(index*24,1600)}ms`);line.append(glyph);
+async function runCreation(token) {
+  for (const line of openingLines) {
+    stage('opening-scene');
+    if (!await say(line, token)) return;
   }
-  const reducedMotion=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-  const revealTime=reducedMotion?0:Math.min(text.length*24,1600);
-  const readingTime=reducedMotion?180:Math.max(1300,text.split(/\s+/).length*190);
-  setTimeout(()=>{if(state.creation?.dialogueToken===token)onComplete();},revealTime+readingTime);
+  let step = 0;
+  while (alive(token)) {
+    const answer = await ask(step, token);
+    if (answer === 'cancelled' || !alive(token)) return;
+    if (answer === 'back') {
+      if (step === 0) return abandonCreation();
+      await dismissForm(token); step--; continue;
+    }
+    vortexPulse();
+    if (step === 3) { if (!await personalizeBeforeName(token)) return; step = 4; continue; }
+    if (step < 4) { if (!await dismissForm(token)) return; step++; continue; }
+    if (await crossPortal(token)) return;
+    step = 4;
+  }
 }
 
-async function crossPortal() {
-  const data=state.creation.data;
-  app.innerHTML=`<main class="threshold creation cinematic portal-crossing-scene"><div class="portal" aria-hidden="true"><div class="portal-core"></div></div><section class="cinematic-layout scene-enter"><div class="entity-presence" aria-hidden="true"></div><div class="entity-dialogue"><p class="dialogue-text" aria-live="polite">Ahora sí, ${escapeHtml(data.name)}. Tu historia empieza a tomar forma.</p></div></section></main>`;
+async function personalizeBeforeName(token) {
+  const { data } = state.creation;
+  if (!await dismissForm(token)) return false;
+  stage('molding-scene');
+  vortex({ zoom:1.18, flash:.14, rate:1.1 });
+  const pending = data.origin
+    ? request('/api/creation/whispers', { method:'POST', body:JSON.stringify({ age:data.age, gender:data.gender, genderCustom:data.genderCustom, origin:data.origin }) }).catch(() => null)
+    : Promise.resolve(null);
+  if (!await say(data.origin ? 'Tus palabras empiezan a tomar forma…' : 'Tu silencio también tiene forma.', token)) return false;
+  const result = await pending;
+  const whispers = !data.origin ? fallbackWhispers : Array.isArray(result?.whispers) && result.whispers.length === 2 ? result.whispers : answeredWhispers;
+  stage('personalized-scene');
+  for (const whisper of whispers) if (!await say(whisper, token, { hold: whisper === whispers.at(-1) })) return false;
+  // La entidad se interrumpe: un sacudón de luz antes de preguntar el nombre.
+  vortex({ zoom:1.5, flash:.5, rate:9 });
+  await sleep(170);
+  app.querySelector('#entity-line')?.classList.add('interrupted');
+  vortex({ zoom:1.3, flash:.06, rate:1.8 });
+  await sleep(reducedMotion() ? 0 : 1000);
+  return alive(token);
+}
+
+// Devuelve true si la partida se creó y se mostró la llegada; false si falló y hay que volver al nombre.
+async function crossPortal(token) {
+  const { data } = state.creation;
+  await dismissForm(token);
+  if (!alive(token)) return true;
+  stage('portal-crossing-scene');
+  vortex({ zoom:6, flash:.9, rate:.75 });
+  const closing = say(`Ahora sí, ${data.name}. Tu historia empieza a tomar forma.`, token, { hold:true });
   try {
-    const [run]=await Promise.all([request('/api/runs',{method:'POST',body:JSON.stringify(data)}),new Promise((resolve)=>setTimeout(resolve,1600))]);
-    state.run=run;
-    localStorage.setItem('hom:lastRun',state.run.id);
+    const [run] = await Promise.all([request('/api/runs', { method:'POST', body:JSON.stringify(data) }), closing, sleep(2600)]);
+    if (!alive(token)) return true;
+    state.run = run;
+    localStorage.setItem('hom:lastRun', run.id);
+    app.querySelector('#entity-line')?.classList.add('leaving');
+    await sleep(reducedMotion() ? 0 : 900);
+    vortex({ zoom:1, flash:0, rate:1.2 });
     showArrival();
-  } catch(error) {
-    state.creation.creationError=error.message;
-    state.creation.step=4;
-    renderCreation();
+    return true;
+  } catch (error) {
+    if (!alive(token)) return true;
+    state.creation.creationError = error.message;
+    vortex({ zoom:1.3, flash:0, rate:1.5 });
+    return false;
   }
 }
 

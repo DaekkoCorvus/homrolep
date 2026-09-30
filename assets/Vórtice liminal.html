@@ -22,7 +22,7 @@ precision highp float;
 #else
 precision mediump float;
 #endif
-uniform float uTime;uniform vec2 uRes;uniform vec2 uC;
+uniform float uTime;uniform vec2 uRes;uniform vec2 uC;uniform float uZoom;uniform float uFlash;
 float hash(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
 // ruido periodico en x (sin costura en el angulo)
 float nz(vec2 p,float P){
@@ -40,7 +40,7 @@ const vec3 cL=vec3(.81,.94,1.),cC=vec3(.243,.776,.941),cB=vec3(.353,.561,.816),
            cG=vec3(.557,.624,.753),cV=vec3(.788,.776,.91),cP=vec3(.906,.706,.839);
 void main(){
   vec2 uv=(gl_FragCoord.xy-.5*uRes)/uRes.y;
-  vec2 p=uv-(vec2(.03,-.06)+uC)+1e-5;
+  vec2 p=(uv-(vec2(.03,-.06)+uC))/uZoom+1e-5;
   float r=length(p),a=atan(p.y,p.x),t=uTime;
   float lr=log(r+.03);
   float a2=a+1.7*lr-t*.06;              // torsion en espiral + rotacion lenta
@@ -64,6 +64,7 @@ void main(){
   col+=cL*glow*.25;
   col+=cL*exp(-pow((r-.3)/.015,2.))*.08*(.5+.5*sin(t*.25)); // halo de umbral
   col*=1.-.3*smoothstep(.45,1.,length(uv));
+  col=mix(col,vec3(.97,.985,1.),clamp(uFlash,0.,1.));
   col+=(hash(gl_FragCoord.xy+fract(t)*91.)-.5)*.025;        // grano
   gl_FragColor=vec4(col,1.);
 }`;
@@ -71,7 +72,7 @@ const VS='attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}';
 
 const cv=document.getElementById('c');
 const rm=matchMedia('(prefers-reduced-motion: reduce)').matches;
-let gl,ctx,uT,uR,uC,raf,t=0,last=0,scale=S.scale,ptr=[0,0],cur=[0,0],fr=0,acc=0;
+let gl,ctx,uT,uR,uC,uZ,uF,zoom=1,flash=0,tz=1,tf=0,rate=1.4,raf,t=0,last=0,scale=S.scale,ptr=[0,0],cur=[0,0],fr=0,acc=0;
 
 function initGL(){
   gl=cv.getContext('webgl',{antialias:false,alpha:false,powerPreference:'low-power'});
@@ -85,7 +86,7 @@ function initGL(){
   gl.bindBuffer(gl.ARRAY_BUFFER,gl.createBuffer());
   gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
   const l=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(l);gl.vertexAttribPointer(l,2,gl.FLOAT,false,0,0);
-  uT=gl.getUniformLocation(pr,'uTime');uR=gl.getUniformLocation(pr,'uRes');uC=gl.getUniformLocation(pr,'uC');
+  uT=gl.getUniformLocation(pr,'uTime');uR=gl.getUniformLocation(pr,'uRes');uC=gl.getUniformLocation(pr,'uC');uZ=gl.getUniformLocation(pr,'uZoom');uF=gl.getUniformLocation(pr,'uFlash');
   return true;
 }
 
@@ -114,8 +115,9 @@ function frame(now){
   const dt=Math.min((now-last)/1000,.1);last=now;
   t+=dt*S.speed*(rm?.15:1);
   const k=Math.min(1,dt*2);cur[0]+=(ptr[0]-cur[0])*k;cur[1]+=(ptr[1]-cur[1])*k;
+  const ke=1-Math.exp(-dt*rate);zoom+=(tz-zoom)*ke;flash+=(tf-flash)*ke;
   if(gl){
-    gl.uniform1f(uT,t);gl.uniform2f(uR,cv.width,cv.height);
+    gl.uniform1f(uZ,zoom);gl.uniform1f(uF,flash);gl.uniform1f(uT,t);gl.uniform2f(uR,cv.width,cv.height);
     gl.uniform2f(uC,cur[0]*.05,cur[1]*.05);gl.drawArrays(gl.TRIANGLES,0,3);
   }else draw2d();
   // escala adaptativa
@@ -133,6 +135,7 @@ addEventListener('resize',resize);
 document.addEventListener('visibilitychange',()=>document.hidden?cancelAnimationFrame(raf):start());
 cv.addEventListener('webglcontextlost',e=>{e.preventDefault();cancelAnimationFrame(raf);});
 cv.addEventListener('webglcontextrestored',()=>{initGL();resize();start();});
+addEventListener('message',e=>{const d=e.data;if(e.origin!==location.origin||!d||d.type!=='vortex')return;if(typeof d.zoom==='number')tz=Math.min(8,Math.max(.5,d.zoom));if(typeof d.flash==='number')tf=Math.min(1,Math.max(0,d.flash));if(typeof d.rate==='number')rate=Math.min(12,Math.max(.2,d.rate));});
 addEventListener('pointermove',e=>{ptr=[(e.clientX/innerWidth-.5)*2,-(e.clientY/innerHeight-.5)*2];});
 })();
 </script>
