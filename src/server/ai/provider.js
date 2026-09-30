@@ -102,7 +102,7 @@ export function createNanoGPT(fetchImpl = fetch, timeoutMs = 60000) {
     },
 
     async npcReply({ npc, player, world, location, relationship, attitude, transcript, opening }, config) {
-      const persona = { nombre:npc.name, rol:npc.role, personalidad:npc.personality, conocimientos:npc.knowledge, secretos:npc.secrets };
+      const persona = { nombre:npc.name, rol:npc.role, personalidad:npc.personality, conocimientos:npc.knowledge, secretos:npc.secrets, trasfondo:npc.background, ejemplosDeVoz:npc.exampleDialogue };
       const system = PERSONA_RULES + ' Devuelve solo JSON: {"say":"lo que dices en voz alta","gesture":"acción o gesto breve opcional, sin comillas"}.';
       const user = JSON.stringify({
         persona, escena:{ lugar:location.name, descripcion:location.description, hora:world.hour + ':' + String(world.minute).padStart(2, '0'), dia:world.day },
@@ -122,7 +122,7 @@ Ahora la conversación terminó y debes juzgarla desde la mente del NPC. Escribe
 "contactOffer" es true solo si el NPC de verdad querría dar su contacto según su personalidad y la conversación (nunca por mera cortesía comercial). "farewell" es lo que el NPC dice al despedirse, breve y coherente con la impresión. "summary" resume en una frase neutra qué pasó.
 Devuelve solo JSON: {"notes":[{"text":"","valence":0,"evidence":"","tags":[]}],"contactOffer":false,"farewell":"","summary":""} con 1 a 4 notas.`;
       const user = JSON.stringify({
-        persona:{ nombre:npc.name, rol:npc.role, personalidad:npc.personality, contacto:npc.contact },
+        persona:{ nombre:npc.name, rol:npc.role, personalidad:npc.personality, trasfondo:npc.background, contacto:npc.contact },
         jugador:{ nombreConocido:relationship.nameKnown ? player.name : null, edad:player.age, genero:player.gender === 'custom' ? player.genderCustom : player.gender },
         relacion:{ actitudPrevia:attitude, tieneContacto:relationship.contact, recuerdosPrivados:relationship.notes.slice(-8).map((note) => note.text) },
         conversacion:transcript.map((line) => ({ quien:line.who === 'player' ? 'jugador' : npc.name, texto:line.text }))

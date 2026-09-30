@@ -1,4 +1,5 @@
-import { state, app, request, notify, timeText, clockText, period, place, escapeHtml, devMode } from './core.js';
+import { state, app, request, notify, timeText, clockText, period, place, escapeHtml, isDev } from './core.js';
+import { initDevtools, runCommand, openPanel } from './devtools.js';
 import { sceneMarkup, applySky, SCENE_META } from './scenes.js';
 
 const ui = { phoneOpen:false, phoneView:'home', busy:false, sceneKey:null, hooks:{} };
@@ -19,9 +20,10 @@ export function enterGame(hooks) {
   document.getElementById('vortex-layer')?.contentWindow?.postMessage({ type:'vortex', zoom:1, flash:0, rate:2 }, location.origin);
   app.innerHTML = `<main class="game">
     <div class="scene" aria-hidden="true"><div class="scene-art"></div><div class="scene-dust"></div><div class="scene-vignette"></div></div>
+    <div class="vn-layer" aria-hidden="true"><img alt=""></div>
     <div class="place-title" aria-live="polite"></div>
     <header class="hud">
-      <div class="clock-pill" role="status"><span class="clock-dot"></span><span class="clock-text"></span></div>
+      <div class="hud-left"><div class="clock-pill" role="status"><span class="clock-dot"></span><span class="clock-text"></span></div><button type="button" class="dev-pill" data-dev hidden>DEV</button></div>
       <button class="phone-button" type="button" data-phone aria-label="Abrir teléfono">${icon('<rect x="7" y="2.500" width="10" height="19" rx="2.500"/><path d="M11 18.500h2"/>')}<i class="phone-badge" hidden></i></button>
     </header>
     <section class="story" aria-live="polite"></section>
@@ -33,12 +35,21 @@ export function enterGame(hooks) {
     <div class="phone-layer" hidden><div class="phone" role="dialog" aria-label="Teléfono"><div class="phone-notch"></div><div class="phone-status"><span class="ps-time"></span><span class="ps-net">${escapeHtml(state.world.name)} ▪▪▪</span></div><div class="phone-screen"></div><button class="phone-home" type="button" aria-label="Inicio del teléfono"></button></div></div>
   </main>`;
   wire();
+  initDevtools({
+    perform,
+    runDev: (body) => request(`/api/runs/${state.run.id}/dev`, { method:'POST', body:JSON.stringify(body) }),
+    reload: async () => { try { state.run = await request(`/api/runs/${state.run.id}`); ui.storyError = ''; updateGame(); } catch (error) { notify(error.message); } }
+  });
   updateGame({ announce:true });
 }
 
 function wire() {
   const root = app.querySelector('.game');
   root.querySelector('[data-phone]').onclick = () => togglePhone(true);
+  root.querySelector('[data-dev]').onclick = () => openPanel();
+  const portrait = root.querySelector('.vn-layer img');
+  portrait.onerror = () => { portrait.removeAttribute('src'); root.classList.remove('has-portrait'); };
+  portrait.onload = () => { root.classList.add('has-portrait'); portrait.classList.remove('in'); void portrait.offsetWidth; portrait.classList.add('in'); };
   root.querySelector('.phone-layer').onclick = (event) => { if (event.target === event.currentTarget) togglePhone(false); };
   root.querySelector('.sheet-layer').onclick = (event) => { if (event.target === event.currentTarget) toggleSheet(false); };
   root.querySelector('.phone-home').onclick = () => { if (ui.phoneView === 'home') togglePhone(false); else { ui.phoneView = 'home'; renderPhone(); } };
@@ -49,7 +60,7 @@ function wire() {
   const grow = () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 120)}px`; };
   input.addEventListener('input', grow);
   input.addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.shiftKey && matchMedia('(hover:hover)').matches) { event.preventDefault(); form.requestSubmit(); } });
-  form.onsubmit = (event) => { event.preventDefault(); const text = input.value.trim(); if (!text) return; input.value = ''; grow(); if (state.run.encounter) say(text, input); else runAction({ type:'freeform', text }); };
+  form.onsubmit = (event) => { event.preventDefault(); const text = input.value.trim(); if (!text) return; input.value = ''; grow(); if (text.startsWith('/')) { runCommand(text); return; } if (state.run.encounter) say(text, input); else runAction({ type:'freeform', text }); };
   document.onkeydown = (event) => { if (event.key === 'Escape') { if (!root.querySelector('.sheet-layer').hidden) toggleSheet(false); else if (ui.phoneOpen) togglePhone(false); } };
 }
 
@@ -59,11 +70,41 @@ export function updateGame({ announce=false }={}) {
   const clock = root.querySelector('.clock-text'); clock.textContent = timeText(run.world);
   root.querySelector('.ps-time').textContent = clockText(run.world);
   root.classList.toggle('talking', Boolean(run.encounter));
+  root.querySelector('[data-dev]').hidden = !isDev();
+  renderPortrait(root);
+  preloadPortraits();
   root.querySelector('.free-action textarea').placeholder = run.encounter ? `Dile algo a ${run.encounterNpc.name}…` : '¿Qué haces?';
   renderScene(root, loc, announce);
   renderStory(root, loc);
   renderChips(root, loc);
   if (ui.phoneOpen) renderPhone();
+}
+
+// Novela visual: retrato del NPC mientras se conversa. Las emociones llegarán como `portraits[emotion]`.
+let portraitTimer = null;
+function renderPortrait(root) {
+  const img = root.querySelector('.vn-layer img');
+  const npc = state.run.encounterNpc;
+  const lastLine = state.run.encounter?.lines.filter((line) => line.who === 'npc').at(-1);
+  const url = npc ? (npc.portraits?.[lastLine?.emotion] ?? npc.portraits?.default ?? null) : null;
+  clearTimeout(portraitTimer);
+  if (!url) {
+    root.classList.remove('has-portrait');
+    // Conserva la imagen mientras se desvanece para que la salida también sea suave.
+    portraitTimer = setTimeout(() => img.removeAttribute('src'), 900);
+    return;
+  }
+  if (img.getAttribute('src') !== url) { img.classList.remove('in'); img.src = url; }
+  else root.classList.add('has-portrait');
+}
+
+// Precarga los retratos de quien está presente para que aparezcan sin espera al empezar a hablar.
+const preloaded = new Set();
+function preloadPortraits() {
+  for (const npc of state.run.presence ?? []) {
+    const url = npc.portraits?.default;
+    if (url && !preloaded.has(url)) { preloaded.add(url); new Image().src = url; }
+  }
 }
 
 function renderScene(root, loc, announce) {
@@ -105,7 +146,7 @@ function storyContent(loc) {
 
 function renderConversation(story) {
   const { lines } = state.run.encounter; const npc = state.run.encounterNpc;
-  const signature = `talk:${lines.length}:${ui.pendingLine ?? ''}`;
+  const signature = `talk:${lines.map((line) => line.text).join('|')}:${ui.pendingLine ?? ''}`;
   if (story.dataset.sig === signature && !ui.storyError) return;
   story.dataset.sig = signature;
   const rows = lines.map((line, i) => line.who === 'npc'
@@ -187,7 +228,7 @@ function renderPhone() {
   const view = ui.phoneView; const run = state.run;
   if (view === 'home') {
     screen.className = 'phone-screen home';
-    screen.innerHTML = `<div class="phone-clock"><strong>${clockText(run.world)}</strong><span>Día ${run.world.day} · ${period(run.world.hour)}</span></div><div class="app-grid">${PHONE_APPS.map(([id, label, path]) => `<button type="button" data-app="${id}"><span class="app-icon">${icon(path)}</span>${label}</button>`).join('')}<button type="button" data-app="messages"><span class="app-icon">${icon('<path d="M3 7l9 6 9-6M3 7v10h18V7Z"/>')}</span>Mensajes</button>${devMode ? `<button type="button" data-app="gm"><span class="app-icon">${icon('<path d="M12 3l9 5-9 5-9-5ZM3 13l9 5 9-5"/>')}</span>Notas GM</button>` : ''}</div>`;
+    screen.innerHTML = `<div class="phone-clock"><strong>${clockText(run.world)}</strong><span>Día ${run.world.day} · ${period(run.world.hour)}</span></div><div class="app-grid">${PHONE_APPS.map(([id, label, path]) => `<button type="button" data-app="${id}"><span class="app-icon">${icon(path)}</span>${label}</button>`).join('')}<button type="button" data-app="messages"><span class="app-icon">${icon('<path d="M3 7l9 6 9-6M3 7v10h18V7Z"/>')}</span>Mensajes</button>${isDev() ? `<button type="button" data-app="gm"><span class="app-icon">${icon('<path d="M12 3l9 5-9 5-9-5ZM3 13l9 5 9-5"/>')}</span>Notas GM</button>` : ''}</div>`;
     screen.querySelectorAll('[data-app]').forEach((button) => button.onclick = () => openApp(button.dataset.app));
     return;
   }

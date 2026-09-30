@@ -118,7 +118,9 @@ Prueba de concepto con un solo NPC, **Luna Serp** (`data/canon/npcs/luna_serp.js
 
 - Hecho: presencia por horario, conversación 1 a 1 con la IA interpretando al NPC, cierre con evaluación del GM, notas ocultas con evidencia y topes, contacto condicionado, bloqueo de otras acciones durante la conversación (`src/server/game/npcs.js`, `run.js`, rutas `/talk`).
 - Pendiente: chat por mensajes, citas y espera de 30 minutos, avance del tiempo por eventos, relojes de tensión, Director.
-- Para revisar las notas ocultas al probar, abre el juego con `?dev=1` y usa la app «Notas GM» del teléfono (`?dev=0` la desactiva). Los datos siguen en la Run: es solo una vista de depuración.
+- Herramientas de desarrollo: escribe `/dev` en el chat de acción libre (o abre el juego con `?dev=1`). Comandos: `/reiniciar`, `/regenerar`, `/hora HH:MM [día]`, `/ir lugar`, `/npc [id]`, `/fichas`, `/ayuda`. El panel permite editar, importar y exportar fichas; la app «Notas GM» del teléfono muestra las notas ocultas de cada NPC (solo depuración).
+- Fichas de NPC: `data/canon/npcs/<id>.json` (también se pueden soltar ahí a mano). Se importan JSON propios y «character cards» v1/v2/v3 en JSON o PNG (mapeo aproximado que hay que revisar).
+- Novela visual: el retrato de un NPC se toma de `assets/portraits/<id>/default.png` (también webp, jpg o svg). Las emociones futuras serán `<emoción>.png` en la misma carpeta y el campo `emotion` de cada línea del NPC. Formato recomendado: WebP con alfa, lienzo 2:3 de 800×1200 px, mismo encuadre en todas las emociones; el PNG maestro va en `assets/portraits/<id>/source/` (no se sirve). Si una emoción existe en varios formatos se sirve el más ligero (webp > png > jpg > svg). El editor de fichas optimiza al subir (máx. 1200 px de alto, WebP 92% o sin pérdida).
 
 ## 10. Preguntas abiertas
 

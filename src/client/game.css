@@ -171,3 +171,71 @@ body:has(.game) { background:#05070d; overflow:hidden; }
 .game.talking .scene-art { filter:brightness(.62) blur(1.5px); }
 .scene-art { transition:opacity 1.2s ease,filter .8s ease; }
 .game.talking .story { background:linear-gradient(180deg,transparent,#04060ccc 14%,#04060cf0); -webkit-mask-image:linear-gradient(180deg,transparent 0,#000 2.6rem); mask-image:linear-gradient(180deg,transparent 0,#000 2.6rem); }
+
+/* Novela visual: retrato del NPC durante la conversación */
+.vn-layer { position:absolute; left:0; right:0; top:9%; bottom:var(--dock-h,132px); z-index:1; display:flex; justify-content:center; align-items:flex-end; pointer-events:none; opacity:0; transition:opacity .7s ease; }
+.vn-layer img { max-width:92%; max-height:100%; object-fit:contain; filter:drop-shadow(0 10px 30px #000a); }
+.vn-layer img:not([src]) { display:none; }
+.game.talking.has-portrait .vn-layer { opacity:1; }
+.game.talking.has-portrait .scene-art { filter:brightness(.5) blur(3px); }
+.game.talking.has-portrait .story { max-height:30dvh; }
+
+/* Herramientas de desarrollo */
+.hud-left { display:flex; align-items:center; gap:.5rem; }
+.dev-pill { min-height:34px; padding:.3rem .7rem; border-radius:999px; border:1px solid #8be9a2aa; background:#0a2316b8; color:#9af0b1; font:600 .72rem Inter,system-ui,sans-serif; letter-spacing:.12em; }
+.dev-pill[hidden] { display:none; }
+.dev-layer { position:fixed; inset:0; z-index:60; background:#02030acc; display:flex; justify-content:center; align-items:flex-end; opacity:0; transition:opacity .25s; }
+.dev-layer.open { opacity:1; }
+.dev-sheet { width:min(100%,560px); max-height:94dvh; overflow-y:auto; padding:.4rem 1rem calc(1.2rem + env(safe-area-inset-bottom)); border-radius:22px 22px 0 0; background:#0c0f1d; border:1px solid #ffffff1c; color:#f3ead9; font:0.92rem/1.45 Inter,system-ui,sans-serif; }
+.dev-sheet header { position:sticky; top:0; z-index:2; display:flex; justify-content:space-between; align-items:center; padding:.7rem 0; background:#0c0f1d; }
+.dev-sheet h2 { margin:0; font:400 1.25rem Georgia,serif; } .dev-sheet h3 { margin:1rem 0 .5rem; font:600 .72rem Inter,sans-serif; letter-spacing:.16em; text-transform:uppercase; color:#9af0b1; }
+.dev-sheet header button { width:44px; min-height:44px; padding:0; border:0; background:transparent; color:#f3ead9; font-size:1.6rem; }
+.dev-buttons { display:flex; flex-wrap:wrap; gap:.5rem; margin:.4rem 0; }
+.dev-sheet button,.file-button { min-height:44px; padding:.5rem .9rem; border-radius:12px; border:1px solid #ffffff26; background:#ffffff0d; color:#f3ead9; font:inherit; cursor:pointer; display:inline-flex; align-items:center; }
+.dev-sheet button.primary-dev { background:#9af0b1; color:#06170d; border:0; font-weight:700; }
+.file-button.disabled { opacity:.4; pointer-events:none; }
+.dev-list { display:grid; gap:.4rem; }
+.dev-row { display:flex; align-items:center; gap:.5rem; padding:.45rem .6rem; border-radius:12px; background:#ffffff08; border:1px solid #ffffff10; }
+.dev-row > span { flex:1; display:grid; } .dev-row small { color:#8f8aa3; }
+.dev-row button { min-height:38px; padding:.3rem .7rem; }
+.dev-hint { color:#9b96ad; font-size:.8rem; margin:.4rem 0; } .dev-hint code,.dev-commands dt { font-family:ui-monospace,Consolas,monospace; color:#9af0b1; }
+.dev-commands { margin:0; display:grid; gap:.5rem; } .dev-commands div { display:grid; } .dev-commands dd { margin:0; color:#b7b1c6; font-size:.85rem; }
+.dev-field { display:grid; gap:.25rem; margin:.6rem 0; }
+.dev-field span { font-size:.78rem; color:#b7b1c6; } .dev-field small { color:#8f8aa3; font-size:.75rem; }
+.dev-field input,.dev-field textarea,.slot input,.slot select { width:100%; padding:.6rem .7rem; border-radius:10px; border:1px solid #ffffff24; background:#ffffff0a; color:#f3ead9; font:inherit; }
+.dev-field textarea { resize:vertical; min-height:60px; line-height:1.45; }
+.dev-field input[readonly] { opacity:.6; }
+.slot { padding:.6rem; margin-bottom:.5rem; border-radius:12px; border:1px solid #ffffff14; display:grid; gap:.5rem; }
+.days { display:flex; gap:.3rem; } .days label { display:block; } .days input { position:absolute; opacity:0; }
+.days span { display:grid; place-items:center; width:36px; height:36px; border-radius:10px; border:1px solid #ffffff26; color:#b7b1c6; font-size:.8rem; }
+.days input:checked + span { background:#9af0b133; border-color:#9af0b1; color:#9af0b1; }
+.slot-fields { display:grid; grid-template-columns:64px 64px 1fr; gap:.4rem; } .slot-fields [data-activity] { grid-column:1 / 3; } .slot-fields [data-remove] { width:100%; }
+.dev-sheet footer { position:sticky; bottom:0; display:flex; justify-content:space-between; gap:.6rem; padding:.7rem 0; background:linear-gradient(transparent,#0c0f1d 30%); }
+.dev-portrait { display:grid; grid-template-columns:110px 1fr; gap:.8rem; align-items:center; }
+.portrait-preview { height:150px; border-radius:12px; background:#ffffff08; border:1px dashed #ffffff26; display:grid; place-items:center; overflow:hidden; color:#8f8aa3; font-size:.8rem; }
+.portrait-preview img { width:100%; height:100%; object-fit:contain; }
+.dev-sheet .error { color:#ffb4a6; min-height:1em; }
+
+/* Novela visual: composición inmersiva del retrato */
+.vn-layer { top:0; bottom:calc(var(--dock-h,132px) - 4%); overflow:hidden; }
+.vn-layer::before { content:''; position:absolute; left:50%; bottom:8%; width:min(120vw,620px); aspect-ratio:1; transform:translateX(-50%); border-radius:50%; background:radial-gradient(circle,#f2d6a833 0,#b08a6a1f 34%,transparent 68%); opacity:0; transition:opacity 1s ease .2s; }
+.game.talking.has-portrait .vn-layer::before { opacity:1; }
+.vn-layer img { position:relative; height:min(76dvh,138vw); width:auto; max-width:none; max-height:none; object-fit:contain; transform-origin:50% 100%; opacity:0;
+  filter:drop-shadow(0 0 1.5px #fff2d6b3) drop-shadow(0 0 14px #f2d6a82e) drop-shadow(0 18px 28px #000b); }
+.vn-layer img.in { animation:vn-enter .9s cubic-bezier(.2,.8,.2,1) forwards,vn-breathe 7s ease-in-out .9s infinite; }
+.game:not(.has-portrait) .vn-layer img.in { opacity:0; animation:none; transition:opacity .6s; }
+.game.talking.has-portrait .scene-art { filter:brightness(.42) saturate(.85) blur(4px); }
+.game.talking.has-portrait .scene-vignette { background:radial-gradient(ellipse at 50% 34%,transparent 30%,#02030899 100%),linear-gradient(180deg,#02030866 0,transparent 20%,transparent 40%,#04060ccc 70%,#04060cf5 88%); }
+.game.talking.has-portrait .story { background:linear-gradient(180deg,transparent,#04060cb8 16%,#04060cf2 58%); }
+.portrait-options { display:flex; gap:.4rem; margin:.4rem 0; } .portrait-options select { flex:2; } .portrait-options input { flex:1; min-width:0; }
+.portrait-options select,.portrait-options input { padding:.5rem; border-radius:10px; border:1px solid #ffffff24; background:#ffffff0a; color:#f3ead9; font:inherit; }
+@keyframes vn-enter { from { opacity:0; transform:translateY(26px) scale(.985); } to { opacity:1; transform:none; } }
+@keyframes vn-breathe { 0%,100% { transform:none; } 50% { transform:translateY(-4px) scale(1.006); } }
+@media (prefers-reduced-motion:reduce) { .vn-layer img.in { animation:vn-enter .01s forwards; } }
+
+/* Ajuste final del encuadre: sprite grande bajo el HUD y caja de diálogo de altura fija para ocultar el corte inferior */
+.vn-layer img { height:min(78dvh,170vw); }
+.game.talking.has-portrait .story { display:flex; flex-direction:column; height:33dvh; max-height:33dvh; padding-top:2.4rem; }
+.game.talking.has-portrait .story::before { content:''; margin-top:auto; }
+.game.talking.has-portrait .story > * { flex:none; }
+.vn-layer { bottom:var(--dock-h,132px); }

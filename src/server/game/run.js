@@ -103,9 +103,12 @@ export const MAX_ENCOUNTER_LINES = 60;
 export function startEncounter(run, npc, opening) {
   if (run.encounter) throw new Error('Ya estás en una conversación.');
   const next = structuredClone(run);
+  const prior = { met: false, nameKnown: false, contact: false, encounters: 0, notes: [], history: [], ...(run.relationships?.[npc.id] ?? {}) };
+  // `origin` permite a las herramientas de desarrollo rebobinar una conversación y repetirla.
+  const origin = { world: structuredClone(run.world), relationship: structuredClone(prior), eventCount: run.eventLog.length, narrative: run.narrative ?? null };
   next.world = advanceTime(next.world, 1);
   next.encounter = {
-    npcId: npc.id, locationId: next.player.locationId, startedAt: timeKey(next.world),
+    npcId: npc.id, locationId: next.player.locationId, startedAt: timeKey(next.world), origin,
     lines: [{ who: 'npc', text: opening.say, ...(opening.gesture ? { gesture: opening.gesture } : {}) }]
   };
   const relationship = { met: false, nameKnown: false, contact: false, encounters: 0, notes: [], history: [], ...(next.relationships?.[npc.id] ?? {}) };
@@ -132,12 +135,63 @@ export function endEncounter(run, npc, { relationship, farewell, contactGranted 
   if (!run.encounter) throw new Error('No estás hablando con nadie.');
   const next = structuredClone(run);
   next.world = advanceTime(next.world, 1);
-  const contactLine = contactGranted ? `${npc.name} te deja su contacto.` : '';
-  const text = [farewell || `${npc.name} asiente mientras te despides.`, contactLine].filter(Boolean).join('\n\n');
+  const text = closingText(npc, { farewell, contactGranted });
   next.relationships[npc.id] = { ...relationship, encounters: relationship.encounters + 1 };
   next.eventLog.push({ time: timeKey(next.world), type: 'conversation_ended', data: { npcId: npc.id, contact: contactGranted, response: text } });
   next.narrative = { text, time: timeKey(next.world) };
+  next.lastEncounter = structuredClone(run.encounter);
   next.encounter = null;
+  next.updatedAt = new Date().toISOString();
+  return next;
+}
+
+export function closingText(npc, { farewell, contactGranted }) {
+  return [farewell || `${npc.name} asiente mientras te despides.`, contactGranted ? `${npc.name} te deja su contacto.` : ''].filter(Boolean).join('\n\n');
+}
+
+// --- Herramientas de desarrollo: rebobinar y regenerar --------------------------
+export function rewindEncounter(run) {
+  const source = run.encounter ?? run.lastEncounter;
+  if (!source?.origin) throw new Error('No hay ninguna conversación que reiniciar.');
+  const next = structuredClone(run);
+  next.world = structuredClone(source.origin.world);
+  next.relationships = { ...next.relationships, [source.npcId]: structuredClone(source.origin.relationship) };
+  next.eventLog = next.eventLog.slice(0, source.origin.eventCount);
+  next.narrative = source.origin.narrative;
+  next.encounter = null; next.lastEncounter = null;
+  next.updatedAt = new Date().toISOString();
+  return { run: next, npcId: source.npcId };
+}
+
+export function replaceLastNpcLine(run, reply) {
+  const lines = run.encounter?.lines;
+  if (!lines?.length || lines.at(-1).who !== 'npc') throw new Error('No hay una respuesta del NPC que regenerar.');
+  const next = structuredClone(run);
+  next.encounter.lines[lines.length - 1] = { who: 'npc', text: reply.say, ...(reply.gesture ? { gesture: reply.gesture } : {}) };
+  next.updatedAt = new Date().toISOString();
+  return next;
+}
+
+// Vuelve a aplicar el cierre de la última conversación con una evaluación nueva (la relación parte de su estado original).
+export function reapplyEnding(run, npc, { relationship, farewell, contactGranted }) {
+  const source = run.lastEncounter;
+  const event = [...run.eventLog].reverse().find((item) => item.type === 'conversation_ended');
+  if (!source || !event) throw new Error('No hay un cierre de conversación que regenerar.');
+  const next = structuredClone(run);
+  const text = closingText(npc, { farewell, contactGranted });
+  next.relationships[npc.id] = { ...relationship, encounters: source.origin.relationship.encounters + 1 };
+  const target = next.eventLog.find((item) => item.time === event.time && item.type === 'conversation_ended');
+  target.data = { ...target.data, contact: contactGranted, response: text };
+  next.narrative = { text, time: event.time };
+  next.updatedAt = new Date().toISOString();
+  return next;
+}
+
+export function setWorldTime(run, { day, hour, minute }) {
+  const d = Number(day ?? run.world.day); const h = Number(hour ?? run.world.hour); const m = Number(minute ?? 0);
+  if (!Number.isInteger(d) || d < 1 || d > 9999 || !Number.isInteger(h) || h < 0 || h > 23 || !Number.isInteger(m) || m < 0 || m > 59) throw new Error('Hora inválida.');
+  const next = structuredClone(run);
+  next.world = { ...next.world, day: d, hour: h, minute: m };
   next.updatedAt = new Date().toISOString();
   return next;
 }

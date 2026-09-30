@@ -49,6 +49,10 @@ npm start
 
 Después, abre `http://localhost:3000` en el navegador Android.
 
+## Herramientas de desarrollo
+
+Escribe `/dev` en el campo de acción libre para activarlas (o abre `/?dev=1`). Incluyen reiniciar y regenerar respuestas, cambiar la hora, teletransportarse y un editor de fichas de NPC con importar/exportar. Detalles en [GAMEPLAY_DESIGN.md](GAMEPLAY_DESIGN.md). Solo funcionan con esa cabecera local; no forman parte de la experiencia de juego.
+
 ## Pruebas
 
 ```bash
