@@ -14,6 +14,7 @@ const clientDir = path.join(root, 'src/client');
 const worldData = JSON.parse(await readFile(path.join(root, 'data/canon/locations/northfortress.json'), 'utf8'));
 const port = Number(process.env.PORT) || 3000;
 
+const clientFiles = new Set(['/index.html', '/app.js', '/core.js', '/game.js', '/scenes.js', '/styles.css', '/game.css']);
 const mimeTypes = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.json':'application/json; charset=utf-8', '.svg':'image/svg+xml' };
 
 function sendJson(response, status, body) {
@@ -116,7 +117,7 @@ async function api(request, response, pathname) {
 async function staticFile(response, pathname) {
   const route = decodeURIComponent(pathname === '/' ? '/index.html' : pathname);
   const isAsset = route.startsWith('/assets/');
-  const base = isAsset ? assetDir : ['/app.js', '/styles.css', '/index.html'].includes(route) ? clientDir : publicDir;
+  const base = isAsset ? assetDir : clientFiles.has(route) ? clientDir : publicDir;
   const filePath = isAsset ? route.slice('/assets'.length) : route;
   const target = path.resolve(base, `.${filePath}`);
   if (!target.startsWith(base + path.sep)) throw Object.assign(new Error('Ruta inválida.'), { code: 'ENOENT' });
