@@ -35,7 +35,7 @@ test('travel updates location, time and semantic event log', () => {
   const run = createRun(character);
   const moved = applyAction(run, { type:'travel', locationId:'cafe' }, world);
   assert.equal(moved.player.locationId, 'cafe');
-  assert.deepEqual(moved.world, { day:1, hour:8, minute:20, cityId:'northfortress' });
+  assert.deepEqual(moved.world, { day:1, hour:8, minute:20, cityId:'porta_magna' });
   assert.equal(moved.eventLog.at(-1).type, 'location_changed');
 });
 
@@ -43,6 +43,8 @@ test('social posts persist in state and create an event', () => {
   const run = addPost(createRun(character), 'Primera mañana.');
   assert.equal(run.social.posts[0].text, 'Primera mañana.');
   assert.equal(run.eventLog.at(-1).type, 'social_post_created');
+  const talking = { ...run, encounter:{ npcId:'luna_serp' } };
+  assert.throws(() => addPost(talking, 'Interrumpo la charla.'), /conversación/);
 });
 
 test('a new character cannot use the work shortcut before finding a job', () => {

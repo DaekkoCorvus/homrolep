@@ -1,4 +1,4 @@
-// Escenas procedurales de Northfortress: SVG + CSS animados que reaccionan a la hora del mundo.
+// Escenas procedurales de Porta Magna: SVG + CSS animados que reaccionan a la hora del mundo.
 // Son presentación, no canon. Cada escena puede sustituirse después por arte propio
 // (`art`: imagen/video de fondo) y declarar una capa sonora (`ambient`) sin tocar el motor.
 
@@ -74,10 +74,6 @@ const defs = `
 
 const lamp = (x, y, s = 1, cool = false) => `<g transform="translate(${x} ${y}) scale(${s})"><circle class="glow" r="46" fill="url(#${cool ? 'coolGlow' : 'lampGlow'})" style="opacity:calc(.35 + var(--night) * .65)"/><circle r="3.2" fill="${cool ? '#e6f6ff' : '#fff1c8'}"/></g>`;
 
-function person(x, y, s, fill, delay) {
-  return `<g class="person" style="animation-delay:${delay}s" transform="translate(${x} ${y}) scale(${s})"><ellipse cy="-52" rx="6" ry="7" fill="${fill}"/><path d="M-9 -44 Q0 -49 9 -44 L11 -14 L6 -14 L5 0 L-5 0 L-6 -14 L-11 -14Z" fill="${fill}"/></g>`;
-}
-
 const SCENES = {
   station(world) {
     let ribs = ''; for (let i = -1; i < 6; i++) ribs += `<path d="M${i * 80} 0 Q${i * 80 + 40} 150 ${i * 80 + 80} 0" fill="none" stroke="#0b0f1f" stroke-width="5" opacity=".75"/>`;
@@ -87,14 +83,13 @@ const SCENES = {
       <rect y="0" width="400" height="86" fill="#0a0e1c" opacity=".85"/>${ribs}
       <path d="M0 86 H400" stroke="#1d2547" stroke-width="3"/>
       <g class="beams" style="opacity:calc(.25 + var(--night)*.55)"><path d="M70 90 L20 470 H130Z" fill="url(#coolGlow)" opacity=".28"/><path d="M330 90 L270 470 H390Z" fill="url(#coolGlow)" opacity=".28"/></g>
-      <g transform="translate(200 128)"><rect x="-118" y="-26" width="236" height="46" rx="4" fill="#0b1226" stroke="#7fa4d8" stroke-opacity=".55"/><text class="sign" x="0" y="6" text-anchor="middle" font-family="Georgia,serif" font-size="19" letter-spacing="3" fill="#dcecff">UMBRAL DE HIERRO</text><path d="M-90 -26 V-70 M90 -26 V-70" stroke="#2b3559" stroke-width="2"/></g>
+      <g transform="translate(200 128)"><rect x="-118" y="-26" width="236" height="46" rx="4" fill="#0b1226" stroke="#7fa4d8" stroke-opacity=".55"/><text class="sign" x="0" y="6" text-anchor="middle" font-family="Georgia,serif" font-size="19" letter-spacing="3" fill="#dcecff">PORTA MAGNA</text><path d="M-90 -26 V-70 M90 -26 V-70" stroke="#2b3559" stroke-width="2"/></g>
       <g class="train-wrap"><g class="train">${[0, 1, 2, 3, 4, 5].map((i) => `<g transform="translate(${i * 128} 0)"><rect y="366" width="122" height="66" rx="9" fill="#232c4c"/><rect y="366" width="122" height="7" rx="3" fill="#7d95d0" opacity=".5"/>${[0, 1, 2, 3].map((k) => `<rect x="${10 + k * 28}" y="380" width="20" height="24" rx="3" fill="#ffe3a0" opacity=".9"/>`).join('')}</g>`).join('')}</g></g>
       <rect y="432" width="400" height="368" fill="#111830"/>
       <rect y="432" width="400" height="9" fill="#e8c86a" opacity=".55"/>
       <path d="M0 470 H400 M0 496 H400 M0 530 H400" stroke="#2a3557" stroke-width="1.4" opacity=".7"/>
       <g stroke="#1f2a4a" stroke-width="2" opacity=".9">${[-20, 60, 140, 220, 300, 380].map((x) => `<path d="M${x} 440 L${x - 30} 800"/>`).join('')}</g>
       ${[70, 330].map((x) => `<g><rect x="${x - 5}" y="200" width="10" height="240" fill="#0c1124"/>${lamp(x, 204, 1.1, true)}</g>`).join('')}
-      ${person(120, 520, 1.15, '#05070f', 0)}${person(150, 522, 1.05, '#07091a', 1.6)}${person(292, 520, 1.2, '#04060e', .8)}
       <rect width="400" height="800" fill="url(#floorFade)" opacity=".5"/>`;
   },
 
@@ -122,7 +117,7 @@ const SCENES = {
       <g><rect x="230" y="120" width="140" height="210" fill="#0b0e20"/><clipPath id="cw"><rect x="234" y="124" width="132" height="202"/></clipPath>
         <g clip-path="url(#cw)"><g transform="translate(-60 20) scale(1.2)">${skyRect(0,0,400,400)}${skyline({ seed: 44, y: 240, minH: 40, maxH: 120, fill: '#1a2246' })}</g></g>
         <path d="M300 120 V330 M230 225 H370" stroke="#4a2f22" stroke-width="5"/></g>
-      <g><rect x="30" y="110" width="150" height="90" rx="4" fill="#1b100d" stroke="#6d4a35"/><text x="105" y="145" text-anchor="middle" font-family="Georgia,serif" font-size="17" fill="#f1d9b0">Café · Té · Pan</text><text x="105" y="172" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="#c2a07a" opacity=".85">abierto de 6 a 22</text></g>
+      <g><rect x="30" y="110" width="150" height="90" rx="4" fill="#1b100d" stroke="#6d4a35"/><text x="105" y="145" text-anchor="middle" font-family="Georgia,serif" font-size="17" fill="#f1d9b0">Luna's Coffee</text><text x="105" y="172" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="#c2a07a" opacity=".85">café · té · pan · dulces</text></g>
       ${[70, 175, 330].map((x, i) => `<g class="pendant" style="animation-delay:${i * .9}s"><path d="M${x} 0 V${64 + i * 6}" stroke="#12090a" stroke-width="2"/>${lamp(x, 78 + i * 6, 1.15)}<path d="M${x - 15} ${82 + i * 6} Q${x} ${62 + i * 6} ${x + 15} ${82 + i * 6}Z" fill="#c98f4c"/></g>`).join('')}
       <rect y="440" width="400" height="360" fill="#2a1a13"/>
       <rect y="400" width="400" height="60" fill="#4a2f22"/><rect y="400" width="400" height="7" fill="#7a5238"/>
@@ -131,14 +126,13 @@ const SCENES = {
         <path class="steam s2" d="M133 366 q-6 -14 0 -24 q6 -10 0 -22" stroke="#fff" stroke-opacity=".45" fill="none" stroke-width="3" stroke-linecap="round"/>
         <rect x="200" y="350" width="70" height="52" rx="5" fill="#1a0f0b"/><circle cx="235" cy="376" r="15" fill="#5a3a2a"/><circle cx="235" cy="376" r="6" fill="#241612"/></g>
       ${[90, 300].map((x) => `<g><circle cx="${x}" cy="560" r="34" fill="#4a2f22"/><rect x="${x - 3}" y="560" width="6" height="90" fill="#30190f"/><ellipse cx="${x}" cy="650" rx="30" ry="6" fill="#1a0f0b"/></g>`).join('')}
-      ${person(200, 560, 1.25, '#0e0806', .4)}
       <rect width="400" height="800" fill="url(#floorFade)" opacity=".5"/>`;
   },
 
   park(world) {
     const r = rng(77); let trees = '';
     for (const [x, y, s] of [[40, 470, 1.3], [345, 465, 1.25], [190, 448, .8], [120, 452, .75], [280, 452, .8]]) {
-      trees += `<g class="tree" style="animation-delay:${(r() * 3).toFixed(1)}s" transform="translate(${x} ${y}) scale(${s})"><rect x="-6" y="-70" width="12" height="70" fill="#24140f"/><circle cx="0" cy="-120" r="48" fill="#1d3b2f"/><circle cx="-30" cy="-98" r="34" fill="#22493a"/><circle cx="32" cy="-100" r="36" fill="#1a3629"/><circle cx="4" cy="-150" r="28" fill="#2a5a45"/></g>`;
+      trees += `<g transform="translate(${x} ${y}) scale(${s})"><g class="tree" style="animation-delay:${(r() * 3).toFixed(1)}s"><rect x="-6" y="-70" width="12" height="70" fill="#24140f"/><circle cx="0" cy="-120" r="48" fill="#1d3b2f"/><circle cx="-30" cy="-98" r="34" fill="#22493a"/><circle cx="32" cy="-100" r="36" fill="#1a3629"/><circle cx="4" cy="-150" r="28" fill="#2a5a45"/></g></g>`;
     }
     let flies = ''; for (let i = 0; i < 12; i++) flies += `<circle class="firefly" cx="${(r() * 380 + 10).toFixed(0)}" cy="${(380 + r() * 130).toFixed(0)}" r="1.9" fill="#f6ff9a" style="animation-delay:${(r() * 6).toFixed(1)}s"/>`;
     return `${sky(world)}
@@ -170,7 +164,6 @@ const SCENES = {
       <rect y="480" width="400" height="320" fill="#161c34"/><rect y="480" width="400" height="8" fill="#3a4470" opacity=".7"/>
       <ellipse cx="150" cy="560" rx="80" ry="10" fill="#7fc1ff" opacity=".13"/>
       <g><rect x="365" y="290" width="8" height="190" fill="#0c1024"/>${lamp(369, 288, 1.3, true)}</g>
-      ${person(300, 600, 1.4, '#05070f', .3)}
       <rect width="400" height="800" fill="url(#floorFade)" opacity=".5"/>`;
   }
 };

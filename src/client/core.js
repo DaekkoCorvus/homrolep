@@ -2,8 +2,17 @@ export const state = { run:null, world:null, screen:'home', creation:null };
 export const app = document.querySelector('#app');
 const toast = document.querySelector('#toast');
 
+// Modo desarrollador (?dev=1): permite ver las notas ocultas de los NPC para probar el sistema social.
+export const devMode = (() => {
+  try {
+    if (new URLSearchParams(location.search).get('dev') === '1') localStorage.setItem('hom:dev', '1');
+    if (new URLSearchParams(location.search).get('dev') === '0') localStorage.removeItem('hom:dev');
+    return localStorage.getItem('hom:dev') === '1';
+  } catch { return false; }
+})();
+
 export async function request(url, options = {}) {
-  const response = await fetch(url, { headers:{ 'content-type':'application/json' }, ...options });
+  const response = await fetch(url, { headers:{ 'content-type':'application/json', ...(devMode ? { 'x-hom-dev':'1' } : {}) }, ...options });
   const body = await response.json();
   if (!response.ok) throw Object.assign(new Error(body.error || 'No se pudo completar la acción.'), { code:body.code });
   return body;

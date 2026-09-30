@@ -2,7 +2,8 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createRun, setPrologue, applyAction, addPost } from './game/run.js';
+import { createRun, setPrologue, applyAction, addPost, startEncounter, addExchange, endEncounter } from './game/run.js';
+import { loadNpcs, presentNpcs, publicNpc, relationshipOf, affinityOf, attitudeOf, mentionsName, validateEvaluation, applyEvaluation, debugView } from './game/npcs.js';
 import { createNanoGPT, AIError } from './ai/provider.js';
 import { createSettingsStore } from './ai/settings.js';
 import { saveRun, loadRun, listRuns } from './saves/store.js';
@@ -11,7 +12,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const publicDir = path.join(root, 'public');
 const assetDir = path.join(root, 'assets');
 const clientDir = path.join(root, 'src/client');
-const worldData = JSON.parse(await readFile(path.join(root, 'data/canon/locations/northfortress.json'), 'utf8'));
+const worldData = JSON.parse(await readFile(path.join(root, 'data/canon/locations/porta_magna.json'), 'utf8'));
+const npcs = await loadNpcs(path.join(root, 'data/canon/npcs'));
 const port = Number(process.env.PORT) || 3000;
 
 const clientFiles = new Set(['/index.html', '/app.js', '/core.js', '/game.js', '/scenes.js', '/styles.css', '/game.css']);
@@ -39,7 +41,51 @@ async function exclusive(key, operation) {
   try { return await operation(); } finally { active.delete(key); }
 }
 
+// Lo que el cliente ve de una Run: las impresiones ocultas de los NPC solo salen en modo desarrollador.
+function publicRun(run, dev = false) {
+  const relationships = Object.fromEntries(Object.entries(run.relationships ?? {}).map(([id, item]) => [id, dev ? debugView(relationshipOf(run, id)) : { met: item.met, contact: item.contact, encounters: item.encounters }]));
+  const encounterNpc = run.encounter ? publicNpc(npcs.get(run.encounter.npcId)) : null;
+  return {
+    ...run, relationships, encounterNpc,
+    presence: presentNpcs(npcs, run.player.locationId, run.world).map(publicNpc),
+    contacts: [...npcs.values()].filter((npc) => run.relationships?.[npc.id]?.contact).map(publicNpc)
+  };
+}
+
+async function talk(run, body, config) {
+  const location = worldData.locations.find(({ id }) => id === run.player.locationId);
+  const context = (npc, relationship, transcript, extra = {}) => ({ npc, player: run.player, world: run.world, location, relationship, attitude: attitudeOf(affinityOf(relationship.notes)), transcript, ...extra });
+  if (body.op === 'start') {
+    const npc = npcs.get(String(body.npcId));
+    if (run.encounter) throw Object.assign(new Error('Ya estás en una conversación.'), { status: 409 });
+    if (!npc || !presentNpcs(npcs, run.player.locationId, run.world).includes(npc)) throw new Error('Esa persona no está aquí ahora.');
+    const opening = await ai.npcReply(context(npc, relationshipOf(run, npc.id), [], { opening: true }), config);
+    return startEncounter(run, npc, opening);
+  }
+  const encounter = run.encounter;
+  if (!encounter) throw new Error('No estás hablando con nadie.');
+  const npc = npcs.get(encounter.npcId);
+  const relationship = relationshipOf(run, npc.id);
+  if (body.op === 'say') {
+    const text = String(body.text ?? '').trim().slice(0, 400);
+    if (!text) throw new Error('Escribe qué le dices.');
+    const nameKnown = relationship.nameKnown || mentionsName(text, run.player.name);
+    const transcript = [...encounter.lines, { who: 'player', text }];
+    const reply = await ai.npcReply(context(npc, { ...relationship, nameKnown }, transcript), config);
+    return addExchange(run, text, reply, nameKnown);
+  }
+  if (body.op === 'end') {
+    if (!encounter.lines.some((line) => line.who === 'player')) return endEncounter(run, npc, { relationship, farewell: '', contactGranted: false });
+    const raw = await ai.evaluateEncounter(context(npc, relationship, encounter.lines), config);
+    const evaluation = validateEvaluation(raw, encounter.lines);
+    const { relationship: updated, contactGranted } = applyEvaluation(relationship, evaluation, encounter.startedAt);
+    return endEncounter(run, npc, { relationship: updated, farewell: evaluation.farewell, contactGranted });
+  }
+  throw new Error('Operación de conversación desconocida.');
+}
+
 async function api(request, response, pathname) {
+  const sendRun = (status, run) => sendJson(response, status, publicRun(run, request.headers['x-hom-dev'] === '1'));
   if (request.method === 'GET' && pathname === '/api/ai/settings') return sendJson(response, 200, await settings.status());
   if (request.method === 'POST' && pathname === '/api/ai/models') {
     const key = await settings.key(await readBody(request));
@@ -81,13 +127,13 @@ async function api(request, response, pathname) {
       const draft = createRun(input);
       const run = setPrologue(draft, await ai.prologue(draft.player, worldData, config), worldData);
       await store.saveRun(run);
-      return sendJson(response, 201, run);
+      return sendRun(201, run);
     });
   }
-  const match = pathname.match(/^\/api\/runs\/([0-9a-f-]{36})(?:\/(action|posts))?$/i);
+  const match = pathname.match(/^\/api\/runs\/([0-9a-f-]{36})(?:\/(action|posts|talk))?$/i);
   if (!match) return sendJson(response, 404, { error: 'Ruta no encontrada.' });
   const [, id, operation] = match;
-  if (request.method === 'GET' && !operation) return sendJson(response, 200, await store.loadRun(id));
+  if (request.method === 'GET' && !operation) return sendRun(200, await store.loadRun(id));
   if (request.method === 'POST' && operation === 'action') {
     const input = await readBody(request);
     return exclusive(id, async () => {
@@ -99,7 +145,16 @@ async function api(request, response, pathname) {
       event.data = { ...event.data, response:narrative };
       run.narrative = { text:narrative, time:event.time };
       await store.saveRun(run);
-      return sendJson(response, 200, run);
+      return sendRun(200, run);
+    });
+  }
+  if (request.method === 'POST' && operation === 'talk') {
+    const body = await readBody(request);
+    return exclusive(id, async () => {
+      const config = await settings.require();
+      const run = await talk(await store.loadRun(id), body, config);
+      await store.saveRun(run);
+      return sendRun(200, run);
     });
   }
   if (request.method === 'POST' && operation === 'posts') {
@@ -108,7 +163,7 @@ async function api(request, response, pathname) {
       await settings.require();
       const run = addPost(await store.loadRun(id), body.text);
       await store.saveRun(run);
-      return sendJson(response, 200, run);
+      return sendRun(200, run);
     });
   }
   return sendJson(response, 405, { error: 'Método no permitido.' });

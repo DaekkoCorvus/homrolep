@@ -41,7 +41,7 @@ test('settings gate, generation, persistence, failures and concurrent requests w
     assert.ok(body.max_tokens>0);
     assert.ok(!options.body.includes('test-secret'));
     if(block) await new Promise(resolve=>{release=resolve;});
-    if(body.messages[0].content.includes('voz del umbral')) return completion(JSON.stringify({text:'La estación te recibe entre murmullos.',locationId:badPrologue?'unknown':'station'}));
+    if(body.messages[0].content.includes('prólogo de 2 a 4 frases')) return completion(JSON.stringify({text:'La estación te recibe entre murmullos.',locationId:badPrologue?'unknown':'station'}));
     return completion('Una viajera levanta la mirada y responde a tu saludo.');
   });
   const server=createAppServer({ai,settings,store:{
@@ -78,9 +78,10 @@ test('settings gate, generation, persistence, failures and concurrent requests w
   assert.equal(created.status,201);
   assert.equal(created.body.player.locationId,'station');
   const id=created.body.id;
+  const savedBeforeFailure=structuredClone(runs.get(id));
   fail=true;
   assert.equal((await api(`/api/runs/${id}/action`,'POST',{text:'Saludo a una viajera.'})).status,403);
-  assert.deepEqual(runs.get(id),created.body);
+  assert.deepEqual(runs.get(id),savedBeforeFailure);
   fail=false;
   block=true;
   const pending=api(`/api/runs/${id}/action`,'POST',{text:'Saludo a una viajera.'});

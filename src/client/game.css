@@ -23,7 +23,6 @@
 .scene-svg .glow { animation:glow-pulse 5s ease-in-out infinite; transform-box:fill-box; transform-origin:center; }
 .scene-svg .sign,.scene-svg .neon { animation:neon 6s steps(1) infinite; }
 .scene-svg .train { animation:train 26s linear infinite; }
-.scene-svg .person { animation:sway 6s ease-in-out infinite; transform-box:fill-box; transform-origin:bottom center; }
 .scene-svg .tree { animation:tree 7s ease-in-out infinite; transform-box:fill-box; transform-origin:bottom center; }
 .scene-svg .pendant { animation:pendant 6s ease-in-out infinite; transform-box:fill-box; transform-origin:top center; }
 .scene-svg .steam { animation:steam 4s ease-in-out infinite; }
@@ -150,3 +149,25 @@
 body:not(:has(#app .threshold)) #vortex-layer { visibility:hidden; }
 body:has(.game) { background:#05070d; overflow:hidden; }
 .scene-svg { filter:brightness(calc(.92 + (1 - var(--night)) * .85)) saturate(calc(.9 + (1 - var(--night)) * .25)); }
+
+/* Social: presence chip, conversation, contacts */
+.avatar { flex:none; width:26px; height:26px; display:inline-grid; place-items:center; border-radius:50%; background:#f2d6a8; color:#1a1208; font:600 .85rem Georgia,serif; }
+.chip-action.person { padding-left:.45rem; border-color:#f2d6a8aa; }
+.game.talking .story { max-height:52dvh; padding-top:2.2rem; }
+.dlg { margin:0 0 .9rem; line-height:1.55; text-shadow:0 1px 12px #000; }
+.dlg.npc { display:grid; gap:.15rem; font:400 1.06rem/1.55 Georgia,serif; }
+.dlg.npc b { font:600 .72rem Inter,system-ui,sans-serif; letter-spacing:.16em; text-transform:uppercase; color:#f2d6a8; }
+.dlg.npc em { font-size:.9rem; color:#d8ccb4; opacity:.85; }
+.dlg.npc.latest span { animation:line-in .9s ease both; }
+.dlg.you { text-align:right; margin-left:22%; font:italic 400 .98rem/1.5 Georgia,serif; color:#f2d6a8; }
+.story.thinking .dlg { animation:none; opacity:1; }
+.contact { display:flex; align-items:center; gap:.8rem; padding:.7rem; border-radius:14px; background:#ffffff0a; border:1px solid #ffffff10; }
+.contact .avatar { width:40px; height:40px; font-size:1.1rem; }
+.contact span:nth-child(2) { display:grid; flex:1; }
+.contact small { color:#8f8aa3; } .contact em { font-style:normal; font-size:.72rem; color:#a9a3b6; }
+.gm-note { padding:.8rem; border-radius:14px; background:#ffffff0a; border:1px solid #ffffff10; display:grid; gap:.4rem; font-size:.85rem; }
+.gm-note small { color:#a9a3b6; line-height:1.4; }
+.gm-note p { margin:0; line-height:1.4; } .gm-note p i { display:block; color:#8f8aa3; font-size:.75rem; } .gm-note p.hist { color:#c9c2d6; border-top:1px solid #ffffff14; padding-top:.3rem; }
+.game.talking .scene-art { filter:brightness(.62) blur(1.5px); }
+.scene-art { transition:opacity 1.2s ease,filter .8s ease; }
+.game.talking .story { background:linear-gradient(180deg,transparent,#04060ccc 14%,#04060cf0); -webkit-mask-image:linear-gradient(180deg,transparent 0,#000 2.6rem); mask-image:linear-gradient(180deg,transparent 0,#000 2.6rem); }

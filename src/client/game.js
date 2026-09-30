@@ -1,4 +1,4 @@
-import { state, app, request, notify, timeText, clockText, period, place, escapeHtml } from './core.js';
+import { state, app, request, notify, timeText, clockText, period, place, escapeHtml, devMode } from './core.js';
 import { sceneMarkup, applySky, SCENE_META } from './scenes.js';
 
 const ui = { phoneOpen:false, phoneView:'home', busy:false, sceneKey:null, hooks:{} };
@@ -10,6 +10,7 @@ const PHONE_APPS = [
   ['journal', 'Diario', '<path d="M6 3h11a2 2 0 0 1 2 2v16H8a2 2 0 0 1-2-2Z"/><path d="M10 8h6M10 12h6"/>'],
   ['settings', 'Ajustes', '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/>']
 ];
+const initial = (name) => escapeHtml(String(name).trim().charAt(0).toUpperCase());
 const icon = (path) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
 
 export function enterGame(hooks) {
@@ -29,7 +30,7 @@ export function enterGame(hooks) {
       <form class="free-action"><textarea rows="1" maxlength="500" name="text" aria-label="Acción libre" placeholder="¿Qué haces?" required></textarea><button type="submit" aria-label="Actuar">${icon('<path d="M5 12h14M13 6l6 6-6 6"/>')}</button></form>
     </footer>
     <div class="sheet-layer" hidden><div class="sheet" role="dialog" aria-label="Moverse"></div></div>
-    <div class="phone-layer" hidden><div class="phone" role="dialog" aria-label="Teléfono"><div class="phone-notch"></div><div class="phone-status"><span class="ps-time"></span><span class="ps-net">Northfortress ▪▪▪</span></div><div class="phone-screen"></div><button class="phone-home" type="button" aria-label="Inicio del teléfono"></button></div></div>
+    <div class="phone-layer" hidden><div class="phone" role="dialog" aria-label="Teléfono"><div class="phone-notch"></div><div class="phone-status"><span class="ps-time"></span><span class="ps-net">${escapeHtml(state.world.name)} ▪▪▪</span></div><div class="phone-screen"></div><button class="phone-home" type="button" aria-label="Inicio del teléfono"></button></div></div>
   </main>`;
   wire();
   updateGame({ announce:true });
@@ -48,7 +49,7 @@ function wire() {
   const grow = () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 120)}px`; };
   input.addEventListener('input', grow);
   input.addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.shiftKey && matchMedia('(hover:hover)').matches) { event.preventDefault(); form.requestSubmit(); } });
-  form.onsubmit = (event) => { event.preventDefault(); const text = input.value.trim(); if (!text) return; input.value = ''; grow(); runAction({ type:'freeform', text }); };
+  form.onsubmit = (event) => { event.preventDefault(); const text = input.value.trim(); if (!text) return; input.value = ''; grow(); if (state.run.encounter) say(text, input); else runAction({ type:'freeform', text }); };
   document.onkeydown = (event) => { if (event.key === 'Escape') { if (!root.querySelector('.sheet-layer').hidden) toggleSheet(false); else if (ui.phoneOpen) togglePhone(false); } };
 }
 
@@ -57,6 +58,8 @@ export function updateGame({ announce=false }={}) {
   const { run } = state; const loc = place(run.player.locationId);
   const clock = root.querySelector('.clock-text'); clock.textContent = timeText(run.world);
   root.querySelector('.ps-time').textContent = clockText(run.world);
+  root.classList.toggle('talking', Boolean(run.encounter));
+  root.querySelector('.free-action textarea').placeholder = run.encounter ? `Dile algo a ${run.encounterNpc.name}…` : '¿Qué haces?';
   renderScene(root, loc, announce);
   renderStory(root, loc);
   renderChips(root, loc);
@@ -81,7 +84,7 @@ function renderScene(root, loc, announce) {
   if (changed) {
     ui.sceneKey = key;
     const title = root.querySelector('.place-title');
-    title.innerHTML = `<small>${escapeHtml(loc.district)} · Northfortress</small><strong>${escapeHtml(loc.name)}</strong>`;
+    title.innerHTML = `<small>${escapeHtml(loc.district)} · ${escapeHtml(state.world.name)}</small><strong>${escapeHtml(loc.name)}</strong>`;
     title.classList.remove('show'); void title.offsetWidth; title.classList.add('show');
   }
   const dust = scene.querySelector('.scene-dust');
@@ -100,8 +103,22 @@ function storyContent(loc) {
   return { lead, paragraphs:text.split(/\n{2,}|\n/).map((p) => p.trim()).filter(Boolean) };
 }
 
+function renderConversation(story) {
+  const { lines } = state.run.encounter; const npc = state.run.encounterNpc;
+  const signature = `talk:${lines.length}:${ui.pendingLine ?? ''}`;
+  if (story.dataset.sig === signature && !ui.storyError) return;
+  story.dataset.sig = signature;
+  const rows = lines.map((line, i) => line.who === 'npc'
+    ? `<p class="dlg npc ${i === lines.length - 1 ? 'latest' : ''}"><b>${escapeHtml(npc.name)}</b>${line.gesture ? `<em>${escapeHtml(line.gesture)}</em>` : ''}<span>${escapeHtml(line.text)}</span></p>`
+    : `<p class="dlg you">${escapeHtml(line.text)}</p>`);
+  if (ui.pendingLine) rows.push(`<p class="dlg you">${escapeHtml(ui.pendingLine)}</p>`);
+  story.innerHTML = rows.join('') + (ui.storyError ? `<p class="story-error" role="alert">${escapeHtml(ui.storyError)}</p>` : '');
+  story.scrollTop = story.scrollHeight;
+}
+
 function renderStory(root, loc) {
   const story = root.querySelector('.story');
+  if (state.run.encounter) return renderConversation(story);
   const { lead, paragraphs } = storyContent(loc);
   const signature = lead + paragraphs.join('|');
   if (story.dataset.sig === signature && !ui.storyError) return;
@@ -111,17 +128,24 @@ function renderStory(root, loc) {
 }
 
 function renderChips(root, loc) {
+  const box = root.querySelector('.chips');
+  if (state.run.encounter) {
+    box.innerHTML = '<button type="button" class="chip-action" data-kind="end">Despedirte</button>';
+    box.querySelector('button').onclick = endTalk;
+    return;
+  }
   const meta = SCENE_META[loc.id];
   const chips = [['move', 'Moverse', null]];
+  for (const npc of state.run.presence ?? []) chips.push(['talk', `Hablar con ${npc.name}`, npc.id, npc.name]);
   for (const text of meta?.interactions ?? []) chips.push(['free', text, text]);
   if (loc.id === 'apartment') chips.push(['sleep', 'Dormir', null]);
   if (state.run.player.occupation === 'worker') chips.push(['work', 'Trabajar', null]);
   chips.push(['wait', 'Esperar un rato', null]);
-  const box = root.querySelector('.chips');
-  box.innerHTML = chips.map(([kind, label, text]) => `<button type="button" class="chip-action ${kind === 'move' ? 'primary-chip' : ''}" data-kind="${kind}" ${text ? `data-text="${escapeHtml(text)}"` : ''}>${kind === 'move' ? `${icon('<path d="M5 12h14M13 6l6 6-6 6"/>')}` : ''}${escapeHtml(label)}</button>`).join('');
+  box.innerHTML = chips.map(([kind, label, text, name]) => `<button type="button" class="chip-action ${kind === 'move' ? 'primary-chip' : ''} ${kind === 'talk' ? 'person' : ''}" data-kind="${kind}" ${text ? `data-text="${escapeHtml(text)}"` : ''}>${kind === 'move' ? `${icon('<path d="M5 12h14M13 6l6 6-6 6"/>')}` : ''}${kind === 'talk' ? `<span class="avatar">${initial(name)}</span>` : ''}${escapeHtml(label)}</button>`).join('');
   box.querySelectorAll('button').forEach((button) => button.onclick = () => {
     const { kind, text } = button.dataset;
     if (kind === 'move') toggleSheet(true);
+    else if (kind === 'talk') startTalk(text);
     else if (kind === 'free') runAction({ type:'freeform', text:`${text}.` });
     else runAction({ type:kind });
   });
@@ -138,6 +162,7 @@ function placeButtons(closeAfter) {
 
 function bindTravel(container) {
   container.querySelectorAll('[data-travel]').forEach((button) => button.onclick = () => {
+    if (state.run.encounter) { notify('Despídete antes de irte.'); return; }
     toggleSheet(false); togglePhone(false);
     runAction({ type:'travel', locationId:button.dataset.travel });
   });
@@ -162,12 +187,12 @@ function renderPhone() {
   const view = ui.phoneView; const run = state.run;
   if (view === 'home') {
     screen.className = 'phone-screen home';
-    screen.innerHTML = `<div class="phone-clock"><strong>${clockText(run.world)}</strong><span>Día ${run.world.day} · ${period(run.world.hour)}</span></div><div class="app-grid">${PHONE_APPS.map(([id, label, path]) => `<button type="button" data-app="${id}"><span class="app-icon">${icon(path)}</span>${label}</button>`).join('')}<button type="button" disabled><span class="app-icon dim">${icon('<path d="M3 7l9 6 9-6M3 7v10h18V7Z"/>')}</span>Mensajes</button></div>`;
+    screen.innerHTML = `<div class="phone-clock"><strong>${clockText(run.world)}</strong><span>Día ${run.world.day} · ${period(run.world.hour)}</span></div><div class="app-grid">${PHONE_APPS.map(([id, label, path]) => `<button type="button" data-app="${id}"><span class="app-icon">${icon(path)}</span>${label}</button>`).join('')}<button type="button" data-app="messages"><span class="app-icon">${icon('<path d="M3 7l9 6 9-6M3 7v10h18V7Z"/>')}</span>Mensajes</button>${devMode ? `<button type="button" data-app="gm"><span class="app-icon">${icon('<path d="M12 3l9 5-9 5-9-5ZM3 13l9 5 9-5"/>')}</span>Notas GM</button>` : ''}</div>`;
     screen.querySelectorAll('[data-app]').forEach((button) => button.onclick = () => openApp(button.dataset.app));
     return;
   }
-  const titles = { profile:'Perfil', map:'Mapa', social:'Social', missions:'Misiones', journal:'Diario' };
-  const bodies = { profile:profileApp, map:mapApp, social:socialApp, missions:() => '<p class="empty">No tienes misiones activas. Las oportunidades llegarán cuando el mundo tenga algo que ofrecerte.</p>', journal:journalApp };
+  const titles = { profile:'Perfil', map:'Mapa', social:'Social', missions:'Misiones', journal:'Diario', messages:'Mensajes', gm:'Notas del GM' };
+  const bodies = { profile:profileApp, map:mapApp, social:socialApp, missions:() => '<p class="empty">No tienes misiones activas. Las oportunidades llegarán cuando el mundo tenga algo que ofrecerte.</p>', journal:journalApp, messages:messagesApp, gm:gmApp };
   screen.className = 'phone-screen app';
   screen.innerHTML = `<div class="app-bar"><button type="button" data-back aria-label="Volver">${icon('<path d="M15 5l-7 7 7 7"/>')}</button><h2>${titles[view]}</h2></div><div class="app-body">${bodies[view]()}</div>`;
   screen.querySelector('[data-back]').onclick = () => { ui.phoneView = 'home'; renderPhone(); };
@@ -192,7 +217,19 @@ function profileApp() {
   return `<div class="profile-head"><strong>${escapeHtml(p.name)}</strong><span>${escapeHtml(p.origin || 'Un pasado aún desconocido.')}</span></div><dl class="stat-rows">${rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${escapeHtml(String(v))}</dd></div>`).join('')}</dl>`;
 }
 
-function mapApp() { return `<p class="muted">Northfortress · toca un lugar para ir</p><div class="place-rows">${placeButtons()}</div>`; }
+function messagesApp() {
+  const contacts = state.run.contacts ?? [];
+  if (!contacts.length) return '<p class="empty">Todavía no tienes contactos. Si una conversación va bien, alguien puede dejarte el suyo.</p>';
+  return contacts.map((npc) => `<div class="contact"><span class="avatar">${initial(npc.name)}</span><span><strong>${escapeHtml(npc.name)}</strong><small>${escapeHtml(npc.role)}</small></span><em>Chat próximamente</em></div>`).join('');
+}
+
+function gmApp() {
+  const entries = Object.entries(state.run.relationships ?? {});
+  if (!entries.length) return '<p class="empty">Aún no hay relaciones. Habla con alguien.</p>';
+  return entries.map(([id, r]) => `<article class="gm-note"><strong>${escapeHtml(id)}</strong><small>afinidad ${r.affinity ?? '?'} · interés ${r.interest ?? '?'} · ${escapeHtml(r.attitude ?? '')} · contacto: ${r.contact ? 'sí' : 'no'} · nombre conocido: ${r.nameKnown ? 'sí' : 'no'}</small>${(r.notes ?? []).map((n) => `<p><b>${n.valence > 0 ? '+' : ''}${n.valence}</b> ${escapeHtml(n.text)}<i>«${escapeHtml(n.evidence)}» ${escapeHtml((n.tags ?? []).join(', '))}</i></p>`).join('')}${(r.history ?? []).map((h) => `<p class="hist">${escapeHtml(h.text)}</p>`).join('')}</article>`).join('');
+}
+
+function mapApp() { return `<p class="muted">${escapeHtml(state.world.name)} · toca un lugar para ir</p><div class="place-rows">${placeButtons()}</div>`; }
 
 function socialApp() {
   const posts = state.run.social.posts.map((post) => `<article class="post"><strong>${escapeHtml(post.author)}</strong><p>${escapeHtml(post.text)}</p><small>${escapeHtml(post.time)}</small></article>`).join('');
@@ -201,7 +238,7 @@ function socialApp() {
 
 function eventText(event) {
   const name = (id) => escapeHtml(place(id)?.name || id);
-  if (event.type === 'run_started') return 'La partida comenzó en Northfortress.';
+  if (event.type === 'run_started') return 'La partida comenzó en Porta Magna.';
   if (event.type === 'prologue_created') return `Tu historia comenzó en ${name(event.data.locationId)}.`;
   if (event.type === 'location_changed') return `Viajaste de ${name(event.from)} a ${name(event.to)}.`;
   if (event.type === 'player_action') return escapeHtml(event.data.text);
@@ -209,6 +246,8 @@ function eventText(event) {
   if (event.type === 'slept') return 'Dormiste ocho horas.';
   if (event.type === 'worked') return `Trabajaste y ganaste $${event.data.earned}.`;
   if (event.type === 'social_post_created') return 'Publicaste en la red social.';
+  if (event.type === 'conversation_started') return 'Empezaste a hablar con alguien.';
+  if (event.type === 'conversation_ended') return event.data.contact ? 'Terminaste una conversación y conseguiste un contacto.' : 'Terminaste una conversación.';
   return escapeHtml(event.type);
 }
 
@@ -217,7 +256,7 @@ function journalApp() {
   return items || '<p class="empty">Todavía no hay nada que recordar.</p>';
 }
 
-async function runAction(action) {
+async function perform(operation, { onError } = {}) {
   if (ui.busy) return;
   ui.busy = true; ui.storyError = '';
   const root = app.querySelector('.game');
@@ -226,10 +265,12 @@ async function runAction(action) {
   const story = root.querySelector('.story');
   story.classList.add('thinking');
   try {
-    state.run = await request(`/api/runs/${state.run.id}/action`, { method:'POST', body:JSON.stringify(action) });
+    state.run = await operation();
+    ui.pendingLine = null;
     updateGame();
   } catch (error) {
-    ui.storyError = error.message;
+    ui.storyError = error.message; ui.pendingLine = null;
+    onError?.();
     story.dataset.sig = '';
     renderStory(root, place(state.run.player.locationId));
   } finally {
@@ -240,6 +281,18 @@ async function runAction(action) {
       live.querySelector('.story')?.classList.remove('thinking');
       live.querySelectorAll('.dock button, .dock textarea').forEach((element) => { element.disabled = false; });
       ui.storyError = '';
+      if (state.run.encounter) live.querySelector('.free-action textarea')?.focus({ preventScroll:true });
     }
   }
+}
+
+const runAction = (action) => perform(() => request(`/api/runs/${state.run.id}/action`, { method:'POST', body:JSON.stringify(action) }));
+const talkRequest = (body) => request(`/api/runs/${state.run.id}/talk`, { method:'POST', body:JSON.stringify(body) });
+const startTalk = (npcId) => perform(() => talkRequest({ op:'start', npcId }));
+const endTalk = () => perform(() => talkRequest({ op:'end' }));
+function say(text, input) {
+  ui.pendingLine = text;
+  const root = app.querySelector('.game');
+  renderStory(root, place(state.run.player.locationId));
+  perform(() => talkRequest({ op:'say', text }), { onError: () => { input.value = text; } });
 }

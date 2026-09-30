@@ -26,10 +26,10 @@ export function createRun(input = {}) {
       reputation: 0,
       locationId: 'apartment'
     },
-    world: { day: 1, hour: 8, minute: 0, cityId: 'northfortress' },
+    world: { day: 1, hour: 8, minute: 0, cityId: 'porta_magna' },
     social: { posts: [] }, missions: [], relationships: {}, knowledge: [], eventLog: [], prologue: null
   };
-  run.eventLog.push({ time: timeKey(run.world), type: 'run_started', data: { cityId: 'northfortress' } });
+  run.eventLog.push({ time: timeKey(run.world), type: 'run_started', data: { cityId: 'porta_magna' } });
   return run;
 }
 
@@ -48,6 +48,7 @@ export function setPrologue(run, proposal, worldData) {
 }
 
 export function applyAction(run, action, worldData) {
+  if (run.encounter) throw Object.assign(new Error('Estás en plena conversación. Despídete antes de hacer otra cosa.'), { code: 'ENCOUNTER_ACTIVE' });
   const next = structuredClone(run);
   const type = String(action.type ?? 'freeform');
   let minutes = 10;
@@ -85,11 +86,58 @@ export function applyAction(run, action, worldData) {
 }
 
 export function addPost(run, text) {
+  if (run.encounter) throw Object.assign(new Error('Estás en plena conversación. Despídete antes de hacer otra cosa.'), { code: 'ENCOUNTER_ACTIVE' });
   const clean = String(text ?? '').trim().slice(0, 280);
   if (!clean) throw new Error('La publicación está vacía.');
   const next = structuredClone(run);
   next.social.posts.unshift({ id: randomUUID(), author: next.player.name, text: clean, time: timeKey(next.world) });
   next.updatedAt = new Date().toISOString();
   next.eventLog.push({ time: timeKey(next.world), type: 'social_post_created', data: { text: clean } });
+  return next;
+}
+
+// --- Encuentros 1 a 1 con NPC -------------------------------------------------
+const EXCHANGE_MINUTES = 3;
+export const MAX_ENCOUNTER_LINES = 60;
+
+export function startEncounter(run, npc, opening) {
+  if (run.encounter) throw new Error('Ya estás en una conversación.');
+  const next = structuredClone(run);
+  next.world = advanceTime(next.world, 1);
+  next.encounter = {
+    npcId: npc.id, locationId: next.player.locationId, startedAt: timeKey(next.world),
+    lines: [{ who: 'npc', text: opening.say, ...(opening.gesture ? { gesture: opening.gesture } : {}) }]
+  };
+  const relationship = { met: false, nameKnown: false, contact: false, encounters: 0, notes: [], history: [], ...(next.relationships?.[npc.id] ?? {}) };
+  next.relationships = { ...next.relationships, [npc.id]: { ...relationship, met: true } };
+  next.eventLog.push({ time: timeKey(next.world), type: 'conversation_started', data: { npcId: npc.id } });
+  next.updatedAt = new Date().toISOString();
+  return next;
+}
+
+export function addExchange(run, playerText, reply, nameKnown) {
+  if (!run.encounter) throw new Error('No estás hablando con nadie.');
+  const text = String(playerText ?? '').trim().slice(0, 400);
+  if (!text) throw new Error('Escribe qué le dices.');
+  if (run.encounter.lines.length >= MAX_ENCOUNTER_LINES) throw new Error('La conversación se alarga demasiado. Despídete y retómala después.');
+  const next = structuredClone(run);
+  next.encounter.lines.push({ who: 'player', text }, { who: 'npc', text: reply.say, ...(reply.gesture ? { gesture: reply.gesture } : {}) });
+  next.world = advanceTime(next.world, EXCHANGE_MINUTES);
+  if (nameKnown) next.relationships[run.encounter.npcId].nameKnown = true;
+  next.updatedAt = new Date().toISOString();
+  return next;
+}
+
+export function endEncounter(run, npc, { relationship, farewell, contactGranted }) {
+  if (!run.encounter) throw new Error('No estás hablando con nadie.');
+  const next = structuredClone(run);
+  next.world = advanceTime(next.world, 1);
+  const contactLine = contactGranted ? `${npc.name} te deja su contacto.` : '';
+  const text = [farewell || `${npc.name} asiente mientras te despides.`, contactLine].filter(Boolean).join('\n\n');
+  next.relationships[npc.id] = { ...relationship, encounters: relationship.encounters + 1 };
+  next.eventLog.push({ time: timeKey(next.world), type: 'conversation_ended', data: { npcId: npc.id, contact: contactGranted, response: text } });
+  next.narrative = { text, time: timeKey(next.world) };
+  next.encounter = null;
+  next.updatedAt = new Date().toISOString();
   return next;
 }
