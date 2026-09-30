@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Umbral</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+html,body{margin:0;height:100%;background:#05070d;overflow:hidden}
+canvas{display:block;width:100%;height:100%}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(()=>{
+/* ===== AJUSTES ===== */
+const S={speed:1,scale:.7,maxDpr:1.5,minScale:.4};
+
+const FS=`
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform float uTime;uniform vec2 uRes;uniform vec2 uC;
+float hash(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+// ruido periodico en x (sin costura en el angulo)
+float nz(vec2 p,float P){
+  vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
+  float a=hash(vec2(mod(i.x,P),i.y)),b=hash(vec2(mod(i.x+1.,P),i.y));
+  float c=hash(vec2(mod(i.x,P),i.y+1.)),d=hash(vec2(mod(i.x+1.,P),i.y+1.));
+  return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);
+}
+float fbm(vec2 p,float P){
+  float v=0.,a=.5;
+  for(int i=0;i<4;i++){v+=a*nz(p,P);p*=2.;p.y+=7.3;P*=2.;a*=.5;}
+  return v;
+}
+const vec3 cL=vec3(.81,.94,1.),cC=vec3(.243,.776,.941),cB=vec3(.353,.561,.816),
+           cG=vec3(.557,.624,.753),cV=vec3(.788,.776,.91),cP=vec3(.906,.706,.839);
+void main(){
+  vec2 uv=(gl_FragCoord.xy-.5*uRes)/uRes.y;
+  vec2 p=uv-(vec2(.03,-.06)+uC)+1e-5;
+  float r=length(p),a=atan(p.y,p.x),t=uTime;
+  float lr=log(r+.03);
+  float a2=a+1.7*lr-t*.06;              // torsion en espiral + rotacion lenta
+  vec2 q=vec2(a2*1.59155,lr*1.3+t*.16); // caida hacia el nucleo
+  float w=fbm(vec2(q.x*.5,q.y*.8+t*.03),5.);
+  q.x+=w*1.2;
+  float n=fbm(q,10.);
+  float n2=fbm(vec2(q.x*.5+3.,q.y*.7-t*.05),5.);
+  float ch=abs(nz(q*2.+vec2(0.,.12),20.)-nz(q*2.-vec2(0.,.12),20.)); // aberracion
+  float s=smoothstep(.3,.8,n);
+  vec3 col=mix(cV,cG,n2);
+  col=mix(col,cB,s*.7);
+  col=mix(col,cC,s*s*.85*smoothstep(.1,.5,r));
+  col=mix(cL,col,smoothstep(.05,.42,r));
+  col+=cP*ch*.8*smoothstep(.15,.7,r);
+  float br=.5+.5*sin(t*.6);             // respiracion (~10 s)
+  float R0=.10+.015*br;
+  float core=exp(-pow(r/R0,1.4));
+  float glow=.07/(r+.07);
+  col=mix(col,vec3(1.),clamp(core+glow*.35*(.8+.4*br),0.,1.));
+  col+=cL*glow*.25;
+  col+=cL*exp(-pow((r-.3)/.015,2.))*.08*(.5+.5*sin(t*.25)); // halo de umbral
+  col*=1.-.3*smoothstep(.45,1.,length(uv));
+  col+=(hash(gl_FragCoord.xy+fract(t)*91.)-.5)*.025;        // grano
+  gl_FragColor=vec4(col,1.);
+}`;
+const VS='attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}';
+
+const cv=document.getElementById('c');
+const rm=matchMedia('(prefers-reduced-motion: reduce)').matches;
+let gl,ctx,uT,uR,uC,raf,t=0,last=0,scale=S.scale,ptr=[0,0],cur=[0,0],fr=0,acc=0;
+
+function initGL(){
+  gl=cv.getContext('webgl',{antialias:false,alpha:false,powerPreference:'low-power'});
+  if(!gl)return false;
+  const sh=(ty,src)=>{const s=gl.createShader(ty);gl.shaderSource(s,src);gl.compileShader(s);return gl.getShaderParameter(s,gl.COMPILE_STATUS)?s:null;};
+  const v=sh(gl.VERTEX_SHADER,VS),f=sh(gl.FRAGMENT_SHADER,FS);
+  if(!v||!f)return false;
+  const pr=gl.createProgram();gl.attachShader(pr,v);gl.attachShader(pr,f);gl.linkProgram(pr);
+  if(!gl.getProgramParameter(pr,gl.LINK_STATUS))return false;
+  gl.useProgram(pr);
+  gl.bindBuffer(gl.ARRAY_BUFFER,gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+  const l=gl.getAttribLocation(pr,'p');gl.enableVertexAttribArray(l);gl.vertexAttribPointer(l,2,gl.FLOAT,false,0,0);
+  uT=gl.getUniformLocation(pr,'uTime');uR=gl.getUniformLocation(pr,'uRes');uC=gl.getUniformLocation(pr,'uC');
+  return true;
+}
+
+function resize(){
+  const d=Math.min(devicePixelRatio||1,S.maxDpr)*scale;
+  cv.width=Math.max(2,innerWidth*d|0);cv.height=Math.max(2,innerHeight*d|0);
+  if(gl)gl.viewport(0,0,cv.width,cv.height);
+}
+
+// Fallback Canvas 2D
+function draw2d(){
+  const w=cv.width,h=cv.height,x=w*.5+cur[0]*w*.03,y=h*.55,b=.5+.5*Math.sin(t*.6);
+  let g=ctx.createRadialGradient(x,y,0,x,y,Math.max(w,h)*.8);
+  g.addColorStop(0,'#fff');g.addColorStop(.12+.02*b,'#e6f6ff');g.addColorStop(.35,'#7fd0f2');
+  g.addColorStop(.65,'#8e9fc0');g.addColorStop(1,'#c9c6e8');
+  ctx.globalAlpha=1;ctx.fillStyle=g;ctx.fillRect(0,0,w,h);
+  if(ctx.createConicGradient){
+    g=ctx.createConicGradient(t*.1,x,y);
+    for(let i=0;i<=6;i++)g.addColorStop(i/6,i%2?'rgba(62,198,240,.5)':'rgba(255,255,255,0)');
+    ctx.globalAlpha=.35;ctx.fillStyle=g;ctx.fillRect(0,0,w,h);
+  }
+}
+
+function frame(now){
+  raf=requestAnimationFrame(frame);
+  const dt=Math.min((now-last)/1000,.1);last=now;
+  t+=dt*S.speed*(rm?.15:1);
+  const k=Math.min(1,dt*2);cur[0]+=(ptr[0]-cur[0])*k;cur[1]+=(ptr[1]-cur[1])*k;
+  if(gl){
+    gl.uniform1f(uT,t);gl.uniform2f(uR,cv.width,cv.height);
+    gl.uniform2f(uC,cur[0]*.05,cur[1]*.05);gl.drawArrays(gl.TRIANGLES,0,3);
+  }else draw2d();
+  // escala adaptativa
+  acc+=dt;
+  if(++fr===60){
+    if(60/acc<45&&scale>S.minScale){scale=Math.max(S.minScale,scale*.85);resize();}
+    fr=0;acc=0;
+  }
+}
+function start(){cancelAnimationFrame(raf);last=performance.now();raf=requestAnimationFrame(frame);}
+
+if(!initGL()){gl=null;ctx=cv.getContext('2d');}
+resize();start();
+addEventListener('resize',resize);
+document.addEventListener('visibilitychange',()=>document.hidden?cancelAnimationFrame(raf):start());
+cv.addEventListener('webglcontextlost',e=>{e.preventDefault();cancelAnimationFrame(raf);});
+cv.addEventListener('webglcontextrestored',()=>{initGL();resize();start();});
+addEventListener('pointermove',e=>{ptr=[(e.clientX/innerWidth-.5)*2,-(e.clientY/innerHeight-.5)*2];});
+})();
+</script>
+</body>
+</html>

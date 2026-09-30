@@ -87,7 +87,7 @@ function confirmNewGame() {
   app.querySelector('[data-confirm]').onclick=async(event)=>{const button=event.currentTarget;button.disabled=true;await startCreation();if(button.isConnected)button.disabled=false;};
 }
 
-const openingLines = ['Has llegado hasta el umbral. Te esperaba.','Aún eres posibilidad. Vamos a darte forma, poco a poco.'];
+const openingLines = ['Te esperaba.','Permíteme darte forma, poco a poco.'];
 const fallbackWhispers = ['Vaya, no soy la única misteriosa por aquí.','Dejaremos que ese silencio te acompañe.'];
 const answeredWhispers = ['Lo que has contado empieza a tomar forma.','Hay caminos que nacen de un solo deseo.'];
 const creationSteps = [

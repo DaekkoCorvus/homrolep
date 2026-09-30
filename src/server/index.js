@@ -9,6 +9,7 @@ import { saveRun, loadRun, listRuns } from './saves/store.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const publicDir = path.join(root, 'public');
+const assetDir = path.join(root, 'assets');
 const clientDir = path.join(root, 'src/client');
 const worldData = JSON.parse(await readFile(path.join(root, 'data/canon/locations/northfortress.json'), 'utf8'));
 const port = Number(process.env.PORT) || 3000;
@@ -113,9 +114,11 @@ async function api(request, response, pathname) {
 }
 
 async function staticFile(response, pathname) {
-  const route = pathname === '/' ? '/index.html' : pathname;
-  const base = ['/app.js', '/styles.css', '/index.html'].includes(route) ? clientDir : publicDir;
-  const target = path.resolve(base, `.${route}`);
+  const route = decodeURIComponent(pathname === '/' ? '/index.html' : pathname);
+  const isAsset = route.startsWith('/assets/');
+  const base = isAsset ? assetDir : ['/app.js', '/styles.css', '/index.html'].includes(route) ? clientDir : publicDir;
+  const filePath = isAsset ? route.slice('/assets'.length) : route;
+  const target = path.resolve(base, `.${filePath}`);
   if (!target.startsWith(base + path.sep)) throw Object.assign(new Error('Ruta inválida.'), { code: 'ENOENT' });
   const content = await readFile(target);
   response.writeHead(200, { 'content-type': mimeTypes[path.extname(target)] ?? 'application/octet-stream' });

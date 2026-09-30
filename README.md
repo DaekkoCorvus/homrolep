@@ -71,6 +71,7 @@ src/server/index.js     servidor HTTP y API local
 src/server/game/        reglas deterministas y contratos futuros
 src/server/saves/       persistencia JSON atómica
 src/server/ai/          interfaz del proveedor de IA
+assets/                 recursos visuales, incluido el vórtice liminal
 data/canon/             datos base inmutables del universo
 data/templates/         esquemas de contenido futuro
 public/                 manifest y service worker
