@@ -3,8 +3,8 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRun, setPrologue, applyAction, addPost, startEncounter, addExchange, endEncounter, rewindEncounter, replaceLastNpcLine, reapplyEnding, setWorldTime, addContact, grantContact, leaveEncounter } from './game/run.js';
-import { validateNpcCard, fromForeignCard, parsePngCard, savePortrait, listPortraits, saveNpcCard, imageKind } from './game/cards.js';
-import { loadNpcs, presentNpcs, publicNpc, relationshipOf, affinityOf, attitudeOf, mentionsName, validateEvaluation, applyEvaluation, debugView, temporalContext, timedNotes, timedHistory, contactAllowed, findNpcByHandle, parseSpeech, recentEvents, contactInfo } from './game/npcs.js';
+import { validateNpcCard, fromForeignCard, parsePngCard, savePortrait, listPortraits, saveNpcCard, imageKind, removePortrait, renamePortrait, normalizeEmotion } from './game/cards.js';
+import { loadNpcs, presentNpcs, publicNpc, relationshipOf, affinityOf, attitudeOf, mentionsName, validateEvaluation, applyEvaluation, debugView, temporalContext, timedNotes, timedHistory, contactAllowed, findNpcByHandle, parseSpeech, stripMarks, recentEvents, contactInfo } from './game/npcs.js';
 import { createNanoGPT, AIError } from './ai/provider.js';
 import { createSettingsStore } from './ai/settings.js';
 import { saveRun, loadRun, listRuns } from './saves/store.js';
@@ -66,7 +66,7 @@ async function contextFor(run, npc) {
     temporal: temporalContext(relationship, run.world), memories: timedNotes(relationship, run.world), history: timedHistory(relationship, run.world),
     emotions, events: recentEvents(run, worldData, npcs), contact: contactInfo(npc, relationship, run.world), intent: run.encounter?.intent, ...extra
   });
-  build.speak = (reply) => ({ ...reply, ...parseSpeech(reply.say, emotions) });
+  build.speak = (reply) => ({ ...reply, gesture: stripMarks(reply.gesture), intent: stripMarks(reply.intent), ...parseSpeech(reply.say, emotions) });
   build.farewell = (text) => parseSpeech(text, emotions);
   return build;
 }
@@ -168,19 +168,28 @@ async function devRoutes(request, response, pathname) {
     if (portrait) await savePortrait(assetDir, card.id, portrait);
     return sendJson(response, 200, await withPortraits(card));
   }
-  const match = pathname.match(/^\/api\/dev\/npcs\/([a-z][a-z0-9_]{1,40})(\/portrait)?$/);
+  const match = pathname.match(/^\/api\/dev\/npcs\/([a-z][a-z0-9_]{1,40})(\/portrait)?(?:\/([a-z]{1,20})(\/rename)?)?$/);
   if (match && request.method === 'PUT' && !match[2]) {
     const card = validateNpcCard({ ...(await readBody(request, 600_000)), id: match[1] }, locationIds);
     await saveNpcCard(npcDir, card);
     npcs.set(card.id, card);
     return sendJson(response, 200, await withPortraits(card));
   }
-  if (match && request.method === 'POST' && match[2]) {
+  if (match && match[2] && match[3]) {
+    if (!npcs.has(match[1])) throw new Error('NPC desconocido.');
+    if (request.method === 'DELETE' && !match[4]) await removePortrait(assetDir, match[1], match[3]);
+    else if (request.method === 'POST' && match[4]) await renamePortrait(assetDir, match[1], match[3], normalizeEmotion((await readBody(request)).to));
+    else return sendJson(response, 405, { error: 'Método no permitido.' });
+    return sendJson(response, 200, await withPortraits(npcs.get(match[1])));
+  }
+  if (match && request.method === 'POST' && match[2] && !match[3]) {
     if (!npcs.has(match[1])) throw new Error('NPC desconocido.');
     const body = await readBody(request, 12_000_000);
     const data = Buffer.from(String(body.data ?? ''), 'base64');
     if (!imageKind(data)) throw new Error('El retrato debe ser PNG, WebP o JPG.');
-    await savePortrait(assetDir, match[1], data, body.emotion || 'default');
+    const emotion = normalizeEmotion(body.emotion ?? 'default');
+    if (!emotion) throw new Error('Escribe un nombre para la emoción usando solo letras.');
+    await savePortrait(assetDir, match[1], data, emotion);
     return sendJson(response, 200, await withPortraits(npcs.get(match[1])));
   }
   return sendJson(response, 404, { error: 'Ruta de desarrollo no encontrada.' });

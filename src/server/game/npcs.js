@@ -55,22 +55,26 @@ export const timedNotes = (relationship, world, count = 8) => relationship.notes
 export const timedHistory = (relationship, world, count = 4) => relationship.history.slice(-count).map((item) => ({ cuando: describeWhen(item.time, world), resumen: item.text }));
 
 // --- Voz y emociones --------------------------------------------------------------------------
-// El GM marca cambios de expresión dentro de la frase: «[\feliz] ¡Qué alegría verte! [\preocupada] ¿Estás bien?».
-// Solo valen las emociones que existan como imagen del NPC; el resto de marcas se descarta.
-const MARK = /\[\s*(?:comando\s*)?[\\/]\s*([\p{L}\p{N}_-]+)\s*\]/gu;
+// El GM cambia la expresión dentro de la frase con una marca de una palabra entre llaves: «{feliz} ¡Qué alegría verte! {triste} Pero me voy…».
+// Solo valen las emociones que existan como imagen del NPC; las demás se descartan. Por compatibilidad también se
+// reconocen [\\feliz] / [/feliz] y [feliz] (esta última únicamente si «feliz» es una emoción disponible).
+const MARK = /\{\s*([\p{L}\p{N}_-]+)\s*\}|\[\s*(?:comando\s*)?[\\/]\s*([\p{L}\p{N}_-]+)\s*\]|\[\s*([\p{L}\p{N}_-]+)\s*\]/gu;
 const fold = (value) => String(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
 export function parseSpeech(raw, allowed = []) {
+  const source = String(raw ?? '');
   const known = new Map([['default', 'default'], ...allowed.map((name) => [fold(name), name])]);
   const parts = []; let emotion = 'default'; let last = 0;
   const push = (text) => { if (text) parts.push({ emotion, text }); };
-  for (const match of String(raw ?? '').matchAll(MARK)) {
-    push(raw.slice(last, match.index));
-    const next = known.get(fold(match[1]));
+  for (const match of source.matchAll(MARK)) {
+    const name = match[1] ?? match[2] ?? match[3];
+    const next = known.get(fold(name));
+    if (match[3] !== undefined && !next) continue; // «[risas]» no es una marca si no es una emoción disponible
+    push(source.slice(last, match.index));
     if (next) emotion = next;
     last = match.index + match[0].length;
   }
-  push(String(raw ?? '').slice(last));
+  push(source.slice(last));
   const segments = [];
   for (const part of parts) {
     let text = part.text.replace(/[ \t]+/g, ' ');
@@ -79,11 +83,14 @@ export function parseSpeech(raw, allowed = []) {
     if (segments.length && segments.at(-1).emotion === part.emotion) segments.at(-1).text += text;
     else segments.push({ emotion: part.emotion, text });
   }
-  if (segments.length) { segments.at(-1).text = segments.at(-1).text.replace(/ $/, ''); }
+  if (segments.length) segments.at(-1).text = segments.at(-1).text.replace(/ $/, '');
   const say = segments.map((segment) => segment.text).join('').trim();
   const expressive = segments.length > 1 || (segments[0] && segments[0].emotion !== 'default');
   return { say, segments: expressive ? segments : [] };
 }
+
+// Quita cualquier marca de un texto que no se anima (gestos, intenciones).
+export const stripMarks = (text) => String(text ?? '').replace(/\{[^}]*\}/g, '').replace(/\s{2,}/g, ' ').trim();
 
 // --- Sucesos recientes: contexto para el GM al abrir una conversación -------------------------
 export function recentEvents(run, worldData, npcs, count = 8) {

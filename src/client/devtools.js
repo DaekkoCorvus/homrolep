@@ -150,7 +150,10 @@ async function importFile(file, overwrite = false) {
 
 const RACE_OPTIONS = [['humano', 'Humano'], ['ophidiano', 'Ophidiano'], ['infernal', 'Infernal'], ['celestial', 'Celestial'], ['noid', 'Noid (robot consciente)']];
 const GENDER_OPTIONS = ['Mujer', 'Hombre', 'No binario', 'Sin género', 'Otro'];
-const TABS = [['identity', 'Identidad'], ['personality', 'Personalidad'], ['appearance', 'Apariencia'], ['story', 'Historia'], ['schedule', 'Horario y conexiones']];
+const TABS = [['identity', 'Identidad'], ['personality', 'Personalidad'], ['appearance', 'Apariencia'], ['emotions', 'Emociones'], ['story', 'Historia'], ['schedule', 'Horario y conexiones']];
+
+// Nombre de emoción: solo letras, sin acentos, espacios ni símbolos (es el que usa el GM entre llaves: {feliz}).
+const normalizeEmotion = (name) => String(name ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z]/g, '').slice(0, 20);
 
 const getPath = (object, path) => path.split('.').reduce((value, key) => value?.[key], object);
 const setPath = (object, path, value) => {
@@ -243,17 +246,28 @@ export async function openEditor(card) {
     <footer><button type="button" data-export-now>Exportar JSON</button><button type="submit" class="primary-dev">Guardar</button></footer></form>`);
   const form = node.querySelector('form'); const body = node.querySelector('.tab-body');
 
-  const portraitSection = () => {
+  const portraitPreview = () => {
     const portrait = model.portraits?.default;
-    return `<section class="dev-portrait"><div class="portrait-preview">${portrait ? `<img src="${portrait}" alt="">` : '<span>Sin retrato</span>'}</div>
-      <div><p class="dev-hint">Retrato de novela visual (PNG/WebP con transparencia). Se optimiza al subirlo. Emociones con imagen: <strong>${Object.keys(model.portraits ?? {}).join(", ") || "ninguna"}</strong>. El nombre de la emoción es el que usa el GM (p. ej. «feliz»).</p>
-      <div class="portrait-options"><select data-quality aria-label="Calidad"><option value="balanced">WebP 92% (≈6× más ligero)</option><option value="max">WebP sin pérdida</option><option value="original">Subir tal cual</option></select>
-      <input data-emotion value="default" aria-label="Emoción" placeholder="emoción" pattern="[a-z][a-z0-9_-]{0,20}"></div>
-      <label class="file-button ${isNew ? 'disabled' : ''}">Subir retrato<input type="file" accept="image/png,image/webp,image/jpeg" hidden data-portrait ${isNew ? 'disabled' : ''}></label></div></section>`;
+    return `<section class="dev-portrait"><div class="portrait-preview">${portrait ? `<img src="${portrait}" alt="">` : '<span>Sin retrato</span>'}</div><p class="dev-hint">Las imágenes del personaje (retrato y emociones) se gestionan en la pestaña <strong>Emociones</strong>.</p></section>`;
+  };
+
+  const emotionsSection = () => {
+    const portraits = model.portraits ?? {};
+    const names = Object.keys(portraits);
+    if (isNew) return '<p class="dev-hint">Guarda el personaje primero para poder subir su retrato y sus emociones.</p>';
+    return `<p class="dev-hint">Cada imagen es una emoción o acción de <strong>una palabra</strong> (solo letras). El GM la invoca escribiendo su nombre entre llaves en mitad de la frase, por ejemplo <code>{feliz}</code>, y el sprite cambia justo ahí. Lo que ve el GM: <strong>${names.join(', ') || 'nada todavía'}</strong>. Usa el mismo lienzo y encuadre que el retrato por defecto.</p>
+      <div class="emotion-grid">${names.map((name) => `<figure class="emotion" data-emotion="${escapeHtml(name)}"><img src="${portraits[name]}" alt=""><figcaption><strong>${escapeHtml(name)}</strong></figcaption>
+        <div class="emotion-actions"><button type="button" data-replace>Reemplazar</button>${name === 'default' ? '' : '<button type="button" data-rename>Renombrar</button><button type="button" data-delete class="danger">Eliminar</button>'}</div></figure>`).join('')}</div>
+      <h3>Añadir emoción</h3>
+      <div class="emotion-add"><input data-new-emotion placeholder="feliz" maxlength="20" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="Nombre de la emoción">
+        <select data-quality aria-label="Calidad"><option value="balanced">WebP 92%</option><option value="max">WebP sin pérdida</option><option value="original">Tal cual</option></select>
+        <label class="file-button">Subir imagen<input type="file" accept="image/png,image/webp,image/jpeg" hidden data-new-file></label></div>
+      <input type="file" accept="image/png,image/webp,image/jpeg" hidden data-replace-file>
+      <p class="dev-hint">Se convierte a WebP con transparencia y se guarda con el nombre que escribas. Si ya existe, se reemplaza.</p>`;
   };
 
   const sections = {
-    identity: () => portraitSection() + field('Identificador (solo modo dev)', 'id', { readonly: !isNew, hint: 'Minúsculas, números y _. No se muestra al jugador.' }) + field('Nombre', 'name') + field('Edad', 'age', { kind: 'number' }) + field('Rol', 'role', { placeholder: 'Dueña y barista de…' })
+    identity: () => portraitPreview() + field('Identificador (solo modo dev)', 'id', { readonly: !isNew, hint: 'Minúsculas, números y _. No se muestra al jugador.' }) + field('Nombre', 'name') + field('Edad', 'age', { kind: 'number' }) + field('Rol', 'role', { placeholder: 'Dueña y barista de…' })
       + field('Género', 'gender', { kind: 'select', options: (GENDER_OPTIONS.includes(model.gender) || !model.gender ? GENDER_OPTIONS : [...GENDER_OPTIONS, model.gender]).map((value) => [value, value]) })
       + field('Raza', 'race', { kind: 'select', options: RACE_OPTIONS }) + field('Resumen', 'summary', { kind: 'area', rows: 4, hint: 'Quién es, en pocas líneas.' }),
     personality: () => tagsField('Rasgos', 'personality.traits') + field('Forma de hablar', 'personality.speech', { kind: 'area', rows: 4 }) + tagsField('Le gusta', 'personality.likes') + tagsField('Le desagrada', 'personality.dislikes')
@@ -263,6 +277,7 @@ export async function openEditor(card) {
       + tagsField('Ofrece su contacto cuando…', 'contact.conditions', { block: true, placeholder: 'Añade una condición y pulsa Enter', hint: 'Deben cumplirse TODAS y el GM las interpreta con lo vivido: «ser amigos», «haber hablado 3 veces», «haberle dado un regalo», «llevarlo a la azotea», «conocer cierto secreto»… Solo lo comparte si el jugador lo pide o ella lo ofrece, y nunca antes de cumplirlas. Sin condiciones basta una buena impresión.' }),
     appearance: () => field('Apariencia', 'appearance', { kind: 'area', rows: 8, hint: 'Rasgos físicos, complexión, detalles que se notan. La IA lo usa al describirse o cuando se comenta su aspecto.' })
       + tagsField('Prendas que le agradan', 'clothingLikes') + tagsField('Prendas que evita o le disgustan', 'clothingDislikes', { hint: 'Ropa que no usaría o que le incomoda usar.' }),
+    emotions: emotionsSection,
     story: () => field('Trasfondo', 'background', { kind: 'area', rows: 16, hint: 'Sin límite de caracteres: historia, hábitos, relaciones.' })
       + tagsField('Conocimientos', 'knowledge', { block: true, hint: 'Próximamente se vincularán con el lorebook para elegir de qué sucesos sabe y cómo.' }) + tagsField('Secretos', 'secrets', { block: true }),
     schedule: () => `<h3>Horario</h3><div class="slots">${model.schedule.map(scheduleRow).join('')}</div><button type="button" data-add-slot>Añadir horario</button><p class="dev-hint">Días: L=0 … D=6. El día 1 del juego es lunes.</p>
@@ -296,23 +311,48 @@ export async function openEditor(card) {
       body.querySelector('[data-add-link]').onclick = () => { body.querySelector('.links').insertAdjacentHTML('beforeend', connectionRow({})); bind(); };
       bind();
     }
-    if (name === 'identity') bindPortrait();
+    if (name === 'emotions') bindEmotions();
   }
 
-  function bindPortrait() {
-    const upload = body.querySelector('[data-portrait]');
-    if (!upload) return;
-    upload.onchange = async (event) => {
-      const file = event.target.files[0]; if (!file) return;
-      try {
-        const emotion = body.querySelector('[data-emotion]').value.trim() || 'default';
-        const { blob, note } = await optimizeImage(file, body.querySelector('[data-quality]').value);
-        const saved = await dreq(`/api/dev/npcs/${model.id}/portrait`, { method: 'POST', body: JSON.stringify({ data: await toBase64(blob), emotion }) });
-        model.portraits = saved.portraits;
-        if (saved.portraits.default) body.querySelector('.portrait-preview').innerHTML = `<img src="${saved.portraits.default}" alt="">`;
-        notify(`Retrato «${emotion}» guardado: ${note}`); hooks.reload();
-      } catch (failure) { notify(failure.message); }
+  async function sendPortrait(emotion, file) {
+    const name = normalizeEmotion(emotion);
+    if (!name) { notify('Escribe un nombre para la emoción usando solo letras.'); return; }
+    try {
+      const { blob, note } = await optimizeImage(file, body.querySelector('[data-quality]')?.value ?? 'balanced');
+      const saved = await dreq(`/api/dev/npcs/${model.id}/portrait`, { method: 'POST', body: JSON.stringify({ data: await toBase64(blob), emotion: name }) });
+      model.portraits = saved.portraits; show('emotions'); hooks.reload();
+      notify(`Emoción «${name}» guardada: ${note}`);
+    } catch (failure) { notify(failure.message); }
+  }
+
+  function bindEmotions() {
+    const input = body.querySelector('[data-new-emotion]');
+    if (!input) return;
+    input.oninput = () => { const clean = normalizeEmotion(input.value); if (clean !== input.value) input.value = clean; };
+    body.querySelector('[data-new-file]').onchange = (event) => {
+      const file = event.target.files[0]; event.target.value = ''; if (!file) return;
+      const name = normalizeEmotion(input.value);
+      if (model.portraits?.[name] && !confirm(`Ya existe «${name}». ¿Reemplazarla?`)) return;
+      sendPortrait(name, file);
     };
+    const replaceInput = body.querySelector('[data-replace-file]');
+    let target = null;
+    replaceInput.onchange = (event) => { const file = event.target.files[0]; event.target.value = ''; if (file && target) sendPortrait(target, file); };
+    body.querySelectorAll('.emotion').forEach((card) => {
+      const name = card.dataset.emotion;
+      card.querySelector('[data-replace]').onclick = () => { target = name; replaceInput.click(); };
+      card.querySelector('[data-rename]')?.addEventListener('click', async () => {
+        const to = normalizeEmotion(prompt('Nuevo nombre (solo letras):', name));
+        if (!to || to === name) return;
+        try { const saved = await dreq(`/api/dev/npcs/${model.id}/portrait/${name}/rename`, { method: 'POST', body: JSON.stringify({ to }) }); model.portraits = saved.portraits; show('emotions'); hooks.reload(); notify(`«${name}» ahora es «${to}».`); }
+        catch (failure) { notify(failure.message); }
+      });
+      card.querySelector('[data-delete]')?.addEventListener('click', async () => {
+        if (!confirm(`¿Eliminar la emoción «${name}»?`)) return;
+        try { const saved = await dreq(`/api/dev/npcs/${model.id}/portrait/${name}`, { method: 'DELETE' }); model.portraits = saved.portraits; show('emotions'); hooks.reload(); notify(`«${name}» eliminada.`); }
+        catch (failure) { notify(failure.message); }
+      });
+    });
   }
 
   const clean = () => { const { portraits, ...rest } = model; return rest; };

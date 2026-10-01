@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 // Fichas de NPC: validación, importación (nativa y formato «character card» de Tavern), retratos.
@@ -126,8 +126,13 @@ export function imageKind(buffer) {
 // Si una emoción existe en varios formatos se sirve el más ligero: webp > png > jpg > svg.
 const PORTRAIT_PRIORITY = ['.webp', '.png', '.jpg', '.jpeg', '.svg'];
 
+// Nombre de emoción: solo letras minúsculas, sin acentos, espacios ni símbolos. Es el que usa el GM: {feliz}.
+export const EMOTION = /^[a-z]{1,20}$/;
+export const normalizeEmotion = (name) => String(name ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z]/g, '').slice(0, 20);
+
 export async function savePortrait(assetDir, npcId, buffer, emotion = 'default') {
-  if (!ID.test(npcId) || !/^[a-z][a-z0-9_-]{0,20}$/.test(emotion)) throw new Error('Retrato inválido.');
+  if (!ID.test(npcId)) throw new Error('Retrato inválido.');
+  if (!EMOTION.test(emotion)) throw new Error('El nombre de la emoción debe tener solo letras (sin espacios, números ni símbolos).');
   const kind = imageKind(buffer);
   if (!kind) throw new Error('El retrato debe ser PNG, WebP o JPG.');
   if (buffer.length > 8_000_000) throw new Error('El retrato supera 8 MB.');
@@ -146,13 +151,34 @@ export async function listPortraits(assetDir, npcId) {
     for (const name of await readdir(directory)) {
       const { name: emotion, ext } = path.parse(name);
       const rank = PORTRAIT_PRIORITY.indexOf(ext.toLowerCase());
-      if (rank < 0 || !/^[a-z][a-z0-9_-]{0,20}$/.test(emotion)) continue;
+      if (rank < 0 || !EMOTION.test(emotion)) continue;
       if (!best.has(emotion) || rank < best.get(emotion).rank) best.set(emotion, { rank, name });
     }
     const out = {};
     for (const [emotion, { name }] of [...best].sort()) out[emotion] = `/assets/portraits/${npcId}/${name}?v=${Math.round((await stat(path.join(directory, name))).mtimeMs)}`;
     return out;
   } catch { return {}; } // sin carpeta: aún no hay retratos
+}
+
+const portraitFiles = async (directory, emotion) => (await readdir(directory).catch(() => [])).filter((name) => path.parse(name).name === emotion && PORTRAIT_PRIORITY.includes(path.parse(name).ext.toLowerCase()));
+
+export async function removePortrait(assetDir, npcId, emotion) {
+  if (!ID.test(npcId) || !EMOTION.test(emotion)) throw new Error('Retrato inválido.');
+  if (emotion === 'default') throw new Error('El retrato por defecto no se puede eliminar; sube otro para reemplazarlo.');
+  const directory = path.join(assetDir, 'portraits', npcId);
+  const files = await portraitFiles(directory, emotion);
+  if (!files.length) throw new Error('Esa emoción no existe.');
+  for (const name of files) await rm(path.join(directory, name));
+}
+
+export async function renamePortrait(assetDir, npcId, from, to) {
+  if (!ID.test(npcId) || !EMOTION.test(from) || !EMOTION.test(to)) throw new Error('El nombre de la emoción debe tener solo letras (sin espacios, números ni símbolos).');
+  if (from === 'default' || to === 'default') throw new Error('El retrato por defecto no se puede renombrar.');
+  const directory = path.join(assetDir, 'portraits', npcId);
+  const files = await portraitFiles(directory, from);
+  if (!files.length) throw new Error('Esa emoción no existe.');
+  if ((await portraitFiles(directory, to)).length) throw Object.assign(new Error(`Ya existe una emoción llamada «${to}».`), { status: 409 });
+  for (const name of files) await rename(path.join(directory, name), path.join(directory, `${to}${path.parse(name).ext}`));
 }
 
 export async function saveNpcCard(directory, card) {

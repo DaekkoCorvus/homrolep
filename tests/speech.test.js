@@ -3,12 +3,23 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { parseSpeech } from '../src/server/game/npcs.js';
+import { parseSpeech, stripMarks } from '../src/server/game/npcs.js';
 import { createAppServer } from '../src/server/index.js';
 
 const BS = '\\'; // las marcas de emoción llevan una barra invertida: [\feliz]
 
-test('emotion marks split speech into expressive segments and unknown marks vanish', () => {
+test('the {emotion} mark is the main syntax; brackets are only honoured for known emotions', () => {
+  const braces = parseSpeech('{feliz} ¡Qué alegría verte! {triste} Pero ya me voy… {inventada} Cuídate.', ['feliz', 'triste']);
+  assert.equal(braces.say, '¡Qué alegría verte! Pero ya me voy… Cuídate.', 'las marcas nunca se ven');
+  assert.deepEqual(braces.segments.map((segment) => [segment.emotion, segment.text]), [['feliz', '¡Qué alegría verte! '], ['triste', 'Pero ya me voy… Cuídate.']]);
+  assert.deepEqual(parseSpeech('Hola {Feliz} otra vez {DEFAULT} ya', ['feliz']).segments.map((segment) => segment.emotion), ['default', 'feliz', 'default'], 'sin distinguir mayúsculas ni acentos');
+  assert.equal(parseSpeech('Dijo [risas] y sonrió', ['feliz']).say, 'Dijo [risas] y sonrió', 'un corchete que no es emoción se conserva como texto');
+  assert.equal(parseSpeech('Dijo [feliz] y sonrió', ['feliz']).segments.length, 2, 'un corchete con una emoción disponible sí es marca');
+  assert.deepEqual(parseSpeech('{feliz} Hola', []).segments, [], 'sin emociones no hay cambios');
+  assert.equal(stripMarks('sonríe {feliz}  despacio'), 'sonríe despacio');
+});
+
+test('legacy backslash marks still work', () => {
   const marked = parseSpeech(`[${BS}feliz] ¡Hey, qué alegría verte! [${BS}preocupada] Oye, ¿estás bien? [${BS}inventada] Te ves cansado.`, ['feliz', 'preocupada']);
   assert.equal(marked.say, '¡Hey, qué alegría verte! Oye, ¿estás bien? Te ves cansado.');
   assert.deepEqual(marked.segments.map((segment) => segment.emotion), ['feliz', 'preocupada']);
@@ -30,10 +41,10 @@ test('the GM receives emotions, recent events, contact status and can open with 
   t.after(() => rm(emotionFile, { force: true }));
 
   const runs = new Map(); const seen = [];
-  let reply = { say: `[${BS}zztest] ¡Qué bueno verte! [${BS}nopuedo] Pasa.`, intent: 'Quiero darle mi contacto si me ayuda a probar el pan.', contact: { give: true, conditionsMet: [true, true] } };
+  let reply = { say: '{zztest} ¡Qué bueno verte! {nopuedo} Pasa.', intent: 'Quiero darle mi contacto si me ayuda a probar el pan.', contact: { give: true, conditionsMet: [true, true] } };
   const ai = {
     npcReply: async (context) => { seen.push(context); return reply; },
-    evaluateEncounter: async () => ({ notes: [], farewell: `[${BS}zztest] Hasta pronto`, summary: 'ok' }),
+    evaluateEncounter: async () => ({ notes: [], farewell: '{zztest} Hasta pronto', summary: 'ok' }),
     prologue: async () => ({ text: 'x', locationId: 'station' })
   };
   const server = createAppServer({ ai, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });

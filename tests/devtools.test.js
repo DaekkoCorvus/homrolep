@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { mkdtemp, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { validateNpcCard, fromForeignCard, parsePngCard, savePortrait, listPortraits, imageKind } from '../src/server/game/cards.js';
+import { validateNpcCard, fromForeignCard, parsePngCard, savePortrait, listPortraits, imageKind, removePortrait, renamePortrait, normalizeEmotion } from '../src/server/game/cards.js';
 import { createRun, startEncounter, addExchange, endEncounter, rewindEncounter, replaceLastNpcLine, setWorldTime } from '../src/server/game/run.js';
 import { loadNpcs, emptyRelationship } from '../src/server/game/npcs.js';
 import { createAppServer } from '../src/server/index.js';
@@ -165,4 +165,27 @@ test('when an emotion exists in several formats the lightest one is served', asy
   assert.deepEqual(Object.keys(portraits), ['default', 'happy']);
   assert.match(portraits.default, /default\.webp\?v=/);
   assert.match(portraits.happy, /happy\.png\?v=/);
+});
+
+test('emotion names are letters only and sprites can be renamed or removed', async (t) => {
+  assert.equal(normalizeEmotion('  ¡Feliz 2! '), 'feliz');
+  assert.equal(normalizeEmotion('Preocupación'), 'preocupacion');
+  assert.equal(normalizeEmotion('123 !!'), '');
+  const dir = await mkdtemp(path.join(tmpdir(), 'hom-emotions-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const png = pngWithCard({});
+  await savePortrait(dir, 'mara_test', png);
+  await savePortrait(dir, 'mara_test', png, 'feliz');
+  await assert.rejects(savePortrait(dir, 'mara_test', png, 'con espacio'), /solo letras/);
+  await assert.rejects(savePortrait(dir, 'mara_test', png, 'happy_2'), /solo letras/);
+  await renamePortrait(dir, 'mara_test', 'feliz', 'alegre');
+  assert.deepEqual(Object.keys(await listPortraits(dir, 'mara_test')), ['alegre', 'default']);
+  await savePortrait(dir, 'mara_test', png, 'triste');
+  await assert.rejects(renamePortrait(dir, 'mara_test', 'triste', 'alegre'), /Ya existe/);
+  await assert.rejects(renamePortrait(dir, 'mara_test', 'default', 'otra'), /por defecto/);
+  await assert.rejects(renamePortrait(dir, 'mara_test', 'nada', 'otra'), /no existe/);
+  await removePortrait(dir, 'mara_test', 'triste');
+  await assert.rejects(removePortrait(dir, 'mara_test', 'default'), /por defecto/);
+  await assert.rejects(removePortrait(dir, 'mara_test', 'triste'), /no existe/);
+  assert.deepEqual(Object.keys(await listPortraits(dir, 'mara_test')), ['alegre', 'default']);
 });
