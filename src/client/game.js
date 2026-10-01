@@ -13,6 +13,19 @@ const PHONE_APPS = [
 ];
 const SEND_ICON = '<path d="M5 12h14M13 6l6 6-6 6"/>';
 const STOP_ICON = '<rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/>';
+// Texto del jugador: *acciones* en cursiva tenue, "diálogos" entre comillas, el resto tal cual.
+function formatSpeech(text) {
+  const pattern = /\*([^*\n]+)\*|"([^"\n]+)"|“([^”\n]+)”|«([^»\n]+)»/g;
+  let out = ''; let last = 0; let match;
+  const plain = (value) => (value ? `<span class="plain">${escapeHtml(value)}</span>` : '');
+  while ((match = pattern.exec(text))) {
+    out += plain(text.slice(last, match.index));
+    out += match[1] !== undefined ? `<span class="act">${escapeHtml(match[1])}</span>` : `<span class="say">“${escapeHtml(match[2] ?? match[3] ?? match[4])}”</span>`;
+    last = pattern.lastIndex;
+  }
+  return out + plain(text.slice(last));
+}
+
 const initial = (name) => escapeHtml(String(name).trim().charAt(0).toUpperCase());
 const icon = (path) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
 
@@ -22,7 +35,7 @@ export function enterGame(hooks) {
   document.getElementById('vortex-layer')?.contentWindow?.postMessage({ type:'vortex', zoom:1, flash:0, rate:2 }, location.origin);
   app.innerHTML = `<main class="game">
     <div class="scene" aria-hidden="true"><div class="scene-art"></div><div class="scene-dust"></div><div class="scene-vignette"></div></div>
-    <div class="vn-layer" aria-hidden="true"><img alt=""></div>
+    <div class="vn-layer" aria-hidden="true"><img class="vn-main" alt=""><img class="vn-prev" alt=""></div>
     <div class="place-title" aria-live="polite"></div>
     <header class="hud">
       <div class="hud-left"><div class="clock-pill" role="status"><span class="clock-dot"></span><span class="clock-text"></span></div><button type="button" class="dev-pill" data-dev hidden>DEV</button></div>
@@ -72,9 +85,9 @@ function wire() {
   const root = app.querySelector('.game');
   root.querySelector('[data-phone]').onclick = () => togglePhone(true);
   root.querySelector('[data-dev]').onclick = () => openPanel();
-  const portrait = root.querySelector('.vn-layer img');
+  const portrait = root.querySelector('.vn-main');
   portrait.onerror = () => { portrait.removeAttribute('src'); root.classList.remove('has-portrait'); };
-  portrait.onload = () => { root.classList.add('has-portrait'); portrait.classList.remove('in'); void portrait.offsetWidth; portrait.classList.add('in'); };
+  portrait.onload = () => { root.classList.add('has-portrait'); if (portrait.dataset.swap === '1') { portrait.dataset.swap = '0'; return; } portrait.classList.remove('in'); void portrait.offsetWidth; portrait.classList.add('in'); };
   root.querySelector('.phone-layer').onclick = (event) => { if (event.target === event.currentTarget) togglePhone(false); };
   root.querySelector('.sheet-layer').onclick = (event) => { if (event.target === event.currentTarget) toggleSheet(false); };
   root.querySelector('.phone-home').onclick = () => { if (ui.phoneView === 'home') togglePhone(false); else { ui.phoneView = 'home'; renderPhone(); } };
@@ -99,7 +112,7 @@ function wire() {
   };
   if (vv) { vv.onresize = fit; vv.onscroll = fit; }
   fit();
-  form.onsubmit = (event) => { event.preventDefault(); const text = input.value.trim(); if (!text || ui.busy) return; input.value = ''; grow(); input.blur(); if (text.startsWith('/')) { runCommand(text); return; } if (state.run.encounter) say(text, input); else runAction({ type:'freeform', text }); };
+  form.onsubmit = (event) => { event.preventDefault(); const text = input.value.trim(); if (!text || ui.busy || state.run.encounter?.closed) return; input.value = ''; grow(); input.blur(); if (text.startsWith('/')) { runCommand(text); return; } if (state.run.encounter) say(text, input); else runAction({ type:'freeform', text }); };
   document.onkeydown = (event) => { if (event.key === 'Escape') { if (!root.querySelector('.sheet-layer').hidden) toggleSheet(false); else if (ui.phoneOpen) togglePhone(false); } };
 }
 
@@ -110,40 +123,54 @@ export function updateGame({ announce=false }={}) {
   root.querySelector('.ps-time').textContent = clockText(run.world);
   root.classList.toggle('talking', Boolean(run.encounter));
   root.querySelector('[data-dev]').hidden = !isDev();
-  renderPortrait(root);
-  preloadPortraits();
-  root.querySelector('.free-action textarea').placeholder = run.encounter ? `Dile algo a ${run.encounterNpc.name}…` : '¿Qué haces?';
+  root.classList.toggle('closed', Boolean(run.encounter?.closed));
+  root.querySelector('.free-action textarea').placeholder = run.encounter?.closed ? 'La conversación terminó' : run.encounter ? `Dile algo a ${run.encounterNpc.name}…` : '¿Qué haces?';
   renderScene(root, loc, announce);
   renderStory(root, loc);
   renderChips(root, loc);
+  renderPortrait(root);
+  preloadPortraits();
   if (ui.phoneOpen) renderPhone();
 }
 
 // Novela visual: retrato del NPC mientras se conversa. Las emociones llegarán como `portraits[emotion]`.
 let portraitTimer = null;
-function renderPortrait(root) {
-  const img = root.querySelector('.vn-layer img');
-  const npc = state.run.encounterNpc;
+function currentEmotion() {
+  if (ui.emotion) return ui.emotion;
   const lastLine = state.run.encounter?.lines.filter((line) => line.who === 'npc').at(-1);
-  const url = npc ? (npc.portraits?.[lastLine?.emotion] ?? npc.portraits?.default ?? null) : null;
+  return lastLine?.segments?.at(-1)?.emotion ?? 'default';
+}
+
+function renderPortrait(root) {
+  const img = root.querySelector('.vn-main'); const prev = root.querySelector('.vn-prev');
+  const npc = state.run.encounterNpc;
+  const url = npc ? (npc.portraits?.[currentEmotion()] ?? npc.portraits?.default ?? null) : null;
   clearTimeout(portraitTimer);
   if (!url) {
     root.classList.remove('has-portrait');
     // Conserva la imagen mientras se desvanece para que la salida también sea suave.
-    portraitTimer = setTimeout(() => img.removeAttribute('src'), 900);
+    portraitTimer = setTimeout(() => { img.removeAttribute('src'); prev.removeAttribute('src'); }, 900);
     return;
   }
-  if (img.getAttribute('src') !== url) { img.classList.remove('in'); img.src = url; }
-  else root.classList.add('has-portrait');
+  for (const other of Object.values(npc.portraits ?? {})) preloadImage(other);
+  const shown = img.getAttribute('src');
+  if (shown === url) { root.classList.add('has-portrait'); return; }
+  if (shown && root.classList.contains('has-portrait')) {
+    // Cambio de expresión: la imagen anterior se disuelve sobre la nueva.
+    prev.style.transition = 'none'; prev.src = shown; prev.style.opacity = '1';
+    img.dataset.swap = '1'; img.src = url;
+    requestAnimationFrame(() => requestAnimationFrame(() => { prev.style.transition = 'opacity .3s ease'; prev.style.opacity = '0'; }));
+    return;
+  }
+  img.classList.remove('in'); img.src = url;
 }
 
-// Precarga los retratos de quien está presente para que aparezcan sin espera al empezar a hablar.
 const preloaded = new Set();
+function preloadImage(url) { if (url && !preloaded.has(url)) { preloaded.add(url); new Image().src = url; } }
+
+// Precarga los retratos de quien está presente para que aparezcan sin espera al empezar a hablar.
 function preloadPortraits() {
-  for (const npc of state.run.presence ?? []) {
-    const url = npc.portraits?.default;
-    if (url && !preloaded.has(url)) { preloaded.add(url); new Image().src = url; }
-  }
+  for (const npc of state.run.presence ?? []) preloadImage(npc.portraits?.default);
 }
 
 function renderScene(root, loc, announce) {
@@ -183,20 +210,62 @@ function storyContent(loc) {
   return { lead, paragraphs:text.split(/\n{2,}|\n/).map((p) => p.trim()).filter(Boolean) };
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const typingDelay = (character) => ('.!?…'.includes(character) ? 240 : ',;:'.includes(character) ? 120 : 22);
+const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+function setEmotion(emotion) {
+  ui.emotion = emotion && emotion !== 'default' ? emotion : null;
+  const root = app.querySelector('.game');
+  if (root) renderPortrait(root);
+}
+
+// Muestra la respuesta poco a poco; las marcas de emoción cambian el sprite en el momento exacto. Un toque la completa.
+async function revealLine(node, segments, token, onDone) {
+  const textNode = document.createTextNode(''); node.append(textNode);
+  const story = node.closest('.story');
+  ui.skipReveal = reducedMotion();
+  let count = 0;
+  for (const segment of segments) {
+    if (ui.revealToken !== token) return;
+    setEmotion(segment.emotion);
+    for (const character of segment.text) {
+      if (ui.revealToken !== token) return;
+      textNode.data += character;
+      if (++count % 6 === 0) story.scrollTop = story.scrollHeight;
+      if (!ui.skipReveal) await sleep(typingDelay(character));
+    }
+  }
+  story.scrollTop = story.scrollHeight;
+  onDone?.();
+}
+
 function renderConversation(story) {
-  const { lines } = state.run.encounter; const npc = state.run.encounterNpc;
-  const signature = `talk:${lines.map((line) => line.text).join('|')}:${ui.pendingLine ?? ''}`;
-  if (story.dataset.sig === signature && !ui.storyError) return;
+  const { lines, startedAt } = state.run.encounter; const npc = state.run.encounterNpc;
+  const animate = ui.animateNext; ui.animateNext = false;
+  const signature = `talk:${JSON.stringify(lines)}:${ui.pendingLine ?? ''}`;
+  if (!animate && story.dataset.sig === signature && !ui.storyError) return;
   story.dataset.sig = signature;
-  const rows = lines.map((line, i) => line.who === 'system'
-    ? `<div class="contact-card"><small>${escapeHtml(line.text)}</small><strong>${escapeHtml(line.handle)}</strong><button type="button" data-copy="${escapeHtml(line.handle)}">Copiar</button><small>Escríbelo en Mensajes para agregarla.</small></div>`
-    : line.who === 'npc'
-    ? `<p class="dlg npc ${i === lines.length - 1 ? 'latest' : ''}"><b>${escapeHtml(npc.name)}</b>${line.gesture ? `<em>${escapeHtml(line.gesture)}</em>` : ''}<span>${escapeHtml(line.text)}</span></p>`
-    : `<p class="dlg you">${escapeHtml(line.text)}</p>`);
-  if (ui.pendingLine) rows.push(`<p class="dlg you">${escapeHtml(ui.pendingLine)}</p>`);
+  const token = (ui.revealToken = (ui.revealToken ?? 0) + 1);
+  ui.emotion = null;
+  const fresh = animate ? lines.findLastIndex((line) => line.who === 'npc') : -1;
+  const rows = lines.map((line, index) => {
+    if (line.who === 'system') return `<div class="contact-card" ${fresh >= 0 && index > fresh ? 'hidden data-after' : ''}><small>${escapeHtml(line.text)}</small><strong>${escapeHtml(line.handle)}</strong><button type="button" data-copy="${escapeHtml(line.handle)}">Copiar</button><small>Guárdalo en tu Diario o escríbelo en Mensajes para agregarla.</small></div>`;
+    if (line.who === 'npc') return `<p class="dlg npc"><b>${escapeHtml(npc.name)}</b>${line.gesture ? `<em>${escapeHtml(line.gesture)}</em>` : ''}<span data-index="${index}">${index === fresh ? '' : escapeHtml(line.text)}</span></p>`;
+    return `<p class="dlg you">${formatSpeech(line.text)}</p>`;
+  });
+  if (ui.pendingLine) rows.push(`<p class="dlg you">${formatSpeech(ui.pendingLine)}</p>`);
   story.innerHTML = rows.join('') + (ui.storyError ? `<p class="story-error" role="alert">${escapeHtml(ui.storyError)}</p>` : '');
   story.querySelectorAll('[data-copy]').forEach((button) => button.onclick = async () => { try { await navigator.clipboard.writeText(button.dataset.copy); notify('Copiado.'); } catch { notify(button.dataset.copy); } });
   story.scrollTop = story.scrollHeight;
+  if (fresh >= 0) {
+    const line = lines[fresh];
+    story.onpointerdown = () => { ui.skipReveal = true; };
+    revealLine(story.querySelector(`[data-index="${fresh}"]`), line.segments?.length ? line.segments : [{ emotion: 'default', text: line.text }], token, () => {
+      story.querySelectorAll('[data-after]').forEach((card) => { card.hidden = false; });
+      story.scrollTop = story.scrollHeight;
+    });
+  }
 }
 
 function renderStory(root, loc) {
@@ -206,12 +275,17 @@ function renderStory(root, loc) {
   const signature = lead + paragraphs.join('|');
   if (story.dataset.sig === signature && !ui.storyError) return;
   story.dataset.sig = signature;
-  story.innerHTML = `${lead ? `<p class="story-lead">${escapeHtml(lead)}</p>` : ''}${paragraphs.map((p, i) => `<p class="story-line" style="animation-delay:${i * .55}s">${escapeHtml(p)}</p>`).join('')}${ui.storyError ? `<p class="story-error" role="alert">${escapeHtml(ui.storyError)}</p>` : ''}`;
+  story.innerHTML = `${lead ? `<p class="story-lead">${formatSpeech(lead)}</p>` : ''}${paragraphs.map((p, i) => `<p class="story-line" style="animation-delay:${i * .55}s">${escapeHtml(p)}</p>`).join('')}${ui.storyError ? `<p class="story-error" role="alert">${escapeHtml(ui.storyError)}</p>` : ''}`;
   story.scrollTop = 0;
 }
 
 function renderChips(root, loc) {
   const box = root.querySelector('.chips');
+  if (state.run.encounter?.closed) {
+    box.innerHTML = '<button type="button" class="chip-action primary-chip" data-kind="leave">Volver</button>';
+    box.querySelector('button').onclick = leaveTalk;
+    return;
+  }
   if (state.run.encounter) {
     box.innerHTML = '<button type="button" class="chip-action" data-kind="end">Despedirte</button>';
     box.querySelector('button').onclick = endTalk;
@@ -282,6 +356,7 @@ function renderPhone() {
   screen.innerHTML = `<div class="app-bar"><button type="button" data-back aria-label="Volver">${icon('<path d="M15 5l-7 7 7 7"/>')}</button><h2>${titles[view]}</h2></div><div class="app-body">${bodies[view]()}</div>`;
   screen.querySelector('[data-back]').onclick = () => { ui.phoneView = 'home'; renderPhone(); };
   bindTravel(screen);
+  screen.querySelectorAll('[data-copy]').forEach((button) => button.onclick = async () => { try { await navigator.clipboard.writeText(button.dataset.copy); notify('Copiado.'); } catch { notify(button.dataset.copy); } });
   const contactForm = screen.querySelector('#contact-form');
   if (contactForm) contactForm.onsubmit = async (event) => {
     event.preventDefault();
@@ -332,7 +407,7 @@ function socialApp() {
   return `<form id="post-form"><textarea name="text" maxlength="280" rows="2" placeholder="¿Qué está pasando?" required></textarea><button type="submit">Publicar</button></form>${posts || '<p class="empty">El feed está en silencio. Publica algo.</p>'}`;
 }
 
-const npcName = (id) => state.run.contacts?.find((npc) => npc.id === id)?.name ?? state.run.encounterNpc?.name ?? state.run.presence?.find((npc) => npc.id === id)?.name ?? id;
+const npcName = (id) => state.run.sharedContacts?.find((npc) => npc.id === id)?.name ?? state.run.contacts?.find((npc) => npc.id === id)?.name ?? state.run.encounterNpc?.name ?? state.run.presence?.find((npc) => npc.id === id)?.name ?? id;
 
 function eventText(event) {
   const name = (id) => escapeHtml(place(id)?.name || id);
@@ -351,9 +426,15 @@ function eventText(event) {
   return escapeHtml(event.type);
 }
 
+function sharedContactsHtml() {
+  const shared = state.run.sharedContacts ?? [];
+  if (!shared.length) return '';
+  return `<section class="shared-contacts"><h3>Contactos recibidos</h3>${shared.map((item) => `<div class="shared"><span><strong>${escapeHtml(item.name)}</strong><code>${escapeHtml(item.handle)}</code></span><em>${item.added ? 'Agregado' : 'Sin agregar'}</em><button type="button" data-copy="${escapeHtml(item.handle)}">Copiar</button></div>`).join('')}<p class="empty">Escribe el usuario en Mensajes para agregarlo.</p></section>`;
+}
+
 function journalApp() {
   const items = state.run.eventLog.slice(-30).reverse().map((event) => `<div class="entry"><time>${escapeHtml(event.time.replace('DAY_', 'Día ').replace('_', ' · '))}</time>${event.data?.response ? `<details><summary>${eventText(event)}</summary><p>${escapeHtml(event.data.response)}</p></details>` : `<p>${eventText(event)}</p>`}</div>`).join('');
-  return items || '<p class="empty">Todavía no hay nada que recordar.</p>';
+  return sharedContactsHtml() + (items || '<p class="empty">Todavía no hay nada que recordar.</p>');
 }
 
 function setSendMode(busy) {
@@ -373,7 +454,7 @@ async function reloadRun() {
 }
 
 // Ejecuta una operación del servidor (con IA). Mientras dura, el botón de enviar pasa a ser «detener».
-async function perform(operation, { onError } = {}) {
+async function perform(operation, { onError, animate = false } = {}) {
   if (ui.busy) return;
   ui.busy = true; ui.storyError = '';
   ui.controller = new AbortController();
@@ -388,7 +469,9 @@ async function perform(operation, { onError } = {}) {
   try {
     state.run = await operation();
     ui.pendingLine = null;
+    ui.animateNext = animate;
     updateGame();
+    ui.animateNext = false;
   } catch (error) {
     ui.pendingLine = null;
     onError?.();
@@ -414,11 +497,12 @@ async function perform(operation, { onError } = {}) {
 
 const runAction = (action) => perform(() => request(`/api/runs/${state.run.id}/action`, { method:'POST', body:JSON.stringify(action) }));
 const talkRequest = (body) => request(`/api/runs/${state.run.id}/talk`, { method:'POST', body:JSON.stringify(body) });
-const startTalk = (npcId) => perform(() => talkRequest({ op:'start', npcId }));
-const endTalk = () => perform(() => talkRequest({ op:'end' }));
+const startTalk = (npcId) => perform(() => talkRequest({ op:'start', npcId }), { animate:true });
+const endTalk = () => perform(() => talkRequest({ op:'end' }), { animate:true });
+const leaveTalk = () => perform(() => talkRequest({ op:'leave' }));
 function say(text, input) {
   ui.pendingLine = text;
   const root = app.querySelector('.game');
   renderStory(root, place(state.run.player.locationId));
-  perform(() => talkRequest({ op:'say', text }), { onError: () => { input.value = text; } });
+  perform(() => talkRequest({ op:'say', text }), { onError: () => { input.value = text; }, animate:true });
 }

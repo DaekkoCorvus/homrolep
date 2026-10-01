@@ -50,6 +50,7 @@ test('contacts can be shared mid-conversation, only with every condition met, an
   assert.equal((await call(`/api/runs/${id}/contacts`, { handle: '@LunaSerp' })).status, 200);
 
   // la hora: segunda conversación el mismo día
+  await call(`/api/runs/${id}/talk`, { op: 'leave' });
   const rerun = runs.get(id); rerun.world.hour = 11; runs.set(id, rerun);
   await call(`/api/runs/${id}/talk`, { op: 'start', npcId: 'luna_serp' });
   const opening = seen.at(-1);

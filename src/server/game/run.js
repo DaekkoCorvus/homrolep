@@ -96,11 +96,16 @@ export function addPost(run, text) {
   return next;
 }
 
+// Línea hablada por un NPC: texto limpio, gesto opcional y tramos con la emoción activa en cada momento.
+export const npcLine = (reply) => ({
+  who: 'npc', text: reply.say, ...(reply.gesture ? { gesture: reply.gesture } : {}), ...(reply.segments?.length ? { segments: reply.segments } : {})
+});
+
 // --- Encuentros 1 a 1 con NPC -------------------------------------------------
 const EXCHANGE_MINUTES = 3;
 export const MAX_ENCOUNTER_LINES = 60;
 
-export function startEncounter(run, npc, opening) {
+export function startEncounter(run, npc, opening, contactNpc = null) {
   if (run.encounter) throw new Error('Ya estás en una conversación.');
   const next = structuredClone(run);
   const prior = { met: false, nameKnown: false, contact: false, encounters: 0, notes: [], history: [], ...(run.relationships?.[npc.id] ?? {}) };
@@ -109,20 +114,21 @@ export function startEncounter(run, npc, opening) {
   next.world = advanceTime(next.world, 1);
   next.encounter = {
     npcId: npc.id, locationId: next.player.locationId, startedAt: timeKey(next.world), origin,
-    lines: [{ who: 'npc', text: opening.say, ...(opening.gesture ? { gesture: opening.gesture } : {}) }]
+    lines: [npcLine(opening)], ...(opening.intent ? { intent: opening.intent } : {})
   };
   const relationship = { met: false, nameKnown: false, contact: false, added: false, encounters: 0, lastEnd: null, notes: [], history: [], ...(next.relationships?.[npc.id] ?? {}) };
   next.relationships = { ...next.relationships, [npc.id]: { ...relationship, met: true } };
   next.eventLog.push({ time: timeKey(next.world), type: 'conversation_started', data: { npcId: npc.id } });
+  if (contactNpc) shareContact(next, contactNpc);
   next.updatedAt = new Date().toISOString();
   return next;
 }
 
 // El NPC comparte su usuario de contacto: queda constancia en el registro y, si hay conversación, una tarjeta visible.
 function shareContact(run, npc) {
-  run.relationships[npc.id] = { ...run.relationships[npc.id], contact: true };
+  run.relationships[npc.id] = { ...run.relationships[npc.id], contact: true, contactAt: timeKey(run.world) };
   run.eventLog.push({ time: timeKey(run.world), type: 'contact_shared', data: { npcId: npc.id, handle: npc.contact.handle } });
-  if (run.encounter) run.encounter.lines.push({ who: 'system', kind: 'contact', npcId: npc.id, handle: npc.contact.handle, text: `${npc.name} te comparte su contacto` });
+  if (run.encounter) run.encounter.lines.push(contactCard(npc));
 }
 
 // El jugador escribe un usuario en Mensajes. Solo funciona con quien ya lo compartió: nada de metajuego.
@@ -141,9 +147,11 @@ export function addExchange(run, playerText, reply, nameKnown, contactNpc = null
   if (!run.encounter) throw new Error('No estás hablando con nadie.');
   const text = String(playerText ?? '').trim().slice(0, 400);
   if (!text) throw new Error('Escribe qué le dices.');
+  if (run.encounter.closed) throw new Error('La conversación terminó. Pulsa Volver.');
   if (run.encounter.lines.length >= MAX_ENCOUNTER_LINES) throw new Error('La conversación se alarga demasiado. Despídete y retómala después.');
   const next = structuredClone(run);
-  next.encounter.lines.push({ who: 'player', text }, { who: 'npc', text: reply.say, ...(reply.gesture ? { gesture: reply.gesture } : {}) });
+  next.encounter.lines.push({ who: 'player', text }, npcLine(reply));
+  if (reply.intent !== undefined) next.encounter.intent = reply.intent || undefined;
   next.world = advanceTime(next.world, EXCHANGE_MINUTES);
   if (nameKnown) next.relationships[run.encounter.npcId].nameKnown = true;
   if (contactNpc) shareContact(next, contactNpc);
@@ -153,14 +161,28 @@ export function addExchange(run, playerText, reply, nameKnown, contactNpc = null
 
 export function endEncounter(run, npc, { relationship, farewell, contactGranted }) {
   if (!run.encounter) throw new Error('No estás hablando con nadie.');
+  if (run.encounter.closed) throw new Error('Ya te despediste.');
   const next = structuredClone(run);
   next.world = advanceTime(next.world, 1);
-  const text = closingText(npc, { farewell, contactGranted });
+  const spoken = typeof farewell === 'string' ? { say: farewell } : (farewell ?? {});
+  const goodbye = { ...spoken, say: spoken.say || `${npc.name} asiente mientras te despides.` };
+  const text = closingText(npc, { farewell: goodbye.say, contactGranted });
   next.relationships[npc.id] = { ...relationship, encounters: relationship.encounters + 1, lastEnd: timeKey(next.world) };
   if (contactGranted) next.eventLog.push({ time: timeKey(next.world), type: 'contact_shared', data: { npcId: npc.id, handle: npc.contact.handle } });
   next.eventLog.push({ time: timeKey(next.world), type: 'conversation_ended', data: { npcId: npc.id, contact: contactGranted, response: text } });
   next.narrative = { text, time: timeKey(next.world) };
   next.lastEncounter = structuredClone(run.encounter);
+  // La despedida y, si procede, la tarjeta de contacto se muestran dentro de la conversación; el jugador sale con «Volver».
+  next.encounter = { ...run.encounter, closed: true, lines: [...run.encounter.lines, npcLine(goodbye), ...(contactGranted ? [contactCard(npc)] : [])] };
+  next.updatedAt = new Date().toISOString();
+  return next;
+}
+
+const contactCard = (npc) => ({ who: 'system', kind: 'contact', npcId: npc.id, handle: npc.contact.handle, text: `${npc.name} te comparte su contacto` });
+
+export function leaveEncounter(run) {
+  if (!run.encounter?.closed) throw new Error('Primero despídete.');
+  const next = structuredClone(run);
   next.encounter = null;
   next.updatedAt = new Date().toISOString();
   return next;
@@ -195,7 +217,8 @@ export function replaceLastNpcLine(run, reply, contactNpc = null) {
     const at = next.eventLog.findLastIndex((event) => event.type === 'contact_shared' && event.data.npcId === line.npcId);
     if (at >= 0) next.eventLog.splice(at, 1);
   }
-  next.encounter.lines[index] = { who: 'npc', text: reply.say, ...(reply.gesture ? { gesture: reply.gesture } : {}) };
+  next.encounter.lines[index] = npcLine(reply);
+  if (reply.intent !== undefined) next.encounter.intent = reply.intent || undefined;
   if (contactNpc) shareContact(next, contactNpc);
   next.updatedAt = new Date().toISOString();
   return next;
@@ -203,11 +226,13 @@ export function replaceLastNpcLine(run, reply, contactNpc = null) {
 
 // Vuelve a aplicar el cierre de la última conversación con una evaluación nueva (la relación parte de su estado original).
 export function reapplyEnding(run, npc, { relationship, farewell, contactGranted }) {
+  const spoken = typeof farewell === 'string' ? { say: farewell } : (farewell ?? {});
   const source = run.lastEncounter;
   const event = [...run.eventLog].reverse().find((item) => item.type === 'conversation_ended');
   if (!source || !event) throw new Error('No hay un cierre de conversación que regenerar.');
   const next = structuredClone(run);
-  const text = closingText(npc, { farewell, contactGranted });
+  const text = closingText(npc, { farewell: spoken.say, contactGranted });
+  if (next.encounter?.closed) next.encounter.lines = [...source.lines, npcLine({ ...spoken, say: spoken.say || `${npc.name} asiente mientras te despides.` }), ...(contactGranted ? [contactCard(npc)] : [])];
   next.relationships[npc.id] = { ...relationship, encounters: source.origin.relationship.encounters + 1, lastEnd: next.relationships[npc.id]?.lastEnd ?? null };
   next.eventLog = next.eventLog.filter((item) => !(item.type === 'contact_shared' && item.time === event.time));
   if (contactGranted) next.eventLog.splice(next.eventLog.findIndex((item) => item.time === event.time && item.type === 'conversation_ended'), 0, { time: event.time, type: 'contact_shared', data: { npcId: npc.id, handle: npc.contact.handle } });

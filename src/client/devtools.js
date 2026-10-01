@@ -18,8 +18,16 @@ const PORTRAIT_MAX_HEIGHT = 1200;
 const norm = (value) => String(value ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
 const lines = (value) => (Array.isArray(value) ? value.join('\n') : '');
 
-let hooks = null; // { perform, runDev, reload }
+const dreq = (url, options = {}) => request(url, { ...options, dev: true });
+let hooks = { perform() {}, runDev() {}, reload() {}, setFx() {} }; // lo sustituye initDevtools al entrar en el juego
 export const initDevtools = (value) => { hooks = value; };
+
+// Importar una ficha de NPC (JSON propio o «character card» JSON/PNG) desde cualquier pantalla.
+export function pickAndImportCard() {
+  const input = Object.assign(document.createElement('input'), { type: 'file', accept: '.json,.png,application/json,image/png' });
+  input.onchange = () => importFile(input.files[0]);
+  input.click();
+}
 
 // Devuelve true si el texto era un comando (aunque falle), para que no se envíe como acción del jugador.
 export async function runCommand(text) {
@@ -35,8 +43,8 @@ export async function runCommand(text) {
   }
   if (!isDev()) { notify('Escribe /dev para activar las herramientas de desarrollo.'); return true; }
   if (command === '/ayuda' || command === '/help') openPanel();
-  else if (command === '/reiniciar' || command === '/restart') hooks.perform(() => hooks.runDev({ op: 'restart' }));
-  else if (command === '/regenerar' || command === '/regen') hooks.perform(() => hooks.runDev({ op: 'regen' }));
+  else if (command === '/reiniciar' || command === '/restart') hooks.perform(() => hooks.runDev({ op: 'restart' }), { animate: true });
+  else if (command === '/regenerar' || command === '/regen') hooks.perform(() => hooks.runDev({ op: 'regen' }), { animate: true });
   else if (command === '/hora') {
     const match = argument.match(/^(\d{1,2})(?::(\d{2}))?(?:\s+(\d+))?$/);
     if (!match) notify('Uso: /hora 14:30 [día]');
@@ -46,12 +54,12 @@ export async function runCommand(text) {
     if (!argument || !target) notify(`Lugares: ${state.world.locations.map((loc) => loc.id).join(', ')}`);
     else hooks.perform(() => hooks.runDev({ op: 'teleport', locationId: target.id }));
   } else if (command === '/contacto') {
-    const cards = await request('/api/dev/npcs');
+    const cards = await dreq('/api/dev/npcs');
     const card = cards.find((item) => item.id === norm(argument) || norm(item.name).startsWith(norm(argument)));
     if (!argument || !card) notify(`Uso: /contacto id (${cards.map((item) => item.id).join(', ')})`);
     else hooks.perform(() => hooks.runDev({ op: 'unlock_contact', npcId: card.id }));
   } else if (command === '/npc') {
-    if (argument) { const cards = await request('/api/dev/npcs'); const card = cards.find((item) => item.id === norm(argument) || norm(item.name).startsWith(norm(argument))); if (card) openEditor(card); else notify('No encontré ese NPC.'); }
+    if (argument) { const cards = await dreq('/api/dev/npcs'); const card = cards.find((item) => item.id === norm(argument) || norm(item.name).startsWith(norm(argument))); if (card) openEditor(card); else notify('No encontré ese NPC.'); }
     else openPanel();
   } else if (command === '/fichas') openPanel();
   else notify('Comando desconocido. Escribe /ayuda.');
@@ -72,7 +80,7 @@ function layer(className, html) {
 
 export async function openPanel() {
   let cards = [];
-  try { cards = await request('/api/dev/npcs'); } catch (error) { notify(error.message); return; }
+  try { cards = await dreq('/api/dev/npcs'); } catch (error) { notify(error.message); return; }
   const node = layer('dev-panel', `<div class="dev-sheet" role="dialog" aria-label="Herramientas de desarrollo">
     <header><h2>Desarrollo</h2><button type="button" data-close aria-label="Cerrar">×</button></header>
     <section><h3>Partida</h3><div class="dev-buttons">
@@ -82,8 +90,8 @@ export async function openPanel() {
       <div class="dev-buttons"><button type="button" data-new>Nuevo NPC</button><label class="file-button">Importar ficha<input type="file" accept=".json,.png,application/json,image/png" hidden data-import></label></div>
       <p class="dev-hint">Importa JSON propio, fichas «character card» v1/v2/v3 (JSON o PNG). También puedes dejar archivos en <code>data/canon/npcs/</code> y <code>assets/portraits/&lt;id&gt;/default.png</code> y reiniciar el servidor.</p></section>
     <section><h3>Comandos de chat</h3><dl class="dev-commands">${COMMANDS.map(([c, d]) => `<div><dt>${escapeHtml(c)}</dt><dd>${escapeHtml(d)}</dd></div>`).join('')}</dl></section></div>`);
-  node.querySelector('[data-act=restart]').onclick = () => { node.remove(); hooks.perform(() => hooks.runDev({ op: 'restart' })); };
-  node.querySelector('[data-act=regen]').onclick = () => { node.remove(); hooks.perform(() => hooks.runDev({ op: 'regen' })); };
+  node.querySelector('[data-act=restart]').onclick = () => { node.remove(); hooks.perform(() => hooks.runDev({ op: 'restart' }), { animate: true }); };
+  node.querySelector('[data-act=regen]').onclick = () => { node.remove(); hooks.perform(() => hooks.runDev({ op: 'regen' }), { animate: true }); };
   node.querySelector('[data-act=hour]').onclick = () => { const w = state.run.world; node.remove(); hooks.perform(() => hooks.runDev({ op: 'set_time', hour: (w.hour + 1) % 24, minute: w.minute, day: w.day + (w.hour === 23 ? 1 : 0) })); };
   node.querySelectorAll('[data-edit]').forEach((button) => button.onclick = () => openEditor(cards.find((card) => card.id === button.dataset.edit)));
   node.querySelectorAll('[data-export]').forEach((button) => button.onclick = () => exportCard(cards.find((card) => card.id === button.dataset.export)));
@@ -130,7 +138,7 @@ async function importFile(file, overwrite = false) {
   try {
     const isPng = /\.png$/i.test(file.name) || file.type === 'image/png';
     const body = isPng ? { kind: 'png', data: await toBase64(file) } : { kind: 'json', text: await file.text() };
-    const card = await request('/api/dev/npcs/import', { method: 'POST', body: JSON.stringify({ ...body, overwrite }) });
+    const card = await dreq('/api/dev/npcs/import', { method: 'POST', body: JSON.stringify({ ...body, overwrite }) });
     notify(`Importada: ${card.name}`);
     hooks.reload();
     openEditor(card);
@@ -224,7 +232,7 @@ export async function openEditor(card) {
   model.contact = { handle: '', conditions: [], ...(model.contact ?? {}) };
   model.connections ??= []; model.clothingLikes ??= []; model.clothingDislikes ??= [];
   let others = [];
-  try { others = (await request('/api/dev/npcs')).filter((item) => item.id !== model.id); } catch { /* sin lista de ids */ }
+  try { others = (await dreq('/api/dev/npcs')).filter((item) => item.id !== model.id); } catch { /* sin lista de ids */ }
   let tab = 'identity';
 
   const node = layer('dev-editor', `<form class="dev-sheet" role="dialog" aria-label="Editor de ficha">
@@ -238,7 +246,7 @@ export async function openEditor(card) {
   const portraitSection = () => {
     const portrait = model.portraits?.default;
     return `<section class="dev-portrait"><div class="portrait-preview">${portrait ? `<img src="${portrait}" alt="">` : '<span>Sin retrato</span>'}</div>
-      <div><p class="dev-hint">Retrato de novela visual (PNG/WebP con transparencia). Se optimiza al subirlo.</p>
+      <div><p class="dev-hint">Retrato de novela visual (PNG/WebP con transparencia). Se optimiza al subirlo. Emociones con imagen: <strong>${Object.keys(model.portraits ?? {}).join(", ") || "ninguna"}</strong>. El nombre de la emoción es el que usa el GM (p. ej. «feliz»).</p>
       <div class="portrait-options"><select data-quality aria-label="Calidad"><option value="balanced">WebP 92% (≈6× más ligero)</option><option value="max">WebP sin pérdida</option><option value="original">Subir tal cual</option></select>
       <input data-emotion value="default" aria-label="Emoción" placeholder="emoción" pattern="[a-z][a-z0-9_-]{0,20}"></div>
       <label class="file-button ${isNew ? 'disabled' : ''}">Subir retrato<input type="file" accept="image/png,image/webp,image/jpeg" hidden data-portrait ${isNew ? 'disabled' : ''}></label></div></section>`;
@@ -299,7 +307,7 @@ export async function openEditor(card) {
       try {
         const emotion = body.querySelector('[data-emotion]').value.trim() || 'default';
         const { blob, note } = await optimizeImage(file, body.querySelector('[data-quality]').value);
-        const saved = await request(`/api/dev/npcs/${model.id}/portrait`, { method: 'POST', body: JSON.stringify({ data: await toBase64(blob), emotion }) });
+        const saved = await dreq(`/api/dev/npcs/${model.id}/portrait`, { method: 'POST', body: JSON.stringify({ data: await toBase64(blob), emotion }) });
         model.portraits = saved.portraits;
         if (saved.portraits.default) body.querySelector('.portrait-preview').innerHTML = `<img src="${saved.portraits.default}" alt="">`;
         notify(`Retrato «${emotion}» guardado: ${note}`); hooks.reload();
@@ -315,7 +323,7 @@ export async function openEditor(card) {
     const error = form.querySelector('[data-error]'); error.textContent = '';
     try {
       const body = clean(); body.id = String(body.id ?? '').trim();
-      const saved = await request(`/api/dev/npcs/${body.id}`, { method: 'PUT', body: JSON.stringify(body) });
+      const saved = await dreq(`/api/dev/npcs/${body.id}`, { method: 'PUT', body: JSON.stringify(body) });
       notify(`Guardada: ${saved.name}`);
       node.remove(); hooks.reload();
     } catch (failure) { error.textContent = failure.message; }

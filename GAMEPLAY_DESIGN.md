@@ -126,7 +126,12 @@ Prueba de concepto con un solo NPC, **Luna Serp** (`data/canon/npcs/luna_serp.js
 - Ficha de NPC en 5 pestañas: Identidad (edad, género, raza: humano, ophidiano, infernal, celestial, noid), Personalidad (etiquetas, forma de hablar, ejemplo de voz, lenguaje del amor, contacto con condiciones), Apariencia, Historia (trasfondo sin límite, conocimientos, secretos) y Horario y conexiones con otros NPC.
 - Conciencia del tiempo: cada NPC recibe la hora actual y cuándo terminó la última conversación (`relacion.ultimaConversacion`, con `mismoDia`) y sus recuerdos con tiempo relativo («hoy a las 09:30, hace 2 horas»).
 - Contactos: el NPC solo comparte su usuario (`@LunaSerp`) si el GM lo decide y se cumplen TODAS las condiciones de su ficha, que el GM interpreta; puede pasar durante la conversación (tarjeta en pantalla) o al despedirse. El jugador debe escribir el usuario en Mensajes; si no se lo han compartido, «No agregues a personas desconocidas.». Compartir y agregar son estados distintos.
-- Pendiente: conocimientos vinculados a un lorebook.
+- Conversación dinámica: la respuesta del NPC se revela poco a poco (un toque la completa). El GM puede cambiar la expresión dentro de la frase con marcas `[eliz] ¡Qué alegría! [preocupada] ¿Estás bien?`; las emociones disponibles son las imágenes que existan en `assets/portraits/<id>/<emoción>.webp` (el motor se las comunica al GM y descarta las marcas desconocidas). Sin emociones se usa `default`.
+- Apertura y cierre: al abrir, el GM recibe sucesos recientes, lugar, hora, relación, recuerdos y estado del contacto; puede ofrecer su contacto desde el inicio, anotar una intención privada (`intent`) que se le devuelve en cada turno y hacer pequeños gestos (sin objetos mecánicos todavía). Al despedirse, una llamada juzga la charla y genera la despedida; la conversación queda cerrada hasta pulsar «Volver».
+- Contactos recibidos quedan en el Diario (con botón de copiar y estado) aunque no se agreguen; el NPC sabe cuándo compartió su contacto y, si el jugador no lo agrega ni escribe, puede mencionarlo en el siguiente encuentro según su personalidad.
+- Formato: en las líneas del jugador, `*acciones*` y `"diálogos"` se muestran diferenciados y llegan intactos al GM.
+- Fichas: Ajustes → «Importar ficha de personaje» (JSON propio o character card JSON/PNG), sin activar el modo desarrollador.
+- Pendiente: conocimientos vinculados a un lorebook; chat por mensajes (los NPC ya reciben `escribioAlgunaVez`); objetos y regalos reales con inventario.
 
 ## 10. Preguntas abiertas
 

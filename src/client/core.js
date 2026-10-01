@@ -11,7 +11,7 @@ try { const flag = new URLSearchParams(location.search).get('dev'); if (flag ===
 export const activeSignal = { current: null };
 
 export async function request(url, options = {}) {
-  const response = await fetch(url, { signal: activeSignal.current ?? undefined, headers:{ 'content-type':'application/json', ...(isDev() ? { 'x-hom-dev':'1' } : {}) }, ...options });
+  const response = await fetch(url, { signal: activeSignal.current ?? undefined, headers:{ 'content-type':'application/json', ...(isDev() || options.dev ? { 'x-hom-dev':'1' } : {}) }, ...options });
   const body = await response.json();
   if (!response.ok) throw Object.assign(new Error(body.error || 'No se pudo completar la acción.'), { code:body.code });
   return body;

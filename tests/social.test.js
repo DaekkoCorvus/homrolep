@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import path from 'node:path';
 import { loadNpcs, presentNpcs, validateEvaluation, applyEvaluation, affinityOf, emptyRelationship, mentionsName, MAX_SHIFT_PER_ENCOUNTER, temporalContext, timedNotes, findNpcByHandle } from '../src/server/game/npcs.js';
-import { createRun, startEncounter, addExchange, endEncounter, applyAction, addContact, grantContact } from '../src/server/game/run.js';
+import { createRun, startEncounter, addExchange, endEncounter, applyAction, addContact, grantContact, leaveEncounter } from '../src/server/game/run.js';
 import { createNanoGPT } from '../src/server/ai/provider.js';
 import { createAppServer } from '../src/server/index.js';
 
@@ -110,6 +110,12 @@ test('encounters spend time, block other actions and store the impression on clo
   const evaluation = validateEvaluation({ notes: [{ text: 'Amable.', valence: 1, evidence: 'soy Mara' }], farewell: 'Hasta luego.' }, run.encounter.lines);
   const { relationship, contactGranted } = applyEvaluation(run.relationships.luna_serp, evaluation, run.encounter.startedAt);
   run = endEncounter(run, luna, { relationship, farewell: evaluation.farewell, contactGranted });
+  assert.equal(run.encounter.closed, true, 'la conversación queda abierta hasta pulsar Volver');
+  assert.equal(run.encounter.lines.at(-1).text, 'Hasta luego.', 'la despedida es una línea más de la conversación');
+  assert.throws(() => addExchange(run, 'Una cosa más', { say: 'x' }, false), /terminó/);
+  assert.throws(() => applyAction(run, { type: 'wait' }, world), /conversación/);
+  assert.equal(run.relationships.luna_serp.lastEnd, 'DAY_1_08:05');
+  run = leaveEncounter(run);
   assert.equal(run.encounter, null);
   assert.equal(run.relationships.luna_serp.encounters, 1);
   assert.equal(run.relationships.luna_serp.notes.length, 1);
@@ -121,7 +127,7 @@ test('provider parses NPC replies and evaluations and rejects malformed output',
   const config = { apiKey: 'k', model: 'test-model' };
   const context = { npc: luna, player: { ...profile, name: 'Mara' }, world: at(1, 8), location: { name: "Luna's Coffee", description: 'x' }, relationship: emptyRelationship(), attitude: 'neutral', transcript: [], temporal: { ahora: 'día 1 (lunes), 08:00', ultimaConversacion: null }, memories: [], history: [] };
   const ok = await createNanoGPT(reply('```json\n{"say":"Buenos días.","gesture":"levanta la vista"}\n```')).npcReply({ ...context, opening: true }, config);
-  assert.deepEqual(ok, { say: 'Buenos días.', gesture: 'levanta la vista' });
+  assert.deepEqual(ok, { say: 'Buenos días.', gesture: 'levanta la vista', intent: '' });
   await assert.rejects(createNanoGPT(reply('no es json')).npcReply(context, config), { code: 'AI_RESPONSE' });
   await assert.rejects(createNanoGPT(reply('{"say":"  "}')).npcReply(context, config), { code: 'AI_RESPONSE' });
   const raw = await createNanoGPT(reply('{"notes":[],"contactOffer":false,"farewell":"Adiós"}')).evaluateEncounter(context, config);
@@ -171,7 +177,10 @@ test('talk API: hidden notes stay hidden, failures keep the run intact, contact 
   assert.equal((await call(`/api/runs/${id}/talk`, { op: 'say', text: 'Hola, qué tal' })).status, 200);
   const ended = await call(`/api/runs/${id}/talk`, { op: 'end' });
   assert.equal(ended.status, 200);
-  assert.equal(ended.body.encounter, null);
+  assert.equal(ended.body.encounter.closed, true);
+  assert.equal((await call(`/api/runs/${id}/talk`, { op: 'say', text: 'una más' })).status, 400, 'no se habla tras despedirse');
+  const left = await call(`/api/runs/${id}/talk`, { op: 'leave' });
+  assert.equal(left.body.encounter, null);
   assert.equal(ended.body.relationships.luna_serp.contact, true, 'el NPC compartió su contacto');
   assert.match(ended.body.narrative.text, /@LunaSerp/, 'el usuario se muestra en pantalla');
   assert.deepEqual(ended.body.contacts, [], 'aún no está agregado');

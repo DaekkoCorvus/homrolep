@@ -147,6 +147,8 @@ test('dev API is closed by default and supports restart, regenerate and time cha
 
   assert.equal((await call(`/api/runs/${id}/dev`, { op: 'teleport', locationId: 'park' })).status, 400, 'no se puede teletransportar en plena conversación');
   await call(`/api/runs/${id}/talk`, { op: 'end' });
+  assert.equal((await call(`/api/runs/${id}/dev`, { op: 'teleport', locationId: 'park' })).status, 400, 'tampoco antes de pulsar Volver');
+  await call(`/api/runs/${id}/talk`, { op: 'leave' });
   const moved = await call(`/api/runs/${id}/dev`, { op: 'teleport', locationId: 'park' });
   assert.equal(moved.body.player.locationId, 'park');
   assert.equal((await call(`/api/runs/${id}/dev`, { op: 'set_time', hour: 22, minute: 5 })).body.world.hour, 22);

@@ -2,9 +2,9 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createRun, setPrologue, applyAction, addPost, startEncounter, addExchange, endEncounter, rewindEncounter, replaceLastNpcLine, reapplyEnding, setWorldTime, addContact, grantContact } from './game/run.js';
+import { createRun, setPrologue, applyAction, addPost, startEncounter, addExchange, endEncounter, rewindEncounter, replaceLastNpcLine, reapplyEnding, setWorldTime, addContact, grantContact, leaveEncounter } from './game/run.js';
 import { validateNpcCard, fromForeignCard, parsePngCard, savePortrait, listPortraits, saveNpcCard, imageKind } from './game/cards.js';
-import { loadNpcs, presentNpcs, publicNpc, relationshipOf, affinityOf, attitudeOf, mentionsName, validateEvaluation, applyEvaluation, debugView, temporalContext, timedNotes, timedHistory, contactAllowed, findNpcByHandle } from './game/npcs.js';
+import { loadNpcs, presentNpcs, publicNpc, relationshipOf, affinityOf, attitudeOf, mentionsName, validateEvaluation, applyEvaluation, debugView, temporalContext, timedNotes, timedHistory, contactAllowed, findNpcByHandle, parseSpeech, recentEvents, contactInfo } from './game/npcs.js';
 import { createNanoGPT, AIError } from './ai/provider.js';
 import { createSettingsStore } from './ai/settings.js';
 import { saveRun, loadRun, listRuns } from './saves/store.js';
@@ -51,47 +51,73 @@ async function publicRun(run, dev = false) {
   return {
     ...run, relationships, encounterNpc,
     presence: await Promise.all(presentNpcs(npcs, run.player.locationId, run.world).map(toPublic)),
+    sharedContacts: [...npcs.values()].filter((npc) => run.relationships?.[npc.id]?.contact).map((npc) => ({ id: npc.id, name: npc.name, handle: npc.contact.handle, added: run.relationships[npc.id].added === true })),
     contacts: await Promise.all([...npcs.values()].filter((npc) => run.relationships?.[npc.id]?.added).map(toPublic))
   };
 }
 
-const contextFor = (run) => {
+// Contexto completo para el GM: lugar, hora, relación, recuerdos, sucesos recientes, contacto y emociones disponibles
+// (las que existan como imagen del NPC). `speak` convierte las marcas [\\emoción] de la respuesta en tramos.
+async function contextFor(run, npc) {
   const location = worldData.locations.find(({ id }) => id === run.player.locationId);
-  return (npc, relationship, transcript, extra = {}) => ({
+  const emotions = Object.keys(await listPortraits(assetDir, npc.id)).filter((name) => name !== 'default');
+  const build = (relationship, transcript, extra = {}) => ({
     npc, player: run.player, world: run.world, location, relationship, attitude: attitudeOf(affinityOf(relationship.notes)), transcript,
-    temporal: temporalContext(relationship, run.world), memories: timedNotes(relationship, run.world), history: timedHistory(relationship, run.world), ...extra
+    temporal: temporalContext(relationship, run.world), memories: timedNotes(relationship, run.world), history: timedHistory(relationship, run.world),
+    emotions, events: recentEvents(run, worldData, npcs), contact: contactInfo(npc, relationship, run.world), intent: run.encounter?.intent, ...extra
   });
-};
+  build.speak = (reply) => ({ ...reply, ...parseSpeech(reply.say, emotions) });
+  build.farewell = (text) => parseSpeech(text, emotions);
+  return build;
+}
+
+async function evaluateAndClose(run, npc, relationship, lines, startedAt, config, context) {
+  const raw = await ai.evaluateEncounter(context(relationship, lines), config);
+  const evaluation = validateEvaluation(raw, lines);
+  const { relationship: updated, contactGranted } = applyEvaluation(relationship, evaluation, startedAt, npc);
+  return { relationship: updated, farewell: context.farewell(evaluation.farewell), contactGranted };
+}
 
 async function devOperation(run, body, config) {
-  const context = contextFor(run);
   if (body.op === 'restart') {
     const { run: base, npcId } = rewindEncounter(run);
     if (body.reopen === false) return base;
     const npc = npcs.get(npcId);
-    const opening = await ai.npcReply(contextFor(base)(npc, relationshipOf(base, npc.id), [], { opening: true }), config);
-    return startEncounter(base, npc, opening);
+    const context = await contextFor(base, npc);
+    const relationship = relationshipOf(base, npc.id);
+    const opening = context.speak(await ai.npcReply(context(relationship, [], { opening: true }), config));
+    return startEncounter(base, npc, opening, contactAllowed(npc, relationship, opening.contact) ? npc : null);
   }
   if (body.op === 'regen') {
+    if (run.encounter?.closed && run.lastEncounter) {
+      const source = run.lastEncounter;
+      const npc = npcs.get(source.npcId);
+      const context = await contextFor(run, npc);
+      const midGrant = source.lines.some((line) => line.kind === 'contact');
+      const original = { ...source.origin.relationship, ...(midGrant ? { contact: true } : {}) };
+      const result = await evaluateAndClose(run, npc, original, source.lines, source.startedAt, config, context);
+      return reapplyEnding(run, npc, result);
+    }
     if (run.encounter) {
       const npc = npcs.get(run.encounter.npcId);
+      const context = await contextFor(run, npc);
       const lines = run.encounter.lines;
       const index = lines.findLastIndex((line) => line.who === 'npc');
       const undoesContact = lines.slice(index + 1).some((line) => line.kind === 'contact');
       const relationship = { ...relationshipOf(run, npc.id), ...(undoesContact ? { contact: false } : {}) };
       const transcript = lines.slice(0, index);
-      const reply = await ai.npcReply(context(npc, relationship, transcript, { opening: transcript.length === 0 }), config);
+      const reply = context.speak(await ai.npcReply(context(relationship, transcript, { opening: transcript.length === 0 }), config));
       return replaceLastNpcLine(run, reply, contactAllowed(npc, relationship, reply.contact) ? npc : null);
     }
     const last = run.eventLog.at(-1);
     if (last?.type === 'conversation_ended' && run.lastEncounter) {
-      const npc = npcs.get(run.lastEncounter.npcId);
-      const midGrant = run.lastEncounter.lines.some((line) => line.kind === 'contact');
-      const original = { ...run.lastEncounter.origin.relationship, ...(midGrant ? { contact: true } : {}) };
-      const raw = await ai.evaluateEncounter(context(npc, original, run.lastEncounter.lines), config);
-      const evaluation = validateEvaluation(raw, run.lastEncounter.lines);
-      const { relationship, contactGranted } = applyEvaluation(original, evaluation, run.lastEncounter.startedAt, npc);
-      return reapplyEnding(run, npc, { relationship, farewell: evaluation.farewell, contactGranted });
+      const source = run.lastEncounter;
+      const npc = npcs.get(source.npcId);
+      const context = await contextFor(run, npc);
+      const midGrant = source.lines.some((line) => line.kind === 'contact');
+      const original = { ...source.origin.relationship, ...(midGrant ? { contact: true } : {}) };
+      const result = await evaluateAndClose(run, npc, original, source.lines, source.startedAt, config, context);
+      return reapplyEnding(run, npc, result);
     }
     if (last?.data?.response && !String(last.type).startsWith('conversation')) {
       const before = { ...run, eventLog: run.eventLog.slice(0, -1), player: { ...run.player, locationId: last.from ?? run.player.locationId } };
@@ -161,33 +187,35 @@ async function devRoutes(request, response, pathname) {
 }
 
 async function talk(run, body, config) {
-  const context = contextFor(run);
   if (body.op === 'start') {
     const npc = npcs.get(String(body.npcId));
     if (run.encounter) throw Object.assign(new Error('Ya estás en una conversación.'), { status: 409 });
     if (!npc || !presentNpcs(npcs, run.player.locationId, run.world).includes(npc)) throw new Error('Esa persona no está aquí ahora.');
-    const opening = await ai.npcReply(context(npc, relationshipOf(run, npc.id), [], { opening: true }), config);
-    return startEncounter(run, npc, opening);
+    const context = await contextFor(run, npc);
+    const relationship = relationshipOf(run, npc.id);
+    const opening = context.speak(await ai.npcReply(context(relationship, [], { opening: true }), config));
+    return startEncounter(run, npc, opening, contactAllowed(npc, relationship, opening.contact) ? npc : null);
   }
   const encounter = run.encounter;
   if (!encounter) throw new Error('No estás hablando con nadie.');
+  if (body.op === 'leave') return leaveEncounter(run);
   const npc = npcs.get(encounter.npcId);
   const relationship = relationshipOf(run, npc.id);
+  const context = await contextFor(run, npc);
   if (body.op === 'say') {
+    if (encounter.closed) throw new Error('La conversación terminó. Pulsa Volver.');
     const text = String(body.text ?? '').trim().slice(0, 400);
     if (!text) throw new Error('Escribe qué le dices.');
     const nameKnown = relationship.nameKnown || mentionsName(text, run.player.name);
     const transcript = [...encounter.lines, { who: 'player', text }];
     const current = { ...relationship, nameKnown };
-    const reply = await ai.npcReply(context(npc, current, transcript), config);
+    const reply = context.speak(await ai.npcReply(context(current, transcript), config));
     return addExchange(run, text, reply, nameKnown, contactAllowed(npc, current, reply.contact) ? npc : null);
   }
   if (body.op === 'end') {
+    if (encounter.closed) throw new Error('Ya te despediste.');
     if (!encounter.lines.some((line) => line.who === 'player')) return endEncounter(run, npc, { relationship, farewell: '', contactGranted: false });
-    const raw = await ai.evaluateEncounter(context(npc, relationship, encounter.lines), config);
-    const evaluation = validateEvaluation(raw, encounter.lines);
-    const { relationship: updated, contactGranted } = applyEvaluation(relationship, evaluation, encounter.startedAt, npc);
-    return endEncounter(run, npc, { relationship: updated, farewell: evaluation.farewell, contactGranted });
+    return endEncounter(run, npc, await evaluateAndClose(run, npc, relationship, encounter.lines, encounter.startedAt, config, context));
   }
   throw new Error('Operación de conversación desconocida.');
 }

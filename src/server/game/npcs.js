@@ -54,6 +54,69 @@ export function temporalContext(relationship, world) {
 export const timedNotes = (relationship, world, count = 8) => relationship.notes.slice(-count).map((note) => ({ cuando: describeWhen(note.time, world), nota: note.text }));
 export const timedHistory = (relationship, world, count = 4) => relationship.history.slice(-count).map((item) => ({ cuando: describeWhen(item.time, world), resumen: item.text }));
 
+// --- Voz y emociones --------------------------------------------------------------------------
+// El GM marca cambios de expresión dentro de la frase: «[\feliz] ¡Qué alegría verte! [\preocupada] ¿Estás bien?».
+// Solo valen las emociones que existan como imagen del NPC; el resto de marcas se descarta.
+const MARK = /\[\s*(?:comando\s*)?[\\/]\s*([\p{L}\p{N}_-]+)\s*\]/gu;
+const fold = (value) => String(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+export function parseSpeech(raw, allowed = []) {
+  const known = new Map([['default', 'default'], ...allowed.map((name) => [fold(name), name])]);
+  const parts = []; let emotion = 'default'; let last = 0;
+  const push = (text) => { if (text) parts.push({ emotion, text }); };
+  for (const match of String(raw ?? '').matchAll(MARK)) {
+    push(raw.slice(last, match.index));
+    const next = known.get(fold(match[1]));
+    if (next) emotion = next;
+    last = match.index + match[0].length;
+  }
+  push(String(raw ?? '').slice(last));
+  const segments = [];
+  for (const part of parts) {
+    let text = part.text.replace(/[ \t]+/g, ' ');
+    if (!segments.length || segments.at(-1).text.endsWith(' ')) text = text.replace(/^ /, '');
+    if (!text) continue;
+    if (segments.length && segments.at(-1).emotion === part.emotion) segments.at(-1).text += text;
+    else segments.push({ emotion: part.emotion, text });
+  }
+  if (segments.length) { segments.at(-1).text = segments.at(-1).text.replace(/ $/, ''); }
+  const say = segments.map((segment) => segment.text).join('').trim();
+  const expressive = segments.length > 1 || (segments[0] && segments[0].emotion !== 'default');
+  return { say, segments: expressive ? segments : [] };
+}
+
+// --- Sucesos recientes: contexto para el GM al abrir una conversación -------------------------
+export function recentEvents(run, worldData, npcs, count = 8) {
+  const place = (id) => worldData.locations.find((location) => location.id === id)?.name ?? id;
+  const person = (id) => npcs.get(id)?.name ?? id;
+  const describe = (event) => {
+    const data = event.data ?? {};
+    switch (event.type) {
+      case 'location_changed': return `El jugador fue de ${place(event.from)} a ${place(event.to)}`;
+      case 'player_action': return `El jugador hizo: ${String(data.text ?? '').slice(0, 160)}`;
+      case 'time_waited': return `El jugador esperó ${data.minutes} minutos`;
+      case 'slept': return 'El jugador durmió';
+      case 'worked': return 'El jugador trabajó';
+      case 'conversation_started': return `El jugador empezó a hablar con ${person(data.npcId)}`;
+      case 'conversation_ended': return `El jugador terminó de hablar con ${person(data.npcId)}`;
+      case 'contact_shared': return `${person(data.npcId)} compartió su contacto con el jugador`;
+      case 'contact_added': return `El jugador agregó a ${person(data.npcId)} a sus contactos`;
+      default: return null;
+    }
+  };
+  return run.eventLog.slice(-count * 2).map((event) => ({ cuando: describeWhen(event.time, run.world), que: describe(event) })).filter((item) => item.que).slice(-count);
+}
+
+export function contactInfo(npc, relationship, world) {
+  return {
+    yaCompartido: relationship.contact === true, agregadoPorElJugador: relationship.added === true,
+    escribioAlgunaVez: false, // el chat llegará más adelante
+    compartidoHace: relationship.contactAt ? describeWhen(relationship.contactAt, world) : null,
+    usuario: relationship.contact ? npc.contact?.handle : undefined,
+    condicionesContacto: relationship.contact ? undefined : npc.contact?.conditions ?? []
+  };
+}
+
 // --- Contactos --------------------------------------------------------------------------------
 export function findNpcByHandle(npcs, handle) {
   const wanted = String(handle ?? '').trim().toLowerCase();
@@ -82,7 +145,7 @@ export function presentNpcs(npcs, locationId, world) {
 export const publicNpc = (npc) => ({ id: npc.id, name: npc.name, role: npc.role });
 
 export function emptyRelationship() {
-  return { met: false, nameKnown: false, contact: false, added: false, encounters: 0, lastEnd: null, notes: [], history: [] };
+  return { met: false, nameKnown: false, contact: false, added: false, contactAt: null, encounters: 0, lastEnd: null, notes: [], history: [] };
 }
 
 export function relationshipOf(run, npcId) {
@@ -146,7 +209,7 @@ export function validateEvaluation(raw, lines) {
   const clip = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
   return {
     notes, wantsContact: raw?.contactOffer === true, conditionsMet: Array.isArray(raw?.contactConditions) ? raw.contactConditions.map((value) => value === true) : [],
-    farewell: clip(raw?.farewell, 260), summary: clip(raw?.summary, 200)
+    farewell: clip(raw?.farewell, 600), summary: clip(raw?.summary, 200)
   };
 }
 

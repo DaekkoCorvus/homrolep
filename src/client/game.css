@@ -273,3 +273,18 @@ body:has(.game) { background:#05070d; overflow:hidden; }
 .contact-card strong { font:600 1.25rem/1.2 ui-monospace,Consolas,monospace; color:#f2d6a8; letter-spacing:.02em; }
 .contact-card small { color:#d8ccb4; } .contact-card button { min-height:36px; padding:.2rem .8rem; border-radius:999px; border:1px solid #f2d6a8aa; background:transparent; color:#f2d6a8; font-size:.8rem; }
 #contact-form input { width:100%; padding:.7rem; border-radius:12px; border:1px solid #ffffff24; background:#ffffff0d; color:#f3ead9; font:inherit; }
+
+/* Conversación: formato del jugador, cambio de expresión, despedida y contactos recibidos */
+.dlg.you { font-style:normal; }
+.dlg.you .act { font-style:italic; color:#d8ccb4; opacity:.88; }
+.dlg.you .say,.dlg.you .plain { color:#f2d6a8; }
+.story-lead .act { font-style:italic; opacity:.85; }
+.vn-layer .vn-prev { position:absolute; bottom:0; left:50%; height:min(calc(var(--app-h,100dvh) * 78 / 100),170vw); width:auto; max-width:none; transform:translateX(-50%); object-fit:contain; opacity:0; pointer-events:none;
+  filter:drop-shadow(0 0 1.5px #fff2d6b3) drop-shadow(0 16px 24px #000b); }
+.vn-prev:not([src]) { display:none; }
+.game.closed .free-action { opacity:.35; pointer-events:none; }
+.shared-contacts h3 { margin:.2rem 0 .5rem; font:600 .72rem Inter,sans-serif; letter-spacing:.16em; text-transform:uppercase; color:#f2d6a8; }
+.shared { display:flex; align-items:center; gap:.6rem; padding:.7rem; border-radius:14px; background:#f2d6a814; border:1px solid #f2d6a844; margin-bottom:.5rem; }
+.shared > span { flex:1; display:grid; } .shared code { color:#f2d6a8; font-family:ui-monospace,Consolas,monospace; }
+.shared em { font-style:normal; font-size:.72rem; color:#a9a3b6; }
+.shared button { min-height:34px; padding:.2rem .7rem; border-radius:999px; border:1px solid #f2d6a8aa; background:transparent; color:#f2d6a8; font-size:.78rem; }
