@@ -59,3 +59,20 @@ test('the provider passes no timeout of its own and labels stops distinctly', as
   const stopped = createNanoGPT(async () => { throw Object.assign(new Error('x'), { name: 'AbortError' }); });
   await assert.rejects(stopped.verify({ apiKey: 'k', model: 'm', signal: controller.signal }), { code: 'AI_ABORTED' });
 });
+
+test('reasoning models get headroom and one automatic retry with a bigger budget before failing', async () => {
+  const budgets = [];
+  const ask = (responses) => createNanoGPT(async (url, options) => {
+    budgets.push(JSON.parse(options.body).max_tokens);
+    const next = responses.shift();
+    return { ok: true, json: async () => ({ choices: [{ message: { content: next.content }, finish_reason: next.finish }] }) };
+  }).chat({ apiKey: 'k', model: 'm' }, [{ role: 'user', content: 'hola' }], 900);
+
+  assert.equal(await ask([{ content: '', finish: 'length' }, { content: 'listo', finish: 'stop' }]), 'listo');
+  assert.ok(budgets[0] >= 900 * 6, 'el primer intento deja margen para el razonamiento');
+  assert.ok(budgets[1] > budgets[0], 'el reintento amplía el presupuesto');
+  budgets.length = 0;
+  await assert.rejects(ask([{ content: '', finish: 'length' }, { content: '', finish: 'length' }]), { code: 'AI_RESPONSE' });
+  assert.equal(budgets.length, 2, 'solo un reintento');
+  await assert.rejects(ask([{ content: '{"say":"cortad', finish: 'length' }, { content: '{"say":"cortad', finish: 'length' }]), { code: 'AI_RESPONSE' });
+});

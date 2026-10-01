@@ -55,15 +55,24 @@ export function createNanoGPT(fetchImpl = fetch) {
     }
   }
 
+  // `maxTokens` es el tamaño esperado de la respuesta visible. Los modelos con razonamiento (p. ej. Spark) gastan tokens
+  // pensando antes de responder, así que el tope real deja margen amplio y, si aun así se agota, se reintenta con más.
   async function chat(config, messages, maxTokens = 1600) {
-    const result = await call('chat/completions', config.apiKey, {
-      model:config.model, messages, stream:false, max_tokens:maxTokens
-    }, config.signal);
-    const choice = result.choices?.[0];
-    if (choice?.finish_reason === 'length') throw new AIError('El modelo agotó el límite de respuesta. Prueba un modelo con menos razonamiento en Ajustes.', 'AI_RESPONSE');
-    const text = choice?.message?.content;
-    if (typeof text !== 'string' || !text.trim()) throw new AIError('El modelo no devolvió texto. Prueba de nuevo o cambia de modelo.', 'AI_RESPONSE');
-    return text.trim();
+    let budget = Math.min(32000, maxTokens * 6 + 4000);
+    for (let attempt = 0; ; attempt++) {
+      const result = await call('chat/completions', config.apiKey, {
+        model:config.model, messages, stream:false, max_tokens:budget
+      }, config.signal);
+      const choice = result.choices?.[0];
+      const text = choice?.message?.content;
+      const hasText = typeof text === 'string' && text.trim();
+      if (choice?.finish_reason === 'length') { // respuesta truncada: no sirve ni siquiera con texto parcial
+        if (attempt === 0 && budget < 32000) { budget = Math.min(32000, budget * 4); continue; }
+        throw new AIError('El modelo agotó el límite de respuesta pensando. Reintenta, o prueba un modelo con menos razonamiento en Ajustes.', 'AI_RESPONSE');
+      }
+      if (!hasText) throw new AIError('El modelo no devolvió texto. Prueba de nuevo o cambia de modelo.', 'AI_RESPONSE');
+      return text.trim();
+    }
   }
 
   return {
