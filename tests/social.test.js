@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import path from 'node:path';
-import { loadNpcs, presentNpcs, validateEvaluation, applyEvaluation, affinityOf, emptyRelationship, mentionsName, MAX_SHIFT_PER_ENCOUNTER } from '../src/server/game/npcs.js';
-import { createRun, startEncounter, addExchange, endEncounter, applyAction } from '../src/server/game/run.js';
+import { loadNpcs, presentNpcs, validateEvaluation, applyEvaluation, affinityOf, emptyRelationship, mentionsName, MAX_SHIFT_PER_ENCOUNTER, temporalContext, timedNotes, findNpcByHandle } from '../src/server/game/npcs.js';
+import { createRun, startEncounter, addExchange, endEncounter, applyAction, addContact, grantContact } from '../src/server/game/run.js';
 import { createNanoGPT } from '../src/server/ai/provider.js';
 import { createAppServer } from '../src/server/index.js';
 
@@ -43,16 +43,52 @@ test('the engine rejects impressions that do not cite what the player said and c
   assert.equal(empty.notes[0].valence, 0, 'sin evidencia válida queda una nota neutra');
 });
 
-test('contact is granted only when the GM wants it and affinity is high enough', () => {
+test('contact is granted only when the GM wants it, affinity allows it and every condition is met', () => {
+  const plain = { contact: { conditions: [] } };
+  const gated = { contact: { conditions: ['ser amigos', 'haber regalado café'] } };
   const good = validateEvaluation({ notes: [{ text: 'Buena charla.', valence: 2, evidence: 'gracias' }, { text: 'Escucha.', valence: 1, evidence: 'Hola' }], contactOffer: true }, lines);
-  const granted = applyEvaluation(emptyRelationship(), good, 'DAY_1_08:00');
+  const granted = applyEvaluation(emptyRelationship(), good, 'DAY_1_08:00', plain);
   assert.equal(granted.contactGranted, true);
   assert.equal(granted.relationship.contact, true);
   const cold = validateEvaluation({ notes: [{ text: 'Meh.', valence: 1, evidence: 'Hola' }], contactOffer: true }, lines);
-  assert.equal(applyEvaluation(emptyRelationship(), cold, 't').contactGranted, false);
+  assert.equal(applyEvaluation(emptyRelationship(), cold, 't', plain).contactGranted, false);
   const bad = validateEvaluation({ notes: [{ text: 'Incómodo.', valence: -2, evidence: 'gracias' }], contactOffer: true }, lines);
-  assert.equal(applyEvaluation(emptyRelationship(), bad, 't').contactGranted, false);
+  assert.equal(applyEvaluation(emptyRelationship(), bad, 't', plain).contactGranted, false);
+  const withConditions = (met) => validateEvaluation({ notes: [{ text: 'Bien.', valence: 1, evidence: 'Hola' }], contactOffer: true, contactConditions: met }, lines);
+  assert.equal(applyEvaluation(emptyRelationship(), withConditions([true, false]), 't', gated).contactGranted, false, 'falta una condición');
+  assert.equal(applyEvaluation(emptyRelationship(), withConditions([true]), 't', gated).contactGranted, false, 'faltan condiciones por declarar');
+  assert.equal(applyEvaluation(emptyRelationship(), withConditions([true, true]), 't', gated).contactGranted, true);
+  assert.equal(applyEvaluation({ ...emptyRelationship(), contact: true }, withConditions([true, true]), 't', gated).contactGranted, false, 'no se comparte dos veces');
   assert.ok(affinityOf(good.notes.map((note) => ({ ...note }))) >= 2);
+});
+
+test('NPCs know how long ago they last talked, so the same day is not a new day', () => {
+  const rel = { ...emptyRelationship(), encounters: 1, lastEnd: 'DAY_1_09:30', notes: [{ text: 'Amable.', valence: 1, evidence: 'x', tags: [], time: 'DAY_1_09:00' }], history: [{ time: 'DAY_1_09:00', text: 'Charla.' }] };
+  const sameDay = temporalContext(rel, at(1, 11));
+  assert.equal(sameDay.ultimaConversacion.mismoDia, true);
+  assert.match(sameDay.ultimaConversacion.cuando, /^hoy a las 09:30 \(hace unas? \d* ?horas?\)$|hoy a las 09:30/);
+  assert.equal(temporalContext(rel, at(1, 9)).ultimaConversacion.mismoDia, true);
+  assert.match(temporalContext({ ...rel, lastEnd: 'DAY_1_09:30' }, { day: 1, hour: 9, minute: 45 }).ultimaConversacion.cuando, /hace 15 minutos/);
+  const nextDay = temporalContext(rel, at(2, 8));
+  assert.equal(nextDay.ultimaConversacion.mismoDia, false);
+  assert.match(nextDay.ultimaConversacion.cuando, /^ayer a las 09:30/);
+  assert.match(nextDay.ahora, /día 2 \(martes\)/);
+  assert.equal(temporalContext(emptyRelationship(), at(1, 8)).ultimaConversacion, null);
+  assert.match(timedNotes(rel, at(1, 12))[0].cuando, /^hoy a las 09:00/);
+});
+
+test('contact handles are found case-insensitively and unknown handles reveal nothing', () => {
+  assert.equal(findNpcByHandle(npcs, '@lunaserp')?.id, 'luna_serp');
+  assert.equal(findNpcByHandle(npcs, '@Nadie'), null);
+  assert.equal(findNpcByHandle(npcs, ''), null);
+  let run = createRun(profile);
+  assert.throws(() => addContact(run, luna), /desconocidas/);
+  assert.throws(() => addContact(run, null), /desconocidas/);
+  run = grantContact(run, luna);
+  assert.equal(run.relationships.luna_serp.contact, true);
+  run = addContact(run, luna);
+  assert.equal(run.relationships.luna_serp.added, true);
+  assert.throws(() => addContact(run, luna), /ya está/);
 });
 
 test('name detection is accent and punctuation tolerant', () => {
@@ -83,7 +119,7 @@ test('encounters spend time, block other actions and store the impression on clo
 test('provider parses NPC replies and evaluations and rejects malformed output', async () => {
   const reply = (content) => async () => ({ ok: true, json: async () => ({ choices: [{ message: { content }, finish_reason: 'stop' }] }) });
   const config = { apiKey: 'k', model: 'test-model' };
-  const context = { npc: luna, player: { ...profile, name: 'Mara' }, world: at(1, 8), location: { name: "Luna's Coffee", description: 'x' }, relationship: emptyRelationship(), attitude: 'neutral', transcript: [] };
+  const context = { npc: luna, player: { ...profile, name: 'Mara' }, world: at(1, 8), location: { name: "Luna's Coffee", description: 'x' }, relationship: emptyRelationship(), attitude: 'neutral', transcript: [], temporal: { ahora: 'día 1 (lunes), 08:00', ultimaConversacion: null }, memories: [], history: [] };
   const ok = await createNanoGPT(reply('```json\n{"say":"Buenos días.","gesture":"levanta la vista"}\n```')).npcReply({ ...context, opening: true }, config);
   assert.deepEqual(ok, { say: 'Buenos días.', gesture: 'levanta la vista' });
   await assert.rejects(createNanoGPT(reply('no es json')).npcReply(context, config), { code: 'AI_RESPONSE' });
@@ -97,7 +133,7 @@ test('talk API: hidden notes stay hidden, failures keep the run intact, contact 
   let fail = false;
   const ai = {
     npcReply: async ({ transcript }) => { if (fail) throw Object.assign(new Error('IA caída'), { status: 502 }); return { say: transcript.length ? 'Ajá.' : 'Bienvenida.' }; },
-    evaluateEncounter: async () => ({ notes: [{ text: 'Me cae bien.', valence: 2, evidence: 'qué tal', tags: ['amabilidad'] }, { text: 'Simpática.', valence: 1, evidence: 'qué tal' }], contactOffer: true, farewell: 'Vuelve.', summary: 'Charla breve.' }),
+    evaluateEncounter: async () => ({ notes: [{ text: 'Me cae bien.', valence: 2, evidence: 'qué tal', tags: ['amabilidad'] }, { text: 'Simpática.', valence: 1, evidence: 'qué tal' }], contactOffer: true, contactConditions: [true, true], farewell: 'Vuelve.', summary: 'Charla breve.' }),
     prologue: async () => ({ text: 'Llegas.', locationId: 'station' })
   };
   const server = createAppServer({
@@ -136,7 +172,15 @@ test('talk API: hidden notes stay hidden, failures keep the run intact, contact 
   const ended = await call(`/api/runs/${id}/talk`, { op: 'end' });
   assert.equal(ended.status, 200);
   assert.equal(ended.body.encounter, null);
-  assert.deepEqual(ended.body.contacts.map((npc) => npc.id), ['luna_serp']);
+  assert.equal(ended.body.relationships.luna_serp.contact, true, 'el NPC compartió su contacto');
+  assert.match(ended.body.narrative.text, /@LunaSerp/, 'el usuario se muestra en pantalla');
+  assert.deepEqual(ended.body.contacts, [], 'aún no está agregado');
+  const unknown = await call(`/api/runs/${id}/contacts`, { handle: '@Nadie' });
+  assert.equal(unknown.status, 400);
+  assert.match(unknown.body.error, /desconocidas/);
+  const added = await call(`/api/runs/${id}/contacts`, { handle: '@lunaserp' });
+  assert.equal(added.status, 200);
+  assert.deepEqual(added.body.contacts.map((npc) => npc.id), ['luna_serp']);
   assert.equal(ended.body.relationships.luna_serp.notes, undefined, 'las notas no salen al cliente normal');
   const dev = (await call(`/api/runs/${id}`, null, { 'x-hom-dev': '1' })).body;
   assert.equal(dev.relationships.luna_serp.notes.length, 2);

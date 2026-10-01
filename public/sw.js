@@ -1,4 +1,4 @@
-const CACHE = 'hom-rpg-v10';
+const CACHE = 'hom-rpg-v11';
 const ASSETS = ['/', '/styles.css', '/app.js', '/core.js', '/game.js', '/devtools.js', '/scenes.js', '/game.css', '/manifest.json', '/assets/V%C3%B3rtice%20liminal.html'];
 
 self.addEventListener('install', (event) => {

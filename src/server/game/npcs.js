@@ -14,6 +14,61 @@ export async function loadNpcs(directory) {
 }
 
 export const weekday = (world) => (world.day - 1) % 7;
+const DAY_NAMES = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'];
+const pad = (value) => String(value).padStart(2, '0');
+
+// --- Conciencia del tiempo: los NPC saben cuándo hablaron por última vez ---------------------
+export const minutesOfWorld = (world) => (world.day - 1) * 1440 + world.hour * 60 + world.minute;
+export function minutesOfKey(key) {
+  const match = /^DAY_(\d+)_(\d{2}):(\d{2})$/.exec(key ?? '');
+  return match ? (Number(match[1]) - 1) * 1440 + Number(match[2]) * 60 + Number(match[3]) : null;
+}
+
+export function describeGap(minutes) {
+  if (minutes < 2) return 'hace un momento';
+  if (minutes < 60) return `hace ${minutes} minutos`;
+  if (minutes < 1440) { const hours = Math.round(minutes / 60); return hours === 1 ? 'hace una hora' : `hace unas ${hours} horas`; }
+  const days = Math.floor(minutes / 1440);
+  return days === 1 ? 'hace un día' : `hace ${days} días`;
+}
+
+// «hoy a las 09:04 (hace 2 horas)», «ayer a las 18:30», «el día 3 (lunes) a las 10:00 (hace 4 días)».
+export function describeWhen(key, world) {
+  const then = minutesOfKey(key);
+  if (then === null) return 'en algún momento';
+  const dayThen = Math.floor(then / 1440) + 1; const hour = `${pad(Math.floor((then % 1440) / 60))}:${pad(then % 60)}`;
+  const gap = describeGap(Math.max(0, minutesOfWorld(world) - then));
+  const label = dayThen === world.day ? 'hoy' : dayThen === world.day - 1 ? 'ayer' : `el día ${dayThen} (${DAY_NAMES[(dayThen - 1) % 7]})`;
+  return `${label} a las ${hour} (${gap})`;
+}
+
+export function temporalContext(relationship, world) {
+  const lastKey = relationship.lastEnd ?? relationship.history?.at(-1)?.time ?? relationship.notes?.at(-1)?.time ?? null;
+  const last = minutesOfKey(lastKey);
+  const now = `día ${world.day} (${DAY_NAMES[weekday(world)]}), ${pad(world.hour)}:${pad(world.minute)}`;
+  if (last === null || !relationship.encounters) return { ahora: now, ultimaConversacion: null };
+  const sameDay = Math.floor(last / 1440) + 1 === world.day;
+  return { ahora: now, ultimaConversacion: { cuando: describeWhen(lastKey, world), mismoDia: sameDay, minutosDesdeEntonces: Math.max(0, minutesOfWorld(world) - last) } };
+}
+
+export const timedNotes = (relationship, world, count = 8) => relationship.notes.slice(-count).map((note) => ({ cuando: describeWhen(note.time, world), nota: note.text }));
+export const timedHistory = (relationship, world, count = 4) => relationship.history.slice(-count).map((item) => ({ cuando: describeWhen(item.time, world), resumen: item.text }));
+
+// --- Contactos --------------------------------------------------------------------------------
+export function findNpcByHandle(npcs, handle) {
+  const wanted = String(handle ?? '').trim().toLowerCase();
+  return wanted ? [...npcs.values()].find((npc) => npc.contact?.handle?.toLowerCase() === wanted) ?? null : null;
+}
+
+// El GM propone (`give`) y declara qué condiciones cree cumplidas; el motor solo acepta si TODAS constan.
+export function contactAllowed(npc, relationship, claim) {
+  if (relationship.contact || claim?.give !== true) return false;
+  const conditions = npc.contact?.conditions ?? [];
+  const affinity = affinityOf(relationship.notes);
+  if (!conditions.length) return affinity >= CONTACT_AFFINITY;
+  const met = Array.isArray(claim.conditionsMet) ? claim.conditionsMet : [];
+  return affinity >= 0 && conditions.every((_, index) => met[index] === true);
+}
 
 export function scheduleFor(npc, world) {
   const day = weekday(world);
@@ -27,7 +82,7 @@ export function presentNpcs(npcs, locationId, world) {
 export const publicNpc = (npc) => ({ id: npc.id, name: npc.name, role: npc.role });
 
 export function emptyRelationship() {
-  return { met: false, nameKnown: false, contact: false, encounters: 0, notes: [], history: [] };
+  return { met: false, nameKnown: false, contact: false, added: false, encounters: 0, lastEnd: null, notes: [], history: [] };
 }
 
 export function relationshipOf(run, npcId) {
@@ -89,13 +144,16 @@ export function validateEvaluation(raw, lines) {
   const lastLine = lines.filter((line) => line.who === 'player').at(-1)?.text ?? '';
   const notes = accepted.length ? accepted : [{ text: 'Charlamos un rato, sin nada que destacar.', valence: 0, evidence: lastLine.slice(0, 80), tags: [] }];
   const clip = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
-  return { notes, wantsContact: raw?.contactOffer === true, farewell: clip(raw?.farewell, 260), summary: clip(raw?.summary, 200) };
+  return {
+    notes, wantsContact: raw?.contactOffer === true, conditionsMet: Array.isArray(raw?.contactConditions) ? raw.contactConditions.map((value) => value === true) : [],
+    farewell: clip(raw?.farewell, 260), summary: clip(raw?.summary, 200)
+  };
 }
 
-export function applyEvaluation(relationship, evaluation, time) {
+export function applyEvaluation(relationship, evaluation, time, npc) {
   const notes = [...relationship.notes, ...evaluation.notes.map((note) => ({ ...note, time }))].slice(-MAX_NOTES);
-  const affinity = affinityOf(notes);
-  const contactGranted = !relationship.contact && evaluation.wantsContact && affinity >= CONTACT_AFFINITY;
+  const withNotes = { ...relationship, notes };
+  const contactGranted = contactAllowed(npc, withNotes, { give: evaluation.wantsContact, conditionsMet: evaluation.conditionsMet });
   return {
     relationship: {
       ...relationship, notes, contact: relationship.contact || contactGranted,

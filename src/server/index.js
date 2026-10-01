@@ -2,9 +2,9 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createRun, setPrologue, applyAction, addPost, startEncounter, addExchange, endEncounter, rewindEncounter, replaceLastNpcLine, reapplyEnding, setWorldTime } from './game/run.js';
+import { createRun, setPrologue, applyAction, addPost, startEncounter, addExchange, endEncounter, rewindEncounter, replaceLastNpcLine, reapplyEnding, setWorldTime, addContact, grantContact } from './game/run.js';
 import { validateNpcCard, fromForeignCard, parsePngCard, savePortrait, listPortraits, saveNpcCard, imageKind } from './game/cards.js';
-import { loadNpcs, presentNpcs, publicNpc, relationshipOf, affinityOf, attitudeOf, mentionsName, validateEvaluation, applyEvaluation, debugView } from './game/npcs.js';
+import { loadNpcs, presentNpcs, publicNpc, relationshipOf, affinityOf, attitudeOf, mentionsName, validateEvaluation, applyEvaluation, debugView, temporalContext, timedNotes, timedHistory, contactAllowed, findNpcByHandle } from './game/npcs.js';
 import { createNanoGPT, AIError } from './ai/provider.js';
 import { createSettingsStore } from './ai/settings.js';
 import { saveRun, loadRun, listRuns } from './saves/store.js';
@@ -46,18 +46,21 @@ async function exclusive(key, operation) {
 // Lo que el cliente ve de una Run: las impresiones ocultas de los NPC solo salen en modo desarrollador.
 async function publicRun(run, dev = false) {
   const toPublic = async (npc) => ({ ...publicNpc(npc), portraits: await listPortraits(assetDir, npc.id) });
-  const relationships = Object.fromEntries(Object.entries(run.relationships ?? {}).map(([id, item]) => [id, dev ? debugView(relationshipOf(run, id)) : { met: item.met, contact: item.contact, encounters: item.encounters }]));
+  const relationships = Object.fromEntries(Object.entries(run.relationships ?? {}).map(([id, item]) => [id, dev ? debugView(relationshipOf(run, id)) : { met: item.met, contact: item.contact, added: item.added === true, encounters: item.encounters }]));
   const encounterNpc = run.encounter ? await toPublic(npcs.get(run.encounter.npcId)) : null;
   return {
     ...run, relationships, encounterNpc,
     presence: await Promise.all(presentNpcs(npcs, run.player.locationId, run.world).map(toPublic)),
-    contacts: await Promise.all([...npcs.values()].filter((npc) => run.relationships?.[npc.id]?.contact).map(toPublic))
+    contacts: await Promise.all([...npcs.values()].filter((npc) => run.relationships?.[npc.id]?.added).map(toPublic))
   };
 }
 
 const contextFor = (run) => {
   const location = worldData.locations.find(({ id }) => id === run.player.locationId);
-  return (npc, relationship, transcript, extra = {}) => ({ npc, player: run.player, world: run.world, location, relationship, attitude: attitudeOf(affinityOf(relationship.notes)), transcript, ...extra });
+  return (npc, relationship, transcript, extra = {}) => ({
+    npc, player: run.player, world: run.world, location, relationship, attitude: attitudeOf(affinityOf(relationship.notes)), transcript,
+    temporal: temporalContext(relationship, run.world), memories: timedNotes(relationship, run.world), history: timedHistory(relationship, run.world), ...extra
+  });
 };
 
 async function devOperation(run, body, config) {
@@ -72,17 +75,22 @@ async function devOperation(run, body, config) {
   if (body.op === 'regen') {
     if (run.encounter) {
       const npc = npcs.get(run.encounter.npcId);
-      const transcript = run.encounter.lines.slice(0, -1);
-      const reply = await ai.npcReply(context(npc, relationshipOf(run, npc.id), transcript, { opening: transcript.length === 0 }), config);
-      return replaceLastNpcLine(run, reply);
+      const lines = run.encounter.lines;
+      const index = lines.findLastIndex((line) => line.who === 'npc');
+      const undoesContact = lines.slice(index + 1).some((line) => line.kind === 'contact');
+      const relationship = { ...relationshipOf(run, npc.id), ...(undoesContact ? { contact: false } : {}) };
+      const transcript = lines.slice(0, index);
+      const reply = await ai.npcReply(context(npc, relationship, transcript, { opening: transcript.length === 0 }), config);
+      return replaceLastNpcLine(run, reply, contactAllowed(npc, relationship, reply.contact) ? npc : null);
     }
     const last = run.eventLog.at(-1);
     if (last?.type === 'conversation_ended' && run.lastEncounter) {
       const npc = npcs.get(run.lastEncounter.npcId);
-      const original = run.lastEncounter.origin.relationship;
+      const midGrant = run.lastEncounter.lines.some((line) => line.kind === 'contact');
+      const original = { ...run.lastEncounter.origin.relationship, ...(midGrant ? { contact: true } : {}) };
       const raw = await ai.evaluateEncounter(context(npc, original, run.lastEncounter.lines), config);
       const evaluation = validateEvaluation(raw, run.lastEncounter.lines);
-      const { relationship, contactGranted } = applyEvaluation(original, evaluation, run.lastEncounter.startedAt);
+      const { relationship, contactGranted } = applyEvaluation(original, evaluation, run.lastEncounter.startedAt, npc);
       return reapplyEnding(run, npc, { relationship, farewell: evaluation.farewell, contactGranted });
     }
     if (last?.data?.response && !String(last.type).startsWith('conversation')) {
@@ -96,6 +104,11 @@ async function devOperation(run, body, config) {
     throw new Error('No hay nada que regenerar.');
   }
   if (body.op === 'set_time') return setWorldTime(run, body);
+  if (body.op === 'unlock_contact') {
+    const npc = npcs.get(String(body.npcId));
+    if (!npc) throw new Error('NPC desconocido.');
+    return grantContact(run, npc);
+  }
   if (body.op === 'teleport') {
     if (run.encounter) throw new Error('Termina la conversación antes de moverte.');
     if (!worldData.locations.some(({ id }) => id === body.locationId)) throw new Error('Lugar desconocido.');
@@ -131,7 +144,7 @@ async function devRoutes(request, response, pathname) {
   }
   const match = pathname.match(/^\/api\/dev\/npcs\/([a-z][a-z0-9_]{1,40})(\/portrait)?$/);
   if (match && request.method === 'PUT' && !match[2]) {
-    const card = validateNpcCard({ ...(await readBody(request, 200_000)), id: match[1] }, locationIds);
+    const card = validateNpcCard({ ...(await readBody(request, 600_000)), id: match[1] }, locationIds);
     await saveNpcCard(npcDir, card);
     npcs.set(card.id, card);
     return sendJson(response, 200, await withPortraits(card));
@@ -165,14 +178,15 @@ async function talk(run, body, config) {
     if (!text) throw new Error('Escribe qué le dices.');
     const nameKnown = relationship.nameKnown || mentionsName(text, run.player.name);
     const transcript = [...encounter.lines, { who: 'player', text }];
-    const reply = await ai.npcReply(context(npc, { ...relationship, nameKnown }, transcript), config);
-    return addExchange(run, text, reply, nameKnown);
+    const current = { ...relationship, nameKnown };
+    const reply = await ai.npcReply(context(npc, current, transcript), config);
+    return addExchange(run, text, reply, nameKnown, contactAllowed(npc, current, reply.contact) ? npc : null);
   }
   if (body.op === 'end') {
     if (!encounter.lines.some((line) => line.who === 'player')) return endEncounter(run, npc, { relationship, farewell: '', contactGranted: false });
     const raw = await ai.evaluateEncounter(context(npc, relationship, encounter.lines), config);
     const evaluation = validateEvaluation(raw, encounter.lines);
-    const { relationship: updated, contactGranted } = applyEvaluation(relationship, evaluation, encounter.startedAt);
+    const { relationship: updated, contactGranted } = applyEvaluation(relationship, evaluation, encounter.startedAt, npc);
     return endEncounter(run, npc, { relationship: updated, farewell: evaluation.farewell, contactGranted });
   }
   throw new Error('Operación de conversación desconocida.');
@@ -230,7 +244,7 @@ async function api(request, response, pathname) {
       return sendRun(201, run);
     });
   }
-  const match = pathname.match(/^\/api\/runs\/([0-9a-f-]{36})(?:\/(action|posts|talk|dev))?$/i);
+  const match = pathname.match(/^\/api\/runs\/([0-9a-f-]{36})(?:\/(action|posts|talk|dev|contacts))?$/i);
   if (!match) return sendJson(response, 404, { error: 'Ruta no encontrada.' });
   const [, id, operation] = match;
   if (request.method === 'GET' && !operation) return sendRun(200, await store.loadRun(id));
@@ -254,6 +268,15 @@ async function api(request, response, pathname) {
     return exclusive(id, async () => {
       const config = await requireConfig();
       const run = await devOperation(await store.loadRun(id), body, config);
+      await save(run);
+      return sendRun(200, run);
+    });
+  }
+  if (request.method === 'POST' && operation === 'contacts') {
+    const body = await readBody(request);
+    return exclusive(id, async () => {
+      // Sin pistas: un usuario inexistente y uno aún desconocido dan el mismo mensaje.
+      const run = addContact(await store.loadRun(id), findNpcByHandle(npcs, body.handle));
       await save(run);
       return sendRun(200, run);
     });

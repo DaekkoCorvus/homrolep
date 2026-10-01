@@ -53,7 +53,7 @@ test('slow models are never cut off, and stopping aborts the upstream call witho
 test('the provider passes no timeout of its own and labels stops distinctly', async () => {
   let received;
   const ai = createNanoGPT(async (url, options) => { received = options; return completion('{"say":"hola"}'); });
-  await ai.npcReply({ npc: { name: 'X', role: '', personality: {}, knowledge: [], secrets: [] }, player: { age: 20, gender: 'man' }, world: { day: 1, hour: 9, minute: 0 }, location: { name: 'L', description: '' }, relationship: { nameKnown: false, encounters: 0, notes: [], history: [] }, attitude: 'neutral', transcript: [] }, { apiKey: 'k', model: 'm' });
+  await ai.npcReply({ npc: { name: 'X', role: '', personality: {}, knowledge: [], secrets: [] }, player: { age: 20, gender: 'man' }, world: { day: 1, hour: 9, minute: 0 }, location: { name: 'L', description: '' }, relationship: { nameKnown: false, encounters: 0, notes: [], history: [] }, attitude: 'neutral', transcript: [], temporal: { ahora: 'día 1', ultimaConversacion: null }, memories: [], history: [] }, { apiKey: 'k', model: 'm' });
   assert.equal(received.signal, undefined, 'sin señal ni tiempo límite propios');
   const controller = new AbortController(); controller.abort();
   const stopped = createNanoGPT(async () => { throw Object.assign(new Error('x'), { name: 'AbortError' }); });

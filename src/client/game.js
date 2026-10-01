@@ -188,11 +188,14 @@ function renderConversation(story) {
   const signature = `talk:${lines.map((line) => line.text).join('|')}:${ui.pendingLine ?? ''}`;
   if (story.dataset.sig === signature && !ui.storyError) return;
   story.dataset.sig = signature;
-  const rows = lines.map((line, i) => line.who === 'npc'
+  const rows = lines.map((line, i) => line.who === 'system'
+    ? `<div class="contact-card"><small>${escapeHtml(line.text)}</small><strong>${escapeHtml(line.handle)}</strong><button type="button" data-copy="${escapeHtml(line.handle)}">Copiar</button><small>Escríbelo en Mensajes para agregarla.</small></div>`
+    : line.who === 'npc'
     ? `<p class="dlg npc ${i === lines.length - 1 ? 'latest' : ''}"><b>${escapeHtml(npc.name)}</b>${line.gesture ? `<em>${escapeHtml(line.gesture)}</em>` : ''}<span>${escapeHtml(line.text)}</span></p>`
     : `<p class="dlg you">${escapeHtml(line.text)}</p>`);
   if (ui.pendingLine) rows.push(`<p class="dlg you">${escapeHtml(ui.pendingLine)}</p>`);
   story.innerHTML = rows.join('') + (ui.storyError ? `<p class="story-error" role="alert">${escapeHtml(ui.storyError)}</p>` : '');
+  story.querySelectorAll('[data-copy]').forEach((button) => button.onclick = async () => { try { await navigator.clipboard.writeText(button.dataset.copy); notify('Copiado.'); } catch { notify(button.dataset.copy); } });
   story.scrollTop = story.scrollHeight;
 }
 
@@ -279,6 +282,15 @@ function renderPhone() {
   screen.innerHTML = `<div class="app-bar"><button type="button" data-back aria-label="Volver">${icon('<path d="M15 5l-7 7 7 7"/>')}</button><h2>${titles[view]}</h2></div><div class="app-body">${bodies[view]()}</div>`;
   screen.querySelector('[data-back]').onclick = () => { ui.phoneView = 'home'; renderPhone(); };
   bindTravel(screen);
+  const contactForm = screen.querySelector('#contact-form');
+  if (contactForm) contactForm.onsubmit = async (event) => {
+    event.preventDefault();
+    const failure = contactForm.querySelector('[data-contact-error]'); failure.textContent = '';
+    try {
+      state.run = await request(`/api/runs/${state.run.id}/contacts`, { method:'POST', body:JSON.stringify({ handle:new FormData(contactForm).get('handle') }) });
+      renderPhone(); notify('Contacto agregado.');
+    } catch (error) { failure.textContent = error.message; }
+  };
   const post = screen.querySelector('#post-form');
   if (post) post.onsubmit = async (event) => {
     event.preventDefault();
@@ -301,8 +313,10 @@ function profileApp() {
 
 function messagesApp() {
   const contacts = state.run.contacts ?? [];
-  if (!contacts.length) return '<p class="empty">Todavía no tienes contactos. Si una conversación va bien, alguien puede dejarte el suyo.</p>';
-  return contacts.map((npc) => `<div class="contact"><span class="avatar">${initial(npc.name)}</span><span><strong>${escapeHtml(npc.name)}</strong><small>${escapeHtml(npc.role)}</small></span><em>Chat próximamente</em></div>`).join('');
+  const list = contacts.length
+    ? contacts.map((npc) => `<div class="contact"><span class="avatar">${initial(npc.name)}</span><span><strong>${escapeHtml(npc.name)}</strong><small>${escapeHtml(npc.role)}</small></span><em>Chat próximamente</em></div>`).join('')
+    : '<p class="empty">Todavía no tienes contactos. Cuando alguien te comparta su usuario, escríbelo aquí para agregarlo.</p>';
+  return `<form id="contact-form"><input name="handle" placeholder="@usuario" autocapitalize="none" autocomplete="off" spellcheck="false" maxlength="30" required><button type="submit">Agregar contacto</button><p class="error" data-contact-error role="alert"></p></form>${list}`;
 }
 
 function gmApp() {
@@ -318,6 +332,8 @@ function socialApp() {
   return `<form id="post-form"><textarea name="text" maxlength="280" rows="2" placeholder="¿Qué está pasando?" required></textarea><button type="submit">Publicar</button></form>${posts || '<p class="empty">El feed está en silencio. Publica algo.</p>'}`;
 }
 
+const npcName = (id) => state.run.contacts?.find((npc) => npc.id === id)?.name ?? state.run.encounterNpc?.name ?? state.run.presence?.find((npc) => npc.id === id)?.name ?? id;
+
 function eventText(event) {
   const name = (id) => escapeHtml(place(id)?.name || id);
   if (event.type === 'run_started') return 'La partida comenzó en Porta Magna.';
@@ -328,6 +344,8 @@ function eventText(event) {
   if (event.type === 'slept') return 'Dormiste ocho horas.';
   if (event.type === 'worked') return `Trabajaste y ganaste $${event.data.earned}.`;
   if (event.type === 'social_post_created') return 'Publicaste en la red social.';
+  if (event.type === 'contact_shared') return `${escapeHtml(npcName(event.data.npcId))} te compartió su contacto: ${escapeHtml(event.data.handle)}`;
+  if (event.type === 'contact_added') return `Agregaste a ${escapeHtml(npcName(event.data.npcId))} a tus contactos.`;
   if (event.type === 'conversation_started') return 'Empezaste a hablar con alguien.';
   if (event.type === 'conversation_ended') return event.data.contact ? 'Terminaste una conversación y conseguiste un contacto.' : 'Terminaste una conversación.';
   return escapeHtml(event.type);

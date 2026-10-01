@@ -11,8 +11,8 @@ import { createAppServer } from '../src/server/index.js';
 
 const locations = ['cafe', 'park'];
 const card = () => ({
-  id: 'mara_test', name: 'Mara', role: 'Florista', schedule: [{ days: [0, 1], from: 9, to: 17, locationId: 'park', activity: 'vende flores' }],
-  personality: { summary: 'Soñadora.', traits: 'dulce\nlista', likes: ['las flores'] }, background: 'Creció entre invernaderos.', contact: { method: 'tarjeta' }
+  id: 'mara_test', name: 'Mara', age: 31, gender: 'Mujer', race: 'celestial', role: 'Florista', summary: 'Soñadora.', schedule: [{ days: [0, 1], from: 9, to: 17, locationId: 'park', activity: 'vende flores' }],
+  personality: { traits: 'dulce\nlista', likes: ['las flores'] }, background: 'Creció entre invernaderos.', contact: { conditions: ['Ser amigos'] }
 });
 
 // PNG mínimo con un chunk tEXt «chara» (sin comprobar CRC; el parser no lo necesita).
@@ -27,18 +27,27 @@ test('NPC cards are validated and normalised', () => {
   assert.deepEqual(ok.personality.traits, ['dulce', 'lista']);
   assert.equal(ok.home, 'park');
   assert.equal(ok.tier, 'civil');
+  assert.equal(ok.race, 'celestial');
+  assert.equal(ok.age, 31);
+  assert.equal(ok.contact.handle, '@Mara', 'usuario por defecto a partir del nombre');
+  assert.deepEqual(ok.contact.conditions, ['Ser amigos']);
+  assert.equal(validateNpcCard({ ...card(), race: 'robot' }, locations).race, 'humano', 'raza desconocida → humano');
+  assert.equal(validateNpcCard({ ...card(), age: '' }, locations).age, null);
+  assert.ok(validateNpcCard({ ...card(), background: 'x'.repeat(150000) }, locations).background.length === 150000, 'el trasfondo ya no tiene el límite antiguo');
+  assert.throws(() => validateNpcCard({ ...card(), contact: { handle: 'sin arroba' } }, locations), /usuario/);
+  assert.throws(() => validateNpcCard({ ...card(), connections: [{ npcId: 'mara_test', relation: 'yo' }] }, locations), /consigo/);
+  assert.equal(validateNpcCard({ ...card(), connections: [{ npcId: 'luna_serp', relation: 'amiga' }] }, locations).connections[0].relation, 'amiga');
   assert.throws(() => validateNpcCard({ ...card(), id: 'Mal Id' }, locations), /id/);
   assert.throws(() => validateNpcCard({ ...card(), name: '' }, locations), /nombre/);
   assert.throws(() => validateNpcCard({ ...card(), schedule: [{ days: [0], from: 10, to: 9, locationId: 'park' }] }, locations), /horas/);
   assert.throws(() => validateNpcCard({ ...card(), schedule: [{ days: [0], from: 1, to: 9, locationId: 'nowhere' }] }, locations), /desconocido/);
-  assert.throws(() => validateNpcCard({ ...card(), background: 'x'.repeat(4001) }, locations), /4000/);
+  assert.throws(() => validateNpcCard({ ...card(), background: 'x'.repeat(200001) }, locations), /200000/);
 });
 
 test('foreign character cards (v2 JSON and PNG) map onto a reviewable draft', () => {
   const v2 = { spec: 'chara_card_v2', data: { name: 'Señor Ñandú', description: 'Un vendedor ambulante.', personality: 'Bromista', first_mes: 'Hola hola', mes_example: '<START>\nHola' } };
   const draft = validateNpcCard(fromForeignCard(v2, 'cafe'), locations);
   assert.equal(draft.id, 'senor_nandu');
-  assert.equal(draft.status, 'imported-needs-review');
   assert.match(draft.background, /vendedor/);
   assert.equal(draft.schedule[0].locationId, 'cafe');
   assert.deepEqual(parsePngCard(pngWithCard(v2)), v2);

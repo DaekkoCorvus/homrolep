@@ -10,6 +10,7 @@ const COMMANDS = [
   ['/ir lugar', 'Te lleva a un lugar sin gastar tiempo (id o nombre)'],
   ['/npc [id]', 'Abre el editor de la ficha de un NPC'],
   ['/fichas', 'Abre el panel con el listado, importar y exportar'],
+  ['/contacto id', 'Desbloquea el contacto de un NPC (como si lo hubiera compartido)'],
   ['/fx lite|full|auto', 'Calidad de efectos de la escena (lite congela las animaciones)']
 ];
 const DAYS = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
@@ -44,6 +45,11 @@ export async function runCommand(text) {
     const target = state.world.locations.find((loc) => norm(loc.id) === norm(argument) || norm(loc.name).startsWith(norm(argument)));
     if (!argument || !target) notify(`Lugares: ${state.world.locations.map((loc) => loc.id).join(', ')}`);
     else hooks.perform(() => hooks.runDev({ op: 'teleport', locationId: target.id }));
+  } else if (command === '/contacto') {
+    const cards = await request('/api/dev/npcs');
+    const card = cards.find((item) => item.id === norm(argument) || norm(item.name).startsWith(norm(argument)));
+    if (!argument || !card) notify(`Uso: /contacto id (${cards.map((item) => item.id).join(', ')})`);
+    else hooks.perform(() => hooks.runDev({ op: 'unlock_contact', npcId: card.id }));
   } else if (command === '/npc') {
     if (argument) { const cards = await request('/api/dev/npcs'); const card = cards.find((item) => item.id === norm(argument) || norm(item.name).startsWith(norm(argument))); if (card) openEditor(card); else notify('No encontré ese NPC.'); }
     else openPanel();
@@ -134,18 +140,70 @@ async function importFile(file, overwrite = false) {
   }
 }
 
+const RACE_OPTIONS = [['humano', 'Humano'], ['ophidiano', 'Ophidiano'], ['infernal', 'Infernal'], ['celestial', 'Celestial'], ['noid', 'Noid (robot consciente)']];
+const GENDER_OPTIONS = ['Mujer', 'Hombre', 'No binario', 'Sin género', 'Otro'];
+const TABS = [['identity', 'Identidad'], ['personality', 'Personalidad'], ['appearance', 'Apariencia'], ['story', 'Historia'], ['schedule', 'Horario y conexiones']];
+
+const getPath = (object, path) => path.split('.').reduce((value, key) => value?.[key], object);
+const setPath = (object, path, value) => {
+  const keys = path.split('.'); const last = keys.pop();
+  keys.reduce((target, key) => (target[key] ??= {}), object)[last] = value;
+};
+
 const blankCard = () => ({
-  id: '', name: '', role: '', tier: 'civil', status: 'draft', canonSource: '', background: '', exampleDialogue: '',
+  id: '', name: '', age: null, role: '', gender: 'Mujer', race: 'humano', tier: 'civil', summary: '',
+  appearance: '', clothingLikes: [], clothingDislikes: [],
+  personality: { traits: [], speech: '', likes: [], dislikes: [], boundaries: '', warmsUpWhen: '', coolsDownWhen: '', loveLanguage: '' },
+  exampleDialogue: '', background: '', knowledge: [], secrets: [],
   schedule: [{ days: [0, 1, 2, 3, 4, 5, 6], from: 8, to: 20, locationId: state.world.locations[0].id, activity: '' }],
-  personality: { summary: '', traits: [], speech: '', likes: [], dislikes: [], boundaries: '', warmsUpWhen: '', coolsDownWhen: '' },
-  knowledge: [], secrets: [], contact: { method: '', offerWhen: '' }, portraits: {}
+  connections: [], contact: { handle: '', conditions: [] }, portraits: {}
 });
 
-function field(label, name, value, { rows = 0, hint = '', readonly = false } = {}) {
-  const control = rows
-    ? `<textarea name="${name}" rows="${rows}">${escapeHtml(value ?? '')}</textarea>`
-    : `<input name="${name}" value="${escapeHtml(value ?? '')}" ${readonly ? 'readonly' : ''}>`;
+// Campos enlazados al modelo por ruta (data-bind): se rellenan como propiedades para evitar problemas de escape.
+function field(label, path, { kind = 'text', rows = 4, hint = '', readonly = false, placeholder = '', options = null } = {}) {
+  let control;
+  if (kind === 'area') control = `<textarea data-bind="${path}" rows="${rows}" placeholder="${escapeHtml(placeholder)}"></textarea>`;
+  else if (kind === 'select') control = `<select data-bind="${path}">${options.map(([value, text]) => `<option value="${escapeHtml(value)}">${escapeHtml(text)}</option>`).join('')}</select>`;
+  else control = `<input data-bind="${path}" type="${kind === 'number' ? 'number' : 'text'}" ${kind === 'number' ? 'min="0" inputmode="numeric"' : ''} ${readonly ? 'readonly' : ''} placeholder="${escapeHtml(placeholder)}" autocomplete="off">`;
   return `<label class="dev-field"><span>${label}</span>${control}${hint ? `<small>${hint}</small>` : ''}</label>`;
+}
+
+const tagsField = (label, path, { block = false, hint = '', placeholder = 'Escribe y pulsa Enter' } = {}) =>
+  `<div class="dev-field"><span>${label}</span><div class="tag-field" data-tags="${path}" data-block="${block ? 1 : 0}" data-placeholder="${escapeHtml(placeholder)}"></div>${hint ? `<small>${hint}</small>` : ''}</div>`;
+
+// Etiquetas: Enter (o salir del campo) crea la etiqueta; al tocar una aparecen editar y eliminar.
+function mountTags(root, model) {
+  const path = root.dataset.tags; const block = root.dataset.block === '1';
+  root.innerHTML = `<div class="tag-list"></div><input class="tag-input" placeholder="${root.dataset.placeholder}" enterkeyhint="done" autocomplete="off" autocapitalize="sentences">`;
+  const listEl = root.querySelector('.tag-list'); const input = root.querySelector('.tag-input');
+  let open = -1; let editing = -1;
+  const items = () => getPath(model, path) ?? [];
+  const commit = (next) => { setPath(model, path, next); open = -1; editing = -1; render(); };
+  const button = (label, aria, onClick, className = '') => {
+    const element = document.createElement('button'); element.type = 'button'; element.className = `tag-btn ${className}`; element.textContent = label; element.setAttribute('aria-label', aria); element.onclick = onClick; return element;
+  };
+  function render() {
+    listEl.innerHTML = '';
+    items().forEach((text, index) => {
+      const chip = document.createElement('span'); chip.className = `tag${block ? ' block' : ''}${open === index ? ' open' : ''}`;
+      if (editing === index) {
+        const edit = document.createElement(block ? 'textarea' : 'input'); edit.className = 'tag-edit'; edit.value = text; if (block) edit.rows = 3;
+        const finish = (save) => { const value = edit.value.trim(); if (save && value) commit(items().map((item, i) => (i === index ? value : item))); else { editing = -1; render(); } };
+        edit.onkeydown = (event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); finish(true); } else if (event.key === 'Escape') finish(false); };
+        edit.onblur = () => finish(true);
+        chip.append(edit); listEl.append(chip); setTimeout(() => edit.focus(), 0); return;
+      }
+      chip.append(button(text, `Opciones de ${text}`, () => { open = open === index ? -1 : index; render(); }, 'tag-label'));
+      if (open === index) {
+        chip.append(button('✎', 'Editar', () => { editing = index; open = -1; render(); }, 'tag-act'), button('✕', 'Eliminar', () => commit(items().filter((_, i) => i !== index)), 'tag-act danger'));
+      }
+      listEl.append(chip);
+    });
+  }
+  const add = () => { const value = input.value.trim(); input.value = ''; if (value && !items().includes(value)) commit([...items(), value]); };
+  input.onkeydown = (event) => { if (event.key === 'Enter' || (event.key === ',' && !block)) { event.preventDefault(); add(); } };
+  input.onblur = add;
+  render();
 }
 
 function scheduleRow(slot) {
@@ -155,65 +213,114 @@ function scheduleRow(slot) {
     <input data-activity value="${escapeHtml(slot.activity ?? '')}" placeholder="actividad"><button type="button" data-remove aria-label="Quitar horario">×</button></div></div>`;
 }
 
-export function openEditor(card) {
+const connectionRow = (link) => `<div class="slot link"><div class="slot-fields link-fields"><input data-npc value="${escapeHtml(link.npcId ?? '')}" list="npc-ids" placeholder="id del personaje" aria-label="Personaje"><input data-relation value="${escapeHtml(link.relation ?? '')}" placeholder="relación (amiga, rival…)" aria-label="Relación">
+  <input data-notes value="${escapeHtml(link.notes ?? '')}" placeholder="notas" aria-label="Notas"><button type="button" data-remove aria-label="Quitar conexión">×</button></div></div>`;
+
+export async function openEditor(card) {
   const isNew = !card;
-  const c = card ?? blankCard();
-  const p = c.personality;
-  const portrait = c.portraits?.default;
+  const model = structuredClone(card ?? blankCard());
+  model.summary ??= model.personality?.summary ?? '';
+  model.personality = { ...blankCard().personality, ...(model.personality ?? {}) };
+  model.contact = { handle: '', conditions: [], ...(model.contact ?? {}) };
+  model.connections ??= []; model.clothingLikes ??= []; model.clothingDislikes ??= [];
+  let others = [];
+  try { others = (await request('/api/dev/npcs')).filter((item) => item.id !== model.id); } catch { /* sin lista de ids */ }
+  let tab = 'identity';
+
   const node = layer('dev-editor', `<form class="dev-sheet" role="dialog" aria-label="Editor de ficha">
-    <header><h2>${isNew ? 'Nuevo NPC' : escapeHtml(c.name)}</h2><button type="button" data-close aria-label="Cerrar">×</button></header>
-    <section class="dev-portrait"><div class="portrait-preview">${portrait ? `<img src="${portrait}" alt="">` : '<span>Sin retrato</span>'}</div>
-      <div><p class="dev-hint">Retrato de novela visual (PNG con fondo transparente recomendado). Por ahora se usa uno; las emociones se añadirán después como <code>happy.png</code>, etc.</p>
-      <div class="portrait-options"><select data-quality aria-label="Calidad"><option value="balanced">WebP 92% (≈6× más ligero)</option><option value="max">WebP sin pérdida</option><option value="original">Subir tal cual</option></select>
-      <input data-emotion value="default" aria-label="Emoción" placeholder="emoción" pattern="[a-z][a-z0-9_-]{0,20}"></div>
-      <label class="file-button ${isNew ? 'disabled' : ''}">Subir retrato<input type="file" accept="image/png,image/webp,image/jpeg" hidden data-portrait ${isNew ? 'disabled' : ''}></label></div></section>
-    <section><h3>Identidad</h3>${field('Id (minúsculas y _)', 'id', c.id, { readonly: !isNew })}${field('Nombre', 'name', c.name)}${field('Rol', 'role', c.role)}${field('Estado', 'status', c.status, { hint: 'draft, revisado, canon…' })}${field('Fuente canon', 'canonSource', c.canonSource, { rows: 2 })}</section>
-    <section><h3>Personalidad</h3>${field('Resumen', 'summary', p.summary, { rows: 3 })}${field('Rasgos (uno por línea)', 'traits', lines(p.traits), { rows: 3 })}${field('Forma de hablar', 'speech', p.speech, { rows: 3 })}${field('Le gusta (uno por línea)', 'likes', lines(p.likes), { rows: 3 })}${field('Le desagrada (uno por línea)', 'dislikes', lines(p.dislikes), { rows: 3 })}${field('Límites', 'boundaries', p.boundaries, { rows: 3 })}${field('Se abre cuando…', 'warmsUpWhen', p.warmsUpWhen, { rows: 2 })}${field('Se cierra cuando…', 'coolsDownWhen', p.coolsDownWhen, { rows: 2 })}</section>
-    <section><h3>Detalle</h3>${field('Trasfondo (libre y largo)', 'background', c.background, { rows: 8, hint: 'Historia, hábitos, relaciones… hasta 4000 caracteres.' })}${field('Ejemplos de voz', 'exampleDialogue', c.exampleDialogue, { rows: 6, hint: 'Frases de muestra de cómo habla.' })}${field('Conocimientos (uno por línea)', 'knowledge', lines(c.knowledge), { rows: 3 })}${field('Secretos (uno por línea)', 'secrets', lines(c.secrets), { rows: 3 })}${field('Medio de contacto', 'contactMethod', c.contact.method)}${field('Ofrece su contacto cuando…', 'contactOffer', c.contact.offerWhen, { rows: 2 })}</section>
-    <section><h3>Horario</h3><div class="slots">${c.schedule.map(scheduleRow).join('')}</div><button type="button" data-add-slot>Añadir horario</button><p class="dev-hint">Días: L=0 … D=6. El día 1 del juego es lunes.</p></section>
+    <header><h2>${isNew ? 'Nuevo NPC' : escapeHtml(model.name)}</h2><button type="button" data-close aria-label="Cerrar">×</button></header>
+    <nav class="tabs" role="tablist">${TABS.map(([id, label]) => `<button type="button" role="tab" data-tab="${id}">${label}</button>`).join('')}</nav>
+    <div class="tab-body"></div><datalist id="npc-ids">${others.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join('')}</datalist>
     <p class="error" data-error role="alert"></p>
     <footer><button type="button" data-export-now>Exportar JSON</button><button type="submit" class="primary-dev">Guardar</button></footer></form>`);
-  const form = node.querySelector('form');
-  const slots = form.querySelector('.slots');
-  const removable = () => slots.querySelectorAll('[data-remove]').forEach((button) => button.onclick = () => { if (slots.children.length > 1) button.closest('.slot').remove(); });
-  removable();
-  form.querySelector('[data-add-slot]').onclick = () => { slots.insertAdjacentHTML('beforeend', scheduleRow({ days: [0, 1, 2, 3, 4, 5, 6], from: 8, to: 20, locationId: state.world.locations[0].id, activity: '' })); removable(); };
+  const form = node.querySelector('form'); const body = node.querySelector('.tab-body');
 
-  const collect = () => {
-    const data = Object.fromEntries(new FormData(form));
-    const split = (value) => String(value ?? '').split('\n').map((item) => item.trim()).filter(Boolean);
-    return {
-      id: data.id.trim(), name: data.name, role: data.role, tier: c.tier, status: data.status, canonSource: data.canonSource, home: c.home,
-      background: data.background, exampleDialogue: data.exampleDialogue,
-      schedule: [...slots.querySelectorAll('.slot')].map((slot) => ({
-        days: [...slot.querySelectorAll('[data-day]:checked')].map((box) => Number(box.dataset.day)), from: Number(slot.querySelector('[data-from]').value), to: Number(slot.querySelector('[data-to]').value),
-        locationId: slot.querySelector('[data-location]').value, activity: slot.querySelector('[data-activity]').value
-      })),
-      personality: { summary: data.summary, traits: split(data.traits), speech: data.speech, likes: split(data.likes), dislikes: split(data.dislikes), boundaries: data.boundaries, warmsUpWhen: data.warmsUpWhen, coolsDownWhen: data.coolsDownWhen },
-      knowledge: split(data.knowledge), secrets: split(data.secrets), contact: { method: data.contactMethod, offerWhen: data.contactOffer }
-    };
+  const portraitSection = () => {
+    const portrait = model.portraits?.default;
+    return `<section class="dev-portrait"><div class="portrait-preview">${portrait ? `<img src="${portrait}" alt="">` : '<span>Sin retrato</span>'}</div>
+      <div><p class="dev-hint">Retrato de novela visual (PNG/WebP con transparencia). Se optimiza al subirlo.</p>
+      <div class="portrait-options"><select data-quality aria-label="Calidad"><option value="balanced">WebP 92% (≈6× más ligero)</option><option value="max">WebP sin pérdida</option><option value="original">Subir tal cual</option></select>
+      <input data-emotion value="default" aria-label="Emoción" placeholder="emoción" pattern="[a-z][a-z0-9_-]{0,20}"></div>
+      <label class="file-button ${isNew ? 'disabled' : ''}">Subir retrato<input type="file" accept="image/png,image/webp,image/jpeg" hidden data-portrait ${isNew ? 'disabled' : ''}></label></div></section>`;
   };
-  form.querySelector('[data-export-now]').onclick = () => exportCard(collect());
+
+  const sections = {
+    identity: () => portraitSection() + field('Identificador (solo modo dev)', 'id', { readonly: !isNew, hint: 'Minúsculas, números y _. No se muestra al jugador.' }) + field('Nombre', 'name') + field('Edad', 'age', { kind: 'number' }) + field('Rol', 'role', { placeholder: 'Dueña y barista de…' })
+      + field('Género', 'gender', { kind: 'select', options: (GENDER_OPTIONS.includes(model.gender) || !model.gender ? GENDER_OPTIONS : [...GENDER_OPTIONS, model.gender]).map((value) => [value, value]) })
+      + field('Raza', 'race', { kind: 'select', options: RACE_OPTIONS }) + field('Resumen', 'summary', { kind: 'area', rows: 4, hint: 'Quién es, en pocas líneas.' }),
+    personality: () => tagsField('Rasgos', 'personality.traits') + field('Forma de hablar', 'personality.speech', { kind: 'area', rows: 4 }) + tagsField('Le gusta', 'personality.likes') + tagsField('Le desagrada', 'personality.dislikes')
+      + field('Límites', 'personality.boundaries', { kind: 'area', rows: 3 }) + field('Confía o se abre cuando…', 'personality.warmsUpWhen', { kind: 'area', rows: 3 }) + field('Desconfía o se cierra cuando…', 'personality.coolsDownWhen', { kind: 'area', rows: 3 })
+      + field('Ejemplo de voz', 'exampleDialogue', { kind: 'area', rows: 5, hint: 'Frases de muestra de cómo habla.' }) + field('Lenguaje del amor', 'personality.loveLanguage', { kind: 'area', rows: 3, hint: 'Cómo da y recibe cariño: palabras, tiempo juntos, detalles, ayuda, contacto físico…' })
+      + '<h3>Contacto</h3>' + field('Usuario de contacto', 'contact.handle', { placeholder: '@NombreUsuario', hint: 'Es lo que el jugador debe escribir en Mensajes. Solo lo ve cuando el personaje se lo comparte.' })
+      + tagsField('Ofrece su contacto cuando…', 'contact.conditions', { block: true, placeholder: 'Añade una condición y pulsa Enter', hint: 'Deben cumplirse TODAS y el GM las interpreta con lo vivido: «ser amigos», «haber hablado 3 veces», «haberle dado un regalo», «llevarlo a la azotea», «conocer cierto secreto»… Solo lo comparte si el jugador lo pide o ella lo ofrece, y nunca antes de cumplirlas. Sin condiciones basta una buena impresión.' }),
+    appearance: () => field('Apariencia', 'appearance', { kind: 'area', rows: 8, hint: 'Rasgos físicos, complexión, detalles que se notan. La IA lo usa al describirse o cuando se comenta su aspecto.' })
+      + tagsField('Prendas que le agradan', 'clothingLikes') + tagsField('Prendas que evita o le disgustan', 'clothingDislikes', { hint: 'Ropa que no usaría o que le incomoda usar.' }),
+    story: () => field('Trasfondo', 'background', { kind: 'area', rows: 16, hint: 'Sin límite de caracteres: historia, hábitos, relaciones.' })
+      + tagsField('Conocimientos', 'knowledge', { block: true, hint: 'Próximamente se vincularán con el lorebook para elegir de qué sucesos sabe y cómo.' }) + tagsField('Secretos', 'secrets', { block: true }),
+    schedule: () => `<h3>Horario</h3><div class="slots">${model.schedule.map(scheduleRow).join('')}</div><button type="button" data-add-slot>Añadir horario</button><p class="dev-hint">Días: L=0 … D=6. El día 1 del juego es lunes.</p>
+      <h3>Conexiones con otros personajes</h3><div class="links">${model.connections.map(connectionRow).join('')}</div><button type="button" data-add-link>Añadir conexión</button><p class="dev-hint">Relaciones con otros NPC (familia, amistad, rivalidad…). Puedes escribir el id de alguien que aún no existe.</p>`
+  };
+
+  const syncSchedule = () => {
+    model.schedule = [...body.querySelectorAll('.slots .slot')].map((slot) => ({
+      days: [...slot.querySelectorAll('[data-day]:checked')].map((box) => Number(box.dataset.day)), from: Number(slot.querySelector('[data-from]').value), to: Number(slot.querySelector('[data-to]').value),
+      locationId: slot.querySelector('[data-location]').value, activity: slot.querySelector('[data-activity]').value
+    }));
+    model.connections = [...body.querySelectorAll('.links .slot')].map((slot) => ({ npcId: slot.querySelector('[data-npc]').value.trim(), relation: slot.querySelector('[data-relation]').value, notes: slot.querySelector('[data-notes]').value })).filter((link) => link.npcId);
+  };
+
+  function show(name) {
+    tab = name;
+    form.querySelectorAll('[data-tab]').forEach((button) => { button.classList.toggle('active', button.dataset.tab === name); button.setAttribute('aria-selected', button.dataset.tab === name); });
+    body.innerHTML = sections[name]();
+    body.querySelectorAll('[data-bind]').forEach((element) => {
+      const path = element.dataset.bind; const value = getPath(model, path);
+      element.value = value ?? '';
+      element.addEventListener('input', () => setPath(model, path, element.type === 'number' ? (element.value === '' ? null : Number(element.value)) : element.value));
+    });
+    body.querySelectorAll('[data-tags]').forEach((element) => mountTags(element, model));
+    if (name === 'schedule') {
+      const bind = () => {
+        body.querySelectorAll('.slot input, .slot select').forEach((element) => { element.oninput = syncSchedule; element.onchange = syncSchedule; });
+        body.querySelectorAll('[data-remove]').forEach((button) => button.onclick = () => { const group = button.closest('.slots, .links'); if (group.classList.contains('links') || group.children.length > 1) { button.closest('.slot').remove(); syncSchedule(); } });
+      };
+      body.querySelector('[data-add-slot]').onclick = () => { body.querySelector('.slots').insertAdjacentHTML('beforeend', scheduleRow({ days: [0, 1, 2, 3, 4, 5, 6], from: 8, to: 20, locationId: state.world.locations[0].id, activity: '' })); bind(); syncSchedule(); };
+      body.querySelector('[data-add-link]').onclick = () => { body.querySelector('.links').insertAdjacentHTML('beforeend', connectionRow({})); bind(); };
+      bind();
+    }
+    if (name === 'identity') bindPortrait();
+  }
+
+  function bindPortrait() {
+    const upload = body.querySelector('[data-portrait]');
+    if (!upload) return;
+    upload.onchange = async (event) => {
+      const file = event.target.files[0]; if (!file) return;
+      try {
+        const emotion = body.querySelector('[data-emotion]').value.trim() || 'default';
+        const { blob, note } = await optimizeImage(file, body.querySelector('[data-quality]').value);
+        const saved = await request(`/api/dev/npcs/${model.id}/portrait`, { method: 'POST', body: JSON.stringify({ data: await toBase64(blob), emotion }) });
+        model.portraits = saved.portraits;
+        if (saved.portraits.default) body.querySelector('.portrait-preview').innerHTML = `<img src="${saved.portraits.default}" alt="">`;
+        notify(`Retrato «${emotion}» guardado: ${note}`); hooks.reload();
+      } catch (failure) { notify(failure.message); }
+    };
+  }
+
+  const clean = () => { const { portraits, ...rest } = model; return rest; };
+  form.querySelectorAll('[data-tab]').forEach((button) => { button.onclick = () => show(button.dataset.tab); });
+  form.querySelector('[data-export-now]').onclick = () => exportCard(clean());
   form.onsubmit = async (event) => {
     event.preventDefault();
     const error = form.querySelector('[data-error]'); error.textContent = '';
     try {
-      const body = collect();
+      const body = clean(); body.id = String(body.id ?? '').trim();
       const saved = await request(`/api/dev/npcs/${body.id}`, { method: 'PUT', body: JSON.stringify(body) });
       notify(`Guardada: ${saved.name}`);
       node.remove(); hooks.reload();
     } catch (failure) { error.textContent = failure.message; }
   };
-  form.querySelector('[data-portrait]').onchange = async (event) => {
-    const file = event.target.files[0]; if (!file) return;
-    try {
-      const emotion = form.querySelector('[data-emotion]').value.trim() || 'default';
-      const { blob, note } = await optimizeImage(file, form.querySelector('[data-quality]').value);
-      const saved = await request(`/api/dev/npcs/${c.id}/portrait`, { method: 'POST', body: JSON.stringify({ data: await toBase64(blob), emotion }) });
-      if (saved.portraits.default) form.querySelector('.portrait-preview').innerHTML = `<img src="${saved.portraits.default}" alt="">`;
-      notify(`Retrato «${emotion}» guardado: ${note}`); hooks.reload();
-    } catch (failure) { notify(failure.message); }
-  };
+  show(tab);
 }
 
 export const devLabel = () => (isDev() ? `DEV · ${place(state.run.player.locationId)?.name ?? ''}` : '');

@@ -1,9 +1,12 @@
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-// Fichas de NPC: validación, importación (nativa y formato «character card v2» de Tavern), retratos.
+// Fichas de NPC: validación, importación (nativa y formato «character card» de Tavern), retratos.
 const ID = /^[a-z][a-z0-9_]{1,40}$/;
+const HANDLE = /^@[A-Za-z0-9_]{2,24}$/;
 const TIERS = new Set(['civil', 'menor', 'historico']);
+export const RACES = ['humano', 'ophidiano', 'infernal', 'celestial', 'noid'];
+const MAX_BACKGROUND = 200_000; // sin límite práctico para el jugador; solo un tope de seguridad
 
 const text = (value, max, label, { required = false } = {}) => {
   const out = typeof value === 'string' ? value.trim() : '';
@@ -17,6 +20,15 @@ const list = (value, maxItems, maxLength, label) => {
   if (items.some((item) => item.length > maxLength)) throw new Error(`Un elemento de ${label} supera ${maxLength} caracteres.`);
   return items;
 };
+
+const slug = (name) => String(name ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+
+// Usuario de contacto por defecto: «@LunaSerp».
+export function defaultHandle(name) {
+  const base = String(name ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9]+/g, ' ').trim()
+    .split(' ').filter(Boolean).map((word) => word[0].toUpperCase() + word.slice(1)).join('');
+  return `@${base || 'Contacto'}`.slice(0, 25);
+}
 
 export function validateNpcCard(input, locationIds) {
   if (!input || typeof input !== 'object') throw new Error('La ficha no es un objeto válido.');
@@ -32,48 +44,58 @@ export function validateNpcCard(input, locationIds) {
     return { days, from, to, locationId: slot.locationId, activity: text(slot.activity, 80, 'la actividad') };
   });
   if (!schedule.length || schedule.length > 12) throw new Error('El NPC necesita entre 1 y 12 horarios.');
-  const tier = TIERS.has(input.tier) ? input.tier : 'civil';
-  const home = locationIds.includes(input.home) ? input.home : schedule[0].locationId;
-  const card = {
-    id, name: text(input.name, 60, 'el nombre', { required: true }), role: text(input.role, 120, 'el rol'), tier,
-    status: text(input.status, 60, 'el estado') || 'draft',
-    canonSource: text(input.canonSource, 800, 'la fuente canon'),
-    home, schedule,
-    background: text(input.background, 4000, 'el trasfondo'),
-    exampleDialogue: text(input.exampleDialogue, 3000, 'los ejemplos de voz'),
+  const name = text(input.name, 60, 'el nombre', { required: true });
+  const age = input.age === '' || input.age == null ? null : Number(input.age);
+  if (age !== null && (!Number.isInteger(age) || age < 0 || age > 100000)) throw new Error('La edad debe ser un número entero.');
+  const race = RACES.includes(input.race) ? input.race : 'humano';
+  const handle = text(input.contact?.handle, 25, 'el usuario de contacto') || defaultHandle(name);
+  if (!HANDLE.test(handle)) throw new Error('El usuario de contacto debe verse como @NombreUsuario (letras, números o _).');
+  const connections = (Array.isArray(input.connections) ? input.connections : []).map((link) => ({
+    npcId: text(link?.npcId, 41, 'el id del personaje conectado', { required: true }), relation: text(link?.relation, 80, 'la relación'), notes: text(link?.notes, 400, 'las notas de la conexión')
+  }));
+  if (connections.length > 30) throw new Error('Se admiten 30 conexiones como máximo.');
+  if (connections.some((link) => link.npcId === id)) throw new Error('Un personaje no puede conectarse consigo mismo.');
+  return {
+    id, name, age, role: text(input.role, 120, 'el rol'), gender: text(input.gender, 30, 'el género'), race,
+    tier: TIERS.has(input.tier) ? input.tier : 'civil',
+    summary: text(input.summary ?? p.summary, 1500, 'el resumen', { required: true }),
+    home: locationIds.includes(input.home) ? input.home : schedule[0].locationId,
+    appearance: text(input.appearance, 4000, 'la apariencia'),
+    clothingLikes: list(input.clothingLikes, 30, 140, 'las prendas que le agradan'),
+    clothingDislikes: list(input.clothingDislikes, 30, 140, 'las prendas que evita'),
     personality: {
-      summary: text(p.summary, 900, 'el resumen de personalidad', { required: true }),
-      traits: list(p.traits, 12, 40, 'los rasgos'),
-      speech: text(p.speech, 700, 'la forma de hablar'),
-      likes: list(p.likes, 14, 140, 'los gustos'),
-      dislikes: list(p.dislikes, 14, 140, 'lo que le desagrada'),
-      boundaries: text(p.boundaries, 700, 'los límites'),
-      warmsUpWhen: text(p.warmsUpWhen, 500, 'cuándo se abre'),
-      coolsDownWhen: text(p.coolsDownWhen, 500, 'cuándo se cierra')
+      traits: list(p.traits, 16, 60, 'los rasgos'),
+      speech: text(p.speech, 1500, 'la forma de hablar'),
+      likes: list(p.likes, 30, 140, 'los gustos'),
+      dislikes: list(p.dislikes, 30, 140, 'lo que le desagrada'),
+      boundaries: text(p.boundaries, 1500, 'los límites'),
+      warmsUpWhen: text(p.warmsUpWhen, 1500, 'cuándo se abre'),
+      coolsDownWhen: text(p.coolsDownWhen, 1500, 'cuándo se cierra'),
+      loveLanguage: text(p.loveLanguage, 800, 'el lenguaje del amor')
     },
-    knowledge: list(input.knowledge, 20, 240, 'los conocimientos'),
-    secrets: list(input.secrets, 10, 300, 'los secretos'),
-    contact: { method: text(input.contact?.method, 140, 'el medio de contacto'), offerWhen: text(input.contact?.offerWhen, 400, 'cuándo ofrece contacto') }
+    exampleDialogue: text(input.exampleDialogue, 8000, 'los ejemplos de voz'),
+    background: text(input.background, MAX_BACKGROUND, 'el trasfondo'),
+    knowledge: list(input.knowledge, 60, 400, 'los conocimientos'),
+    secrets: list(input.secrets, 30, 600, 'los secretos'),
+    schedule, connections,
+    contact: { handle, conditions: list(input.contact?.conditions, 20, 500, 'las condiciones de contacto') }
   };
-  return card;
 }
-
-const slug = (name) => String(name ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
 
 // Mapeo best-effort de character cards v1/v2/v3 al formato del proyecto. La persona hay que revisarla a mano.
 export function fromForeignCard(raw, defaultLocation) {
   const data = raw?.data ?? raw;
   const name = text(data?.name, 60, 'el nombre', { required: true });
-  const description = text(data.description, 4000, 'la descripción');
-  const personality = text(data.personality, 900, 'la personalidad');
+  const description = text(data.description, MAX_BACKGROUND, 'la descripción');
+  const personality = text(data.personality, 1500, 'la personalidad');
   return {
-    id: /^[a-z]/.test(slug(name)) ? slug(name) : `npc_${slug(name)}`, name, role: 'Personaje importado', tier: 'civil', status: 'imported-needs-review',
-    canonSource: 'Importado desde una ficha externa. Revisar horarios, lugar y personalidad.',
+    id: /^[a-z]/.test(slug(name)) ? slug(name) : `npc_${slug(name)}`, name, role: 'Personaje importado', tier: 'civil', race: 'humano',
+    summary: (personality || description).slice(0, 1500) || name,
     schedule: [{ days: [0, 1, 2, 3, 4, 5, 6], from: 8, to: 20, locationId: defaultLocation, activity: 'está por aquí' }],
-    background: [description, data.scenario ? `Escenario: ${data.scenario}` : ''].filter(Boolean).join('\n\n').slice(0, 4000),
-    exampleDialogue: text(data.mes_example, 3000, 'los ejemplos'),
-    personality: { summary: (personality || description).slice(0, 900) || name, traits: [], speech: data.first_mes ? `Su primer saludo de referencia: ${String(data.first_mes).slice(0, 500)}` : '', likes: [], dislikes: [], boundaries: '', warmsUpWhen: '', coolsDownWhen: '' },
-    knowledge: [], secrets: [], contact: { method: '', offerWhen: '' }
+    background: [description, data.scenario ? `Escenario: ${data.scenario}` : ''].filter(Boolean).join('\n\n'),
+    exampleDialogue: text(data.mes_example, 8000, 'los ejemplos'),
+    personality: { traits: [], speech: data.first_mes ? `Su primer saludo de referencia: ${String(data.first_mes).slice(0, 500)}` : '', likes: [], dislikes: [], boundaries: '', warmsUpWhen: '', coolsDownWhen: '', loveLanguage: '' },
+    knowledge: [], secrets: [], contact: { conditions: ['Que el jugador se haya ganado su confianza.'] }
   };
 }
 

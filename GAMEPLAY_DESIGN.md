@@ -122,6 +122,12 @@ Prueba de concepto con un solo NPC, **Luna Serp** (`data/canon/npcs/luna_serp.js
 - Fichas de NPC: `data/canon/npcs/<id>.json` (también se pueden soltar ahí a mano). Se importan JSON propios y «character cards» v1/v2/v3 en JSON o PNG (mapeo aproximado que hay que revisar).
 - Novela visual: el retrato de un NPC se toma de `assets/portraits/<id>/default.png` (también webp, jpg o svg). Las emociones futuras serán `<emoción>.png` en la misma carpeta y el campo `emotion` de cada línea del NPC. Formato recomendado: WebP con alfa, lienzo 2:3 de 800×1200 px, mismo encuadre en todas las emociones; el PNG maestro va en `assets/portraits/<id>/source/` (no se sirve). Si una emoción existe en varios formatos se sirve el más ligero (webp > png > jpg > svg). El editor de fichas optimiza al subir (máx. 1200 px de alto, WebP 92% o sin pérdida).
 
+### Fichas, tiempo y contactos (actualización)
+- Ficha de NPC en 5 pestañas: Identidad (edad, género, raza: humano, ophidiano, infernal, celestial, noid), Personalidad (etiquetas, forma de hablar, ejemplo de voz, lenguaje del amor, contacto con condiciones), Apariencia, Historia (trasfondo sin límite, conocimientos, secretos) y Horario y conexiones con otros NPC.
+- Conciencia del tiempo: cada NPC recibe la hora actual y cuándo terminó la última conversación (`relacion.ultimaConversacion`, con `mismoDia`) y sus recuerdos con tiempo relativo («hoy a las 09:30, hace 2 horas»).
+- Contactos: el NPC solo comparte su usuario (`@LunaSerp`) si el GM lo decide y se cumplen TODAS las condiciones de su ficha, que el GM interpreta; puede pasar durante la conversación (tarjeta en pantalla) o al despedirse. El jugador debe escribir el usuario en Mensajes; si no se lo han compartido, «No agregues a personas desconocidas.». Compartir y agregar son estados distintos.
+- Pendiente: conocimientos vinculados a un lorebook.
+
 ## 10. Preguntas abiertas
 
 - Cuántos NPC y qué personalidades para la primera rebanada.
