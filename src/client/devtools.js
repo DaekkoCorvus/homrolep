@@ -1,5 +1,6 @@
 // Herramientas de desarrollo: comandos de chat, panel de partida y editor de fichas de NPC (importar/exportar).
 import { state, request, notify, escapeHtml, isDev, setDev, place } from './core.js';
+import { setTextSpeed } from './game.js';
 
 const COMMANDS = [
   ['/dev', 'Activa o desactiva las herramientas de desarrollo'],
@@ -11,6 +12,7 @@ const COMMANDS = [
   ['/npc [id]', 'Abre el editor de la ficha de un NPC'],
   ['/fichas', 'Abre el panel con el listado, importar y exportar'],
   ['/contacto id', 'Desbloquea el contacto de un NPC (como si lo hubiera compartido)'],
+  ['/texto lento|normal|rapido', 'Velocidad con la que se escribe la respuesta del NPC'],
   ['/fx lite|full|auto', 'Calidad de efectos de la escena (lite congela las animaciones)']
 ];
 const DAYS = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
@@ -36,6 +38,11 @@ export async function runCommand(text) {
   const argument = rest.join(' ');
   const command = norm(name);
   if (command === '/dev') { setDev(!isDev()); notify(isDev() ? 'Herramientas de desarrollo activadas.' : 'Herramientas de desarrollo desactivadas.'); hooks.reload(); if (isDev()) openPanel(); return true; }
+  if (command === '/texto') {
+    const mode = ['lento', 'normal', 'rapido', 'rápido'].includes(argument.toLowerCase()) ? norm(argument) : null;
+    if (!mode) notify('Uso: /texto lento · normal · rapido'); else { setTextSpeed(mode); notify(`Texto: ${mode}`); }
+    return true;
+  }
   if (command === '/fx') {
     const mode = ['lite', 'full', 'auto'].includes(norm(argument)) ? norm(argument) : null;
     if (!mode) notify('Uso: /fx lite (escena estática, más rápido) · full · auto'); else { hooks.setFx(mode); notify(`Efectos: ${mode}`); }
@@ -257,13 +264,15 @@ export async function openEditor(card) {
     if (isNew) return '<p class="dev-hint">Guarda el personaje primero para poder subir su retrato y sus emociones.</p>';
     return `<p class="dev-hint">Cada imagen es una emoción o acción de <strong>una palabra</strong> (solo letras). El GM la invoca escribiendo su nombre entre llaves en mitad de la frase, por ejemplo <code>{feliz}</code>, y el sprite cambia justo ahí. Lo que ve el GM: <strong>${names.join(', ') || 'nada todavía'}</strong>. Usa el mismo lienzo y encuadre que el retrato por defecto.</p>
       <div class="emotion-grid">${names.map((name) => `<figure class="emotion" data-emotion="${escapeHtml(name)}"><img src="${portraits[name]}" alt=""><figcaption><strong>${escapeHtml(name)}</strong></figcaption>
+        <label class="stay"><input type="checkbox" data-stay ${(model.emotionsStay ?? []).includes(name) ? 'checked' : ''} ${name === 'default' ? 'disabled' : ''}><span>Se mantiene</span></label>
         <div class="emotion-actions"><button type="button" data-replace>Reemplazar</button>${name === 'default' ? '' : '<button type="button" data-rename>Renombrar</button><button type="button" data-delete class="danger">Eliminar</button>'}</div></figure>`).join('')}</div>
       <h3>Añadir emoción</h3>
       <div class="emotion-add"><input data-new-emotion placeholder="feliz" maxlength="20" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="Nombre de la emoción">
         <select data-quality aria-label="Calidad"><option value="balanced">WebP 92%</option><option value="max">WebP sin pérdida</option><option value="original">Tal cual</option></select>
         <label class="file-button">Subir imagen<input type="file" accept="image/png,image/webp,image/jpeg" hidden data-new-file></label></div>
       <input type="file" accept="image/png,image/webp,image/jpeg" hidden data-replace-file>
-      <p class="dev-hint">Se convierte a WebP con transparencia y se guarda con el nombre que escribas. Si ya existe, se reemplaza.</p>`;
+      <p class="dev-hint">Se convierte a WebP con transparencia y se guarda con el nombre que escribas. Si ya existe, se reemplaza.</p>
+      <p class="dev-hint"><strong>Se mantiene:</strong> por defecto cada expresión vuelve a la neutra unos segundos después de terminar la respuesta. Márcala si debe quedarse (escenas largas o íntimas) hasta que el GM ponga otra; no olvides pulsar Guardar.</p>`;
   };
 
   const sections = {
@@ -340,16 +349,17 @@ export async function openEditor(card) {
     replaceInput.onchange = (event) => { const file = event.target.files[0]; event.target.value = ''; if (file && target) sendPortrait(target, file); };
     body.querySelectorAll('.emotion').forEach((card) => {
       const name = card.dataset.emotion;
+      card.querySelector('[data-stay]').onchange = (event) => { const stay = new Set(model.emotionsStay ?? []); if (event.target.checked) stay.add(name); else stay.delete(name); model.emotionsStay = [...stay]; };
       card.querySelector('[data-replace]').onclick = () => { target = name; replaceInput.click(); };
       card.querySelector('[data-rename]')?.addEventListener('click', async () => {
         const to = normalizeEmotion(prompt('Nuevo nombre (solo letras):', name));
         if (!to || to === name) return;
-        try { const saved = await dreq(`/api/dev/npcs/${model.id}/portrait/${name}/rename`, { method: 'POST', body: JSON.stringify({ to }) }); model.portraits = saved.portraits; show('emotions'); hooks.reload(); notify(`«${name}» ahora es «${to}».`); }
+        try { const saved = await dreq(`/api/dev/npcs/${model.id}/portrait/${name}/rename`, { method: 'POST', body: JSON.stringify({ to }) }); model.portraits = saved.portraits; model.emotionsStay = (model.emotionsStay ?? []).map((item) => (item === name ? to : item)); show('emotions'); hooks.reload(); notify(`«${name}» ahora es «${to}». Pulsa Guardar para conservar los cambios.`); }
         catch (failure) { notify(failure.message); }
       });
       card.querySelector('[data-delete]')?.addEventListener('click', async () => {
         if (!confirm(`¿Eliminar la emoción «${name}»?`)) return;
-        try { const saved = await dreq(`/api/dev/npcs/${model.id}/portrait/${name}`, { method: 'DELETE' }); model.portraits = saved.portraits; show('emotions'); hooks.reload(); notify(`«${name}» eliminada.`); }
+        try { const saved = await dreq(`/api/dev/npcs/${model.id}/portrait/${name}`, { method: 'DELETE' }); model.portraits = saved.portraits; model.emotionsStay = (model.emotionsStay ?? []).filter((item) => item !== name); show('emotions'); hooks.reload(); notify(`«${name}» eliminada.`); }
         catch (failure) { notify(failure.message); }
       });
     });

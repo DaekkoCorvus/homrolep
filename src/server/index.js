@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRun, setPrologue, applyAction, addPost, startEncounter, addExchange, endEncounter, rewindEncounter, replaceLastNpcLine, reapplyEnding, setWorldTime, addContact, grantContact, leaveEncounter } from './game/run.js';
 import { validateNpcCard, fromForeignCard, parsePngCard, savePortrait, listPortraits, saveNpcCard, imageKind, removePortrait, renamePortrait, normalizeEmotion } from './game/cards.js';
-import { loadNpcs, presentNpcs, publicNpc, relationshipOf, affinityOf, attitudeOf, mentionsName, validateEvaluation, applyEvaluation, debugView, temporalContext, timedNotes, timedHistory, contactAllowed, findNpcByHandle, parseSpeech, stripMarks, recentEvents, contactInfo } from './game/npcs.js';
+import { loadNpcs, presentNpcs, publicNpc, relationshipOf, affinityOf, attitudeOf, mentionsName, validateEvaluation, applyEvaluation, debugView, temporalContext, timedNotes, timedHistory, contactAllowed, findNpcByHandle, parseSpeech, stripMarks, recentEvents, contactInfo, stickyFrom } from './game/npcs.js';
 import { createNanoGPT, AIError } from './ai/provider.js';
 import { createSettingsStore } from './ai/settings.js';
 import { saveRun, loadRun, listRuns } from './saves/store.js';
@@ -64,10 +64,11 @@ async function contextFor(run, npc) {
   const build = (relationship, transcript, extra = {}) => ({
     npc, player: run.player, world: run.world, location, relationship, attitude: attitudeOf(affinityOf(relationship.notes)), transcript,
     temporal: temporalContext(relationship, run.world), memories: timedNotes(relationship, run.world), history: timedHistory(relationship, run.world),
-    emotions, events: recentEvents(run, worldData, npcs), contact: contactInfo(npc, relationship, run.world), intent: run.encounter?.intent, ...extra
+    emotions, stickyEmotions: npc.emotionsStay ?? [], currentExpression: stickyFrom(run.encounter?.lines, npc), events: recentEvents(run, worldData, npcs), contact: contactInfo(npc, relationship, run.world), intent: run.encounter?.intent, ...extra
   });
-  build.speak = (reply) => ({ ...reply, gesture: stripMarks(reply.gesture), intent: stripMarks(reply.intent), ...parseSpeech(reply.say, emotions) });
-  build.farewell = (text) => parseSpeech(text, emotions);
+  // Si una expresión «que se mantiene» sigue activa, una respuesta sin marcas la conserva (empieza con ella).
+  build.speak = (reply, linesBefore = run.encounter?.lines) => ({ ...reply, gesture: stripMarks(reply.gesture), intent: stripMarks(reply.intent), ...parseSpeech(reply.say, emotions, stickyFrom(linesBefore, npc) ?? 'default') });
+  build.farewell = (text) => parseSpeech(text, emotions, stickyFrom(run.encounter?.lines, npc) ?? 'default');
   return build;
 }
 
@@ -106,7 +107,7 @@ async function devOperation(run, body, config) {
       const undoesContact = lines.slice(index + 1).some((line) => line.kind === 'contact');
       const relationship = { ...relationshipOf(run, npc.id), ...(undoesContact ? { contact: false } : {}) };
       const transcript = lines.slice(0, index);
-      const reply = context.speak(await ai.npcReply(context(relationship, transcript, { opening: transcript.length === 0 }), config));
+      const reply = context.speak(await ai.npcReply(context(relationship, transcript, { opening: transcript.length === 0, currentExpression: stickyFrom(lines.slice(0, index), npc) }), config), lines.slice(0, index));
       return replaceLastNpcLine(run, reply, contactAllowed(npc, relationship, reply.contact) ? npc : null);
     }
     const last = run.eventLog.at(-1);

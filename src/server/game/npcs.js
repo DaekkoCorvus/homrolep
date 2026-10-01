@@ -61,10 +61,10 @@ export const timedHistory = (relationship, world, count = 4) => relationship.his
 const MARK = /\{\s*([\p{L}\p{N}_-]+)\s*\}|\[\s*(?:comando\s*)?[\\/]\s*([\p{L}\p{N}_-]+)\s*\]|\[\s*([\p{L}\p{N}_-]+)\s*\]/gu;
 const fold = (value) => String(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
-export function parseSpeech(raw, allowed = []) {
+export function parseSpeech(raw, allowed = [], start = 'default') {
   const source = String(raw ?? '');
   const known = new Map([['default', 'default'], ...allowed.map((name) => [fold(name), name])]);
-  const parts = []; let emotion = 'default'; let last = 0;
+  const parts = []; let emotion = known.has(fold(start)) ? known.get(fold(start)) : 'default'; let last = 0;
   const push = (text) => { if (text) parts.push({ emotion, text }); };
   for (const match of source.matchAll(MARK)) {
     const name = match[1] ?? match[2] ?? match[3];
@@ -149,7 +149,14 @@ export function presentNpcs(npcs, locationId, world) {
   return [...npcs.values()].filter((npc) => scheduleFor(npc, world)?.locationId === locationId);
 }
 
-export const publicNpc = (npc) => ({ id: npc.id, name: npc.name, role: npc.role });
+export const publicNpc = (npc) => ({ id: npc.id, name: npc.name, role: npc.role, stickyEmotions: npc.emotionsStay ?? [] });
+
+// Expresión que sigue activa desde la última línea del NPC si es de las que se mantienen (si no, null).
+export function stickyFrom(lines, npc) {
+  const last = [...(lines ?? [])].reverse().find((line) => line.who === 'npc');
+  const emotion = last?.segments?.at(-1)?.emotion;
+  return emotion && emotion !== 'default' && (npc.emotionsStay ?? []).includes(emotion) ? emotion : null;
+}
 
 export function emptyRelationship() {
   return { met: false, nameKnown: false, contact: false, added: false, contactAt: null, encounters: 0, lastEnd: null, notes: [], history: [] };

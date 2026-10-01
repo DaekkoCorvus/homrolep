@@ -78,6 +78,8 @@ export function validateNpcCard(input, locationIds) {
     knowledge: list(input.knowledge, 60, 400, 'los conocimientos'),
     secrets: list(input.secrets, 30, 600, 'los secretos'),
     schedule, connections,
+    // Emociones que no vuelven solas a la neutra: se quedan hasta que el GM ponga otra (escenas largas, sprites especiales).
+    emotionsStay: list(input.emotionsStay, 60, 20, 'las emociones que se mantienen').map((name) => name.toLowerCase()).filter((name) => /^[a-z]{1,20}$/.test(name)),
     contact: { handle, conditions: list(input.contact?.conditions, 20, 500, 'las condiciones de contacto') }
   };
 }

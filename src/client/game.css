@@ -279,9 +279,6 @@ body:has(.game) { background:#05070d; overflow:hidden; }
 .dlg.you .act { font-style:italic; color:#d8ccb4; opacity:.88; }
 .dlg.you .say,.dlg.you .plain { color:#f2d6a8; }
 .story-lead .act { font-style:italic; opacity:.85; }
-.vn-layer .vn-prev { position:absolute; bottom:0; left:50%; height:min(calc(var(--app-h,100dvh) * 78 / 100),170vw); width:auto; max-width:none; transform:translateX(-50%); object-fit:contain; opacity:0; pointer-events:none;
-  filter:drop-shadow(0 0 1.5px #fff2d6b3) drop-shadow(0 16px 24px #000b); }
-.vn-prev:not([src]) { display:none; }
 .game.closed .free-action { opacity:.35; pointer-events:none; }
 .shared-contacts h3 { margin:.2rem 0 .5rem; font:600 .72rem Inter,sans-serif; letter-spacing:.16em; text-transform:uppercase; color:#f2d6a8; }
 .shared { display:flex; align-items:center; gap:.6rem; padding:.7rem; border-radius:14px; background:#f2d6a814; border:1px solid #f2d6a844; margin-bottom:.5rem; }
@@ -300,3 +297,5 @@ body:has(.game) { background:#05070d; overflow:hidden; }
 .emotion-add input,.emotion-add select { padding:.6rem .7rem; border-radius:10px; border:1px solid #ffffff24; background:#ffffff0a; color:#f3ead9; font:inherit; min-width:0; }
 .emotion-add .file-button { grid-column:1 / -1; justify-content:center; }
 .dev-hint code { font-family:ui-monospace,Consolas,monospace; color:#9af0b1; }
+.emotion .stay { display:flex; align-items:center; gap:.4rem; font-size:.78rem; color:#b7b1c6; }
+.emotion .stay input { width:18px; height:18px; accent-color:#9af0b1; }

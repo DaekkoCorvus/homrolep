@@ -35,7 +35,7 @@ export function enterGame(hooks) {
   document.getElementById('vortex-layer')?.contentWindow?.postMessage({ type:'vortex', zoom:1, flash:0, rate:2 }, location.origin);
   app.innerHTML = `<main class="game">
     <div class="scene" aria-hidden="true"><div class="scene-art"></div><div class="scene-dust"></div><div class="scene-vignette"></div></div>
-    <div class="vn-layer" aria-hidden="true"><img class="vn-main" alt=""><img class="vn-prev" alt=""></div>
+    <div class="vn-layer" aria-hidden="true"><img class="vn-main" alt=""></div>
     <div class="place-title" aria-live="polite"></div>
     <header class="hud">
       <div class="hud-left"><div class="clock-pill" role="status"><span class="clock-dot"></span><span class="clock-text"></span></div><button type="button" class="dev-pill" data-dev hidden>DEV</button></div>
@@ -135,31 +135,40 @@ export function updateGame({ announce=false }={}) {
 
 // Novela visual: retrato del NPC mientras se conversa. Las emociones llegarán como `portraits[emotion]`.
 let portraitTimer = null;
+// Mientras se escribe manda la emoción del tramo actual; al terminar (y tras una pausa) vuelve a «default».
+// Solo la despedida mantiene su expresión hasta que el jugador pulsa Volver.
+const isSticky = (emotion) => (state.run.encounterNpc?.stickyEmotions ?? []).includes(emotion);
+
 function currentEmotion() {
   if (ui.emotion) return ui.emotion;
-  const lastLine = state.run.encounter?.lines.filter((line) => line.who === 'npc').at(-1);
-  return lastLine?.segments?.at(-1)?.emotion ?? 'default';
+  if (state.run.encounter) {
+    const lastLine = state.run.encounter.lines.filter((line) => line.who === 'npc').at(-1);
+    const last = lastLine?.segments?.at(-1)?.emotion;
+    // La despedida y las expresiones marcadas como «se mantiene» no vuelven solas a la neutra.
+    if (last && (state.run.encounter.closed || isSticky(last))) return last;
+  }
+  return 'default';
 }
 
 function renderPortrait(root) {
-  const img = root.querySelector('.vn-main'); const prev = root.querySelector('.vn-prev');
+  const img = root.querySelector('.vn-main');
   const npc = state.run.encounterNpc;
   const url = npc ? (npc.portraits?.[currentEmotion()] ?? npc.portraits?.default ?? null) : null;
   clearTimeout(portraitTimer);
   if (!url) {
     root.classList.remove('has-portrait');
     // Conserva la imagen mientras se desvanece para que la salida también sea suave.
-    portraitTimer = setTimeout(() => { img.removeAttribute('src'); prev.removeAttribute('src'); }, 900);
+    portraitTimer = setTimeout(() => img.removeAttribute('src'), 900);
     return;
   }
   for (const other of Object.values(npc.portraits ?? {})) preloadImage(other);
   const shown = img.getAttribute('src');
   if (shown === url) { root.classList.add('has-portrait'); return; }
   if (shown && root.classList.contains('has-portrait')) {
-    // Cambio de expresión: la imagen anterior se disuelve sobre la nueva.
-    prev.style.transition = 'none'; prev.src = shown; prev.style.opacity = '1';
-    img.dataset.swap = '1'; img.src = url;
-    requestAnimationFrame(() => requestAnimationFrame(() => { prev.style.transition = 'opacity .3s ease'; prev.style.opacity = '0'; }));
+    // Cambio de expresión: corte limpio, sin mezclar fotogramas (las poses no coinciden). Se decodifica antes para evitar parpadeos.
+    const probe = new Image(); probe.src = url;
+    const swap = () => { if (img.getAttribute('src') !== url) { img.dataset.swap = '1'; img.src = url; } };
+    (probe.decode ? probe.decode() : Promise.resolve()).then(swap, swap);
     return;
   }
   img.classList.remove('in'); img.src = url;
@@ -211,7 +220,12 @@ function storyContent(loc) {
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const typingDelay = (character) => ('.!?…'.includes(character) ? 240 : ',;:'.includes(character) ? 120 : 22);
+// Velocidad del texto: «/texto lento|normal|rapido». Los cambios de expresión hacen una pausa para que se aprecien.
+const TEXT_SPEEDS = { lento: 1.6, normal: 1, rapido: 0.55 };
+const textSpeed = () => { try { return localStorage.getItem('hom:text') || 'normal'; } catch { return 'normal'; } };
+export function setTextSpeed(mode) { try { localStorage.setItem('hom:text', TEXT_SPEEDS[mode] ? mode : 'normal'); } catch { /* sin almacenamiento */ } }
+const typingDelay = (character) => (('.!?…'.includes(character) ? 300 : ',;:'.includes(character) ? 150 : 36) * (TEXT_SPEEDS[textSpeed()] ?? 1));
+const EMOTION_PAUSE = 450; const EMOTION_HOLD = 2600;
 const reducedMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
 function setEmotion(emotion) {
@@ -221,14 +235,18 @@ function setEmotion(emotion) {
 }
 
 // Muestra la respuesta poco a poco; las marcas de emoción cambian el sprite en el momento exacto. Un toque la completa.
-async function revealLine(node, segments, token, onDone) {
+async function revealLine(node, segments, token, { keep = false, onDone } = {}) {
   const textNode = document.createTextNode(''); node.append(textNode);
   const story = node.closest('.story');
   ui.skipReveal = reducedMotion();
-  let count = 0;
+  clearTimeout(ui.holdTimer);
+  let count = 0; let shown = 'default';
   for (const segment of segments) {
     if (ui.revealToken !== token) return;
     setEmotion(segment.emotion);
+    // La expresión cambia primero y el texto espera un instante: así se nota el cambio de sprite.
+    if (segment.emotion !== shown && !ui.skipReveal) await sleep(EMOTION_PAUSE * (TEXT_SPEEDS[textSpeed()] ?? 1));
+    shown = segment.emotion;
     for (const character of segment.text) {
       if (ui.revealToken !== token) return;
       textNode.data += character;
@@ -238,6 +256,8 @@ async function revealLine(node, segments, token, onDone) {
   }
   story.scrollTop = story.scrollHeight;
   onDone?.();
+  // Terminada la respuesta, la expresión vuelve a la neutra tras una pausa (salvo en la despedida).
+  if (!keep && shown !== 'default' && !isSticky(shown)) ui.holdTimer = setTimeout(() => { if (ui.revealToken === token) setEmotion('default'); }, reducedMotion() ? 0 : EMOTION_HOLD);
 }
 
 function renderConversation(story) {
@@ -247,6 +267,7 @@ function renderConversation(story) {
   if (!animate && story.dataset.sig === signature && !ui.storyError) return;
   story.dataset.sig = signature;
   const token = (ui.revealToken = (ui.revealToken ?? 0) + 1);
+  clearTimeout(ui.holdTimer);
   ui.emotion = null;
   const fresh = animate ? lines.findLastIndex((line) => line.who === 'npc') : -1;
   const rows = lines.map((line, index) => {
@@ -261,9 +282,12 @@ function renderConversation(story) {
   if (fresh >= 0) {
     const line = lines[fresh];
     story.onpointerdown = () => { ui.skipReveal = true; };
-    revealLine(story.querySelector(`[data-index="${fresh}"]`), line.segments?.length ? line.segments : [{ emotion: 'default', text: line.text }], token, () => {
-      story.querySelectorAll('[data-after]').forEach((card) => { card.hidden = false; });
-      story.scrollTop = story.scrollHeight;
+    revealLine(story.querySelector(`[data-index="${fresh}"]`), line.segments?.length ? line.segments : [{ emotion: 'default', text: line.text }], token, {
+      keep: Boolean(state.run.encounter.closed),
+      onDone: () => {
+        story.querySelectorAll('[data-after]').forEach((card) => { card.hidden = false; });
+        story.scrollTop = story.scrollHeight;
+      }
     });
   }
 }

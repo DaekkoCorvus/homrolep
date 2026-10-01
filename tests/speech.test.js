@@ -82,3 +82,23 @@ test('the GM receives emotions, recent events, contact status and can open with 
   assert.equal(farewell.segments[0].emotion, 'zztest', 'la despedida también puede cambiar de expresión');
   assert.equal(ended.body.encounter.closed, true);
 });
+
+test('sticky expressions survive replies without marks, plain ones do not', async () => {
+  const { stickyFrom } = await import('../src/server/game/npcs.js');
+  const { validateNpcCard } = await import('../src/server/game/cards.js');
+  const npc = { emotionsStay: ['intima'] };
+  const lines = [{ who: 'player', text: 'hola' }, { who: 'npc', text: 'x', segments: [{ emotion: 'default', text: 'a ' }, { emotion: 'intima', text: 'b' }] }];
+  assert.equal(stickyFrom(lines, npc), 'intima');
+  assert.equal(stickyFrom([{ who: 'npc', text: 'x', segments: [{ emotion: 'feliz', text: 'x' }] }], npc), null, 'las demás vuelven a la neutra');
+  assert.equal(stickyFrom([], npc), null);
+  assert.equal(stickyFrom(lines, {}), null);
+
+  const continued = parseSpeech('Sigue conmigo así.', ['intima', 'feliz'], 'intima');
+  assert.deepEqual(continued.segments, [{ emotion: 'intima', text: 'Sigue conmigo así.' }], 'sin marcas conserva la expresión activa');
+  const left = parseSpeech('Bueno… {default} ya basta.', ['intima'], 'intima');
+  assert.deepEqual(left.segments.map((segment) => segment.emotion), ['intima', 'default'], '{default} la rompe cuando el GM quiere');
+  assert.deepEqual(parseSpeech('Hola', ['feliz'], 'inexistente').segments, [], 'una expresión inicial desconocida se ignora');
+
+  const card = validateNpcCard({ id: 'mara_test', name: 'Mara', summary: 's', schedule: [{ days: [0], from: 1, to: 2, locationId: 'cafe' }], emotionsStay: ['Intima', 'mal nombre', 'otra'] }, ['cafe']);
+  assert.deepEqual(card.emotionsStay, ['intima', 'otra'], 'solo nombres válidos (letras)');
+});
