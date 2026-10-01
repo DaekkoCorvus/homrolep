@@ -179,6 +179,11 @@ async function talk(run, body, config) {
 }
 
 async function api(request, response, pathname) {
+  // Si el cliente cancela (botón detener) o se desconecta, se aborta la llamada a la IA y no se guarda nada.
+  const controller = new AbortController();
+  response.on('close', () => { if (!response.writableEnded) controller.abort(); });
+  const requireConfig = async () => ({ ...(await settings.require()), signal: controller.signal });
+  const save = async (run) => { controller.signal.throwIfAborted(); await store.saveRun(run); };
   const sendRun = async (status, run) => sendJson(response, status, await publicRun(run, request.headers['x-hom-dev'] === '1'));
   if (request.method === 'GET' && pathname === '/api/ai/settings') return sendJson(response, 200, await settings.status());
   if (request.method === 'POST' && pathname === '/api/ai/models') {
@@ -206,7 +211,7 @@ async function api(request, response, pathname) {
       origin:String(input.origin ?? '').slice(0,600)
     };
     return exclusive('creation-whispers', async () => {
-      const config=await settings.require();
+      const config=await requireConfig();
       try { return sendJson(response, 200, await ai.introduction(profile, config)); }
       catch { return sendJson(response, 200, { whispers:[
         'Es bueno tenerte aquí. Ya casi estás listo para continuar.',
@@ -218,10 +223,10 @@ async function api(request, response, pathname) {
   if (request.method === 'POST' && pathname === '/api/runs') {
     const input = await readBody(request);
     return exclusive('creation', async () => {
-      const config = await settings.require();
+      const config = await requireConfig();
       const draft = createRun(input);
       const run = setPrologue(draft, await ai.prologue(draft.player, worldData, config), worldData);
-      await store.saveRun(run);
+      await save(run);
       return sendRun(201, run);
     });
   }
@@ -232,14 +237,14 @@ async function api(request, response, pathname) {
   if (request.method === 'POST' && operation === 'action') {
     const input = await readBody(request);
     return exclusive(id, async () => {
-      const config = await settings.require();
+      const config = await requireConfig();
       const before = await store.loadRun(id);
       const run = applyAction(before, input, worldData);
       const narrative = await ai.narrate(before, run, worldData, config);
       const event = run.eventLog.at(-1);
       event.data = { ...event.data, response:narrative };
       run.narrative = { text:narrative, time:event.time };
-      await store.saveRun(run);
+      await save(run);
       return sendRun(200, run);
     });
   }
@@ -247,27 +252,27 @@ async function api(request, response, pathname) {
     if (request.headers['x-hom-dev'] !== '1') throw new AIError('Las herramientas de desarrollo están desactivadas.', 'DEV_DISABLED', 403);
     const body = await readBody(request);
     return exclusive(id, async () => {
-      const config = await settings.require();
+      const config = await requireConfig();
       const run = await devOperation(await store.loadRun(id), body, config);
-      await store.saveRun(run);
+      await save(run);
       return sendRun(200, run);
     });
   }
   if (request.method === 'POST' && operation === 'talk') {
     const body = await readBody(request);
     return exclusive(id, async () => {
-      const config = await settings.require();
+      const config = await requireConfig();
       const run = await talk(await store.loadRun(id), body, config);
-      await store.saveRun(run);
+      await save(run);
       return sendRun(200, run);
     });
   }
   if (request.method === 'POST' && operation === 'posts') {
     const body = await readBody(request);
     return exclusive(id, async () => {
-      await settings.require();
+      await requireConfig();
       const run = addPost(await store.loadRun(id), body.text);
-      await store.saveRun(run);
+      await save(run);
       return sendRun(200, run);
     });
   }

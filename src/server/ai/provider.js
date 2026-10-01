@@ -33,21 +33,24 @@ function providerError(status) {
 }
 
 // Injectable transport for tests; production always uses the fixed NanoGPT host.
-export function createNanoGPT(fetchImpl = fetch, timeoutMs = 60000) {
-  async function call(route, key, payload) {
+// Sin límite de tiempo propio: hay modelos (p. ej. Spark) que tardan más de 10 s en el primer token.
+// La generación solo se corta si el jugador pulsa «detener» o se cierra la conexión (`signal`).
+export function createNanoGPT(fetchImpl = fetch) {
+  async function call(route, key, payload, signal) {
     if (typeof key !== 'string' || !key.trim()) throw new AIError('Configura tu API key de NanoGPT en Ajustes.', 'AI_CONFIGURATION_REQUIRED', 428);
     try {
       const response = await fetchImpl(NANOGPT_BASE_URL + '/' + route, {
         method: payload ? 'POST' : 'GET', redirect: 'error',
         headers: { authorization: 'Bearer ' + key, ...(payload ? { 'content-type':'application/json' } : {}) },
         ...(payload ? { body:JSON.stringify(payload) } : {}),
-        signal: AbortSignal.timeout(timeoutMs)
+        ...(signal ? { signal } : {})
       });
       if (!response.ok) throw providerError(response.status);
       return await response.json();
     } catch (error) {
       if (error instanceof AIError) throw error;
-      if (error.name === 'TimeoutError' || error.name === 'AbortError') throw new AIError('NanoGPT tardó demasiado en responder. Tu partida no ha cambiado.', 'AI_TIMEOUT', 504);
+      if (signal?.aborted) throw new AIError('Generación detenida. Tu partida no ha cambiado.', 'AI_ABORTED', 499);
+      if (error.name === 'TimeoutError' || error.name === 'AbortError') throw new AIError('La conexión con NanoGPT se cortó por el tiempo de espera del sistema. Tu partida no ha cambiado; puedes reintentar.', 'AI_TIMEOUT', 504);
       throw new AIError('No se pudo obtener una respuesta de NanoGPT. Revisa la conexión e inténtalo de nuevo.');
     }
   }
@@ -55,7 +58,7 @@ export function createNanoGPT(fetchImpl = fetch, timeoutMs = 60000) {
   async function chat(config, messages, maxTokens = 1600) {
     const result = await call('chat/completions', config.apiKey, {
       model:config.model, messages, stream:false, max_tokens:maxTokens
-    });
+    }, config.signal);
     const choice = result.choices?.[0];
     if (choice?.finish_reason === 'length') throw new AIError('El modelo agotó el límite de respuesta. Prueba un modelo con menos razonamiento en Ajustes.', 'AI_RESPONSE');
     const text = choice?.message?.content;

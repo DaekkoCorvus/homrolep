@@ -9,7 +9,8 @@ const COMMANDS = [
   ['/hora HH:MM [día]', 'Cambia la hora del mundo'],
   ['/ir lugar', 'Te lleva a un lugar sin gastar tiempo (id o nombre)'],
   ['/npc [id]', 'Abre el editor de la ficha de un NPC'],
-  ['/fichas', 'Abre el panel con el listado, importar y exportar']
+  ['/fichas', 'Abre el panel con el listado, importar y exportar'],
+  ['/fx lite|full|auto', 'Calidad de efectos de la escena (lite congela las animaciones)']
 ];
 const DAYS = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
 const PORTRAIT_MAX_HEIGHT = 1200;
@@ -26,6 +27,11 @@ export async function runCommand(text) {
   const argument = rest.join(' ');
   const command = norm(name);
   if (command === '/dev') { setDev(!isDev()); notify(isDev() ? 'Herramientas de desarrollo activadas.' : 'Herramientas de desarrollo desactivadas.'); hooks.reload(); if (isDev()) openPanel(); return true; }
+  if (command === '/fx') {
+    const mode = ['lite', 'full', 'auto'].includes(norm(argument)) ? norm(argument) : null;
+    if (!mode) notify('Uso: /fx lite (escena estática, más rápido) · full · auto'); else { hooks.setFx(mode); notify(`Efectos: ${mode}`); }
+    return true;
+  }
   if (!isDev()) { notify('Escribe /dev para activar las herramientas de desarrollo.'); return true; }
   if (command === '/ayuda' || command === '/help') openPanel();
   else if (command === '/reiniciar' || command === '/restart') hooks.perform(() => hooks.runDev({ op: 'restart' }));

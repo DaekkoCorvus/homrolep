@@ -49,6 +49,10 @@ npm start
 
 Después, abre `http://localhost:3000` en el navegador Android.
 
+## Rendimiento y cancelación
+
+Las llamadas a NanoGPT no tienen límite de tiempo propio (algunos modelos tardan más de 10 s en el primer token). Mientras se genera una respuesta, el botón de enviar se convierte en **detener**: cancela la llamada en el servidor y la partida no cambia. La escena animada se congela durante las conversaciones y, en equipos lentos, automáticamente; `/fx lite` (estática), `/fx full` o `/fx auto` lo fuerzan a mano.
+
 ## Herramientas de desarrollo
 
 Escribe `/dev` en el campo de acción libre para activarlas (o abre `/?dev=1`). Incluyen reiniciar y regenerar respuestas, cambiar la hora, teletransportarse y un editor de fichas de NPC con importar/exportar. Detalles en [GAMEPLAY_DESIGN.md](GAMEPLAY_DESIGN.md). Solo funcionan con esa cabecera local; no forman parte de la experiencia de juego.

@@ -1,4 +1,4 @@
-import { state, app, request, notify, timeText, clockText, period, place, escapeHtml, isDev } from './core.js';
+import { state, app, request, notify, activeSignal, timeText, clockText, period, place, escapeHtml, isDev } from './core.js';
 import { initDevtools, runCommand, openPanel } from './devtools.js';
 import { sceneMarkup, applySky, SCENE_META } from './scenes.js';
 
@@ -11,6 +11,8 @@ const PHONE_APPS = [
   ['journal', 'Diario', '<path d="M6 3h11a2 2 0 0 1 2 2v16H8a2 2 0 0 1-2-2Z"/><path d="M10 8h6M10 12h6"/>'],
   ['settings', 'Ajustes', '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/>']
 ];
+const SEND_ICON = '<path d="M5 12h14M13 6l6 6-6 6"/>';
+const STOP_ICON = '<rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/>';
 const initial = (name) => escapeHtml(String(name).trim().charAt(0).toUpperCase());
 const icon = (path) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
 
@@ -29,18 +31,41 @@ export function enterGame(hooks) {
     <section class="story" aria-live="polite"></section>
     <footer class="dock">
       <div class="chips" role="group" aria-label="Acciones del lugar"></div>
-      <form class="free-action"><textarea rows="1" maxlength="500" name="text" aria-label="Acción libre" placeholder="¿Qué haces?" required></textarea><button type="submit" aria-label="Actuar">${icon('<path d="M5 12h14M13 6l6 6-6 6"/>')}</button></form>
+      <form class="free-action"><textarea rows="1" maxlength="500" name="text" aria-label="Acción libre" placeholder="¿Qué haces?" required></textarea><button type="submit" class="send" aria-label="Actuar">${icon(SEND_ICON)}</button></form>
     </footer>
     <div class="sheet-layer" hidden><div class="sheet" role="dialog" aria-label="Moverse"></div></div>
     <div class="phone-layer" hidden><div class="phone" role="dialog" aria-label="Teléfono"><div class="phone-notch"></div><div class="phone-status"><span class="ps-time"></span><span class="ps-net">${escapeHtml(state.world.name)} ▪▪▪</span></div><div class="phone-screen"></div><button class="phone-home" type="button" aria-label="Inicio del teléfono"></button></div></div>
   </main>`;
   wire();
   initDevtools({
-    perform,
+    perform, setFx,
     runDev: (body) => request(`/api/runs/${state.run.id}/dev`, { method:'POST', body:JSON.stringify(body) }),
     reload: async () => { try { state.run = await request(`/api/runs/${state.run.id}`); ui.storyError = ''; updateGame(); } catch (error) { notify(error.message); } }
   });
   updateGame({ announce:true });
+  const mode = fxMode();
+  if (mode === 'lite') app.querySelector('.game').classList.add('fx-lite');
+  else if (mode === 'auto') autoTuneFx(app.querySelector('.game'));
+}
+
+// Calidad de efectos: «auto» mide los fotogramas y congela la escena animada en equipos lentos.
+const fxMode = () => { try { return localStorage.getItem('hom:fx') || 'auto'; } catch { return 'auto'; } };
+export function setFx(mode) {
+  try { mode === 'auto' ? localStorage.removeItem('hom:fx') : localStorage.setItem('hom:fx', mode); } catch { /* sin almacenamiento */ }
+  const root = app.querySelector('.game');
+  if (root) { root.classList.toggle('fx-lite', mode === 'lite'); if (mode === 'auto') autoTuneFx(root); }
+}
+
+function autoTuneFx(root) {
+  let frames = 0; let start = 0;
+  const tick = (now) => {
+    if (!root.isConnected) return;
+    if (!start) start = now;
+    frames++;
+    if (now - start < 1800) return requestAnimationFrame(tick);
+    if (!document.hidden && (frames * 1000) / (now - start) < 48) root.classList.add('fx-lite');
+  };
+  setTimeout(() => requestAnimationFrame(tick), 1500);
 }
 
 function wire() {
@@ -60,7 +85,21 @@ function wire() {
   const grow = () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 120)}px`; };
   input.addEventListener('input', grow);
   input.addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.shiftKey && matchMedia('(hover:hover)').matches) { event.preventDefault(); form.requestSubmit(); } });
-  form.onsubmit = (event) => { event.preventDefault(); const text = input.value.trim(); if (!text) return; input.value = ''; grow(); if (text.startsWith('/')) { runCommand(text); return; } if (state.run.encounter) say(text, input); else runAction({ type:'freeform', text }); };
+  form.querySelector('.send').addEventListener('click', (event) => { if (ui.busy) { event.preventDefault(); stopGeneration(); } });
+  form.addEventListener('focusin', () => root.classList.add('typing'));
+  form.addEventListener('focusout', () => setTimeout(() => { if (!form.contains(document.activeElement)) root.classList.remove('typing'); }, 120));
+  const vv = window.visualViewport;
+  const fit = () => {
+    if (!root.isConnected) return;
+    const height = vv ? vv.height : innerHeight;
+    root.style.setProperty('--app-h', `${height}px`);
+    Object.assign(root.style, { height: `${height}px`, top: `${vv ? vv.offsetTop : 0}px`, bottom: 'auto' });
+    const story = root.querySelector('.story');
+    if (state.run.encounter) story.scrollTop = story.scrollHeight;
+  };
+  if (vv) { vv.onresize = fit; vv.onscroll = fit; }
+  fit();
+  form.onsubmit = (event) => { event.preventDefault(); const text = input.value.trim(); if (!text || ui.busy) return; input.value = ''; grow(); input.blur(); if (text.startsWith('/')) { runCommand(text); return; } if (state.run.encounter) say(text, input); else runAction({ type:'freeform', text }); };
   document.onkeydown = (event) => { if (event.key === 'Escape') { if (!root.querySelector('.sheet-layer').hidden) toggleSheet(false); else if (ui.phoneOpen) togglePhone(false); } };
 }
 
@@ -212,6 +251,7 @@ function bindTravel(container) {
 function toggleSheet(open) {
   const layer = app.querySelector('.sheet-layer'); if (!layer) return;
   const sheet = layer.querySelector('.sheet');
+  app.querySelector('.game').classList.toggle('overlay', open || ui.phoneOpen);
   if (open) { sheet.innerHTML = `<span class="grabber"></span><h2>¿A dónde vas?</h2><div class="place-rows">${placeButtons()}</div>`; bindTravel(sheet); layer.hidden = false; requestAnimationFrame(() => layer.classList.add('open')); }
   else { layer.classList.remove('open'); setTimeout(() => { layer.hidden = true; }, 320); }
 }
@@ -219,6 +259,7 @@ function toggleSheet(open) {
 function togglePhone(open) {
   const layer = app.querySelector('.phone-layer'); if (!layer) return;
   ui.phoneOpen = open;
+  app.querySelector('.game').classList.toggle('overlay', open || !app.querySelector('.sheet-layer').hidden);
   if (open) { ui.phoneView = 'home'; renderPhone(); layer.hidden = false; requestAnimationFrame(() => layer.classList.add('open')); }
   else { layer.classList.remove('open'); setTimeout(() => { if (!ui.phoneOpen) layer.hidden = true; }, 380); }
 }
@@ -297,33 +338,59 @@ function journalApp() {
   return items || '<p class="empty">Todavía no hay nada que recordar.</p>';
 }
 
+function setSendMode(busy) {
+  const button = app.querySelector('.free-action .send');
+  if (!button) return;
+  button.innerHTML = icon(busy ? STOP_ICON : SEND_ICON);
+  button.setAttribute('aria-label', busy ? 'Detener' : 'Actuar');
+  button.classList.toggle('stop', busy);
+  button.disabled = false;
+}
+
+function stopGeneration() { ui.controller?.abort(); }
+
+async function reloadRun() {
+  try { state.run = await request(`/api/runs/${state.run.id}`); } catch { /* se queda con el estado actual */ }
+  updateGame();
+}
+
+// Ejecuta una operación del servidor (con IA). Mientras dura, el botón de enviar pasa a ser «detener».
 async function perform(operation, { onError } = {}) {
   if (ui.busy) return;
   ui.busy = true; ui.storyError = '';
+  ui.controller = new AbortController();
+  activeSignal.current = ui.controller.signal;
   const root = app.querySelector('.game');
   root.classList.add('busy');
-  root.querySelectorAll('.dock button, .dock textarea').forEach((element) => { element.disabled = true; });
+  root.querySelectorAll('.dock button:not(.send), .dock textarea').forEach((element) => { element.disabled = true; });
+  setSendMode(true);
   const story = root.querySelector('.story');
   story.classList.add('thinking');
+  let stopped = false;
   try {
     state.run = await operation();
     ui.pendingLine = null;
     updateGame();
   } catch (error) {
-    ui.storyError = error.message; ui.pendingLine = null;
+    ui.pendingLine = null;
     onError?.();
     story.dataset.sig = '';
-    renderStory(root, place(state.run.player.locationId));
+    if (error.name === 'AbortError') { stopped = true; } else {
+      ui.storyError = error.message;
+      renderStory(root, place(state.run.player.locationId));
+    }
   } finally {
-    ui.busy = false;
+    activeSignal.current = null; ui.controller = null;
     const live = app.querySelector('.game');
     if (live) {
       live.classList.remove('busy');
       live.querySelector('.story')?.classList.remove('thinking');
-      live.querySelectorAll('.dock button, .dock textarea').forEach((element) => { element.disabled = false; });
-      ui.storyError = '';
-      if (state.run.encounter) live.querySelector('.free-action textarea')?.focus({ preventScroll:true });
+      live.querySelectorAll('.dock button:not(.send), .dock textarea').forEach((element) => { element.disabled = false; });
+      setSendMode(false);
     }
+    ui.busy = false;
+    if (stopped) { notify('Generación detenida.'); await reloadRun(); }
+    ui.storyError = '';
   }
 }
 

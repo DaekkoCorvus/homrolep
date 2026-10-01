@@ -7,8 +7,11 @@ export const isDev = () => { try { return localStorage.getItem('hom:dev') === '1
 export const setDev = (on) => { try { on ? localStorage.setItem('hom:dev', '1') : localStorage.removeItem('hom:dev'); } catch { /* sin almacenamiento */ } };
 try { const flag = new URLSearchParams(location.search).get('dev'); if (flag === '1') setDev(true); if (flag === '0') setDev(false); } catch { /* ignorar */ }
 
+// Señal de cancelación de la operación en curso (botón detener). Las peticiones hechas mientras dura la operación la heredan.
+export const activeSignal = { current: null };
+
 export async function request(url, options = {}) {
-  const response = await fetch(url, { headers:{ 'content-type':'application/json', ...(isDev() ? { 'x-hom-dev':'1' } : {}) }, ...options });
+  const response = await fetch(url, { signal: activeSignal.current ?? undefined, headers:{ 'content-type':'application/json', ...(isDev() ? { 'x-hom-dev':'1' } : {}) }, ...options });
   const body = await response.json();
   if (!response.ok) throw Object.assign(new Error(body.error || 'No se pudo completar la acción.'), { code:body.code });
   return body;
