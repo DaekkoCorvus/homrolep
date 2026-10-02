@@ -100,10 +100,10 @@ test('rewinding a conversation restores time, relationship and log', async () =>
 
 test('dev API is closed by default and supports restart, regenerate and time changes', async (t) => {
   const runs = new Map();
-  let replies = 0; let evaluations = 0;
+  let replies = 0; let evaluations = 0; let farewells = 0;
   const ai = {
-    npcReply: async ({ opening }) => ({ say: opening ? `Saludo ${++replies}` : `Respuesta ${++replies}` }),
-    evaluateEncounter: async () => ({ notes: [{ text: `Nota ${++evaluations}`, valence: 1, evidence: 'Hola' }], farewell: `Adiós ${evaluations}`, summary: 'ok' }),
+    npcReply: async ({ mode }) => (mode === 'closing' ? { say: `Adiós ${++farewells}` } : { say: mode === 'open' ? `Saludo ${++replies}` : `Respuesta ${++replies}` }),
+    evaluateEncounter: async () => { ++evaluations; return { notes: [{ text: `Nota ${evaluations}`, valence: 1, evidence: 'Hola' }], summary: 'ok' }; },
     narrate: async () => 'Narración nueva.', prologue: async () => ({ text: 'Llegas.', locationId: 'station' })
   };
   const server = createAppServer({ ai, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });

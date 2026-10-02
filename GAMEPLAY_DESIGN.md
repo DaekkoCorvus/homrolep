@@ -134,6 +134,16 @@ Prueba de concepto con un solo NPC, **Luna Serp** (`data/canon/npcs/luna_serp.js
 - Fichas: Ajustes → «Importar ficha de personaje» (JSON propio o character card JSON/PNG), sin activar el modo desarrollador.
 - Pendiente: conocimientos vinculados a un lorebook; chat por mensajes (los NPC ya reciben `escribioAlgunaVez`); objetos y regalos reales con inventario.
 
+### Dos papeles de IA, conocimiento y promesas (actualización)
+- **Personaje vs GM.** Dos prompts distintos (`src/server/ai/prompts.js`). El personaje recibe «Interpretas a {nombre}» (sin nombrar la obra ni «NPC»), respuestas de 1 a 6 frases y SOLO lo que ese personaje sabe. El GM narra y traduce a formatos del motor; no interpreta a nadie ni escribe código.
+- **Conocimiento limitado por el motor, no por actuación.** El personaje no ve las acciones del jugador por el mundo ni su historia. Sabe el nombre que el jugador le dio (`playerName`, que puede cambiar si miente), los hechos que le contó (`learned`) y lo vivido juntos; todo sale de la evaluación del GM con citas literales validadas.
+- **Cierre en dos llamadas simultáneas:** el personaje se despide (y puede compartir su contacto, con las condiciones comprobadas por el motor) mientras el GM evalúa: impresiones, nombre, hechos, acuerdos y pendientes resueltos.
+- **Promesas y citas** (`src/server/game/commitments.js`): solo existen cuando ambos llegan a un acuerdo; el GM debe citar la propuesta del jugador y la aceptación explícita del personaje, y el motor comprueba que ambas existan. Tipos: cita, encargo, volver, otro; prioridad alta/media/baja según contexto (el motor la limita: una cita exige lugar y hora; «volveré mañana» sin hora es baja). El personaje espera 30 minutos en el lugar acordado (aunque su horario diga otra cosa); presentarse la cumple; faltar la rompe y resta según la prioridad (alta −2, media −1, baja 0). Los pendientes se recuerdan en las conversaciones y el GM puede marcarlos cumplidos o cancelados con cita del jugador.
+- **NorthLife** (antes Social + Mensajes): Feed (los contactos agregados publican; el jugador también), Chats (mensajes de texto con contactos) y Agenda (pendientes e historial).
+- **Presupuesto de llamadas.** Durante una conversación solo responde el personaje (ya ve el nombre y lo dicho en la transcripción); al cerrar hay dos llamadas (despedida + evaluación del GM). Los chats NO llaman al GM por mensaje: se acumulan y, cuando el jugador actúa (moverse, esperar, acción libre…), el GM los procesa de fondo en UNA llamada por lote, en paralelo con la narración y solo si contienen algo relevante (nombre, hora, promesa). Las publicaciones del feed se generan en ese mismo viaje, como mucho cada 3 horas de juego. Abrir el teléfono nunca llama a la IA.
+- **Acción libre → encuentro:** si el jugador narra que se acerca a hablar con alguien presente, el GM lo traduce y el motor abre la conversación sin pulsar «Hablar con».
+- Límites: el texto del jugador admite hasta 4000 caracteres.
+
 ## 10. Preguntas abiertas
 
 - Cuántos NPC y qué personalidades para la primera rebanada.

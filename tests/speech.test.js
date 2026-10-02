@@ -35,7 +35,7 @@ test('legacy backslash marks still work', () => {
   assert.deepEqual(parseSpeech(`[${BS}feliz] Hola`, []).segments, [], 'sin lista de emociones las marcas se ignoran');
 });
 
-test('the GM receives emotions, recent events, contact status and can open with a contact offer and a private intent', async (t) => {
+test('the character receives emotions and contact status (never the player\'s private actions) and can open with a contact offer and a private intent', async (t) => {
   const emotionFile = path.resolve('assets/portraits/luna_serp/zztest.png');
   await writeFile(emotionFile, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]));
   t.after(() => rm(emotionFile, { force: true }));
@@ -43,8 +43,8 @@ test('the GM receives emotions, recent events, contact status and can open with 
   const runs = new Map(); const seen = [];
   let reply = { say: '{zztest} ¡Qué bueno verte! {nopuedo} Pasa.', intent: 'Quiero darle mi contacto si me ayuda a probar el pan.', contact: { give: true, conditionsMet: [true, true] } };
   const ai = {
-    npcReply: async (context) => { seen.push(context); return reply; },
-    evaluateEncounter: async () => ({ notes: [], farewell: '{zztest} Hasta pronto', summary: 'ok' }),
+    npcReply: async (context) => { seen.push(context); return context.mode === 'closing' ? { say: '{zztest} Hasta pronto' } : reply; },
+    evaluateEncounter: async () => ({ notes: [], summary: 'ok' }),
     prologue: async () => ({ text: 'x', locationId: 'station' })
   };
   const server = createAppServer({ ai, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
@@ -60,7 +60,8 @@ test('the GM receives emotions, recent events, contact status and can open with 
   const opened = await call(`/api/runs/${id}/talk`, { op: 'start', npcId: 'luna_serp' });
   const context = seen.at(-1);
   assert.deepEqual(context.emotions, ['zztest'], 'el motor ofrece las emociones que existen como imagen');
-  assert.ok(context.events.some((event) => /prisa por la lluvia/.test(event.que)), 'sucesos recientes disponibles al abrir');
+  assert.equal(context.events, undefined, 'el personaje no recibe lo que el jugador hace por el mundo');
+  assert.equal(JSON.stringify(context).includes('prisa por la lluvia'), false, 'ni sus acciones privadas');
   assert.equal(context.contact.yaCompartido, false);
   const line = opened.body.encounter.lines[0];
   assert.equal(line.text, '¡Qué bueno verte! Pasa.');

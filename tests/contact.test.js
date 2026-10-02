@@ -9,7 +9,7 @@ test('contacts can be shared mid-conversation, only with every condition met, an
   const seen = [];
   const ai = {
     npcReply: async (context) => { seen.push(context); return { say: 'Claro.', contact: claim }; },
-    evaluateEncounter: async () => ({ notes: [], contactOffer: false, farewell: 'Adiós' }),
+    evaluateEncounter: async () => ({ notes: [], summary: '' }),
     prologue: async () => ({ text: 'x', locationId: 'station' })
   };
   const server = createAppServer({ ai, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import path from 'node:path';
-import { loadNpcs, presentNpcs, validateEvaluation, applyEvaluation, affinityOf, emptyRelationship, mentionsName, MAX_SHIFT_PER_ENCOUNTER, temporalContext, timedNotes, findNpcByHandle } from '../src/server/game/npcs.js';
+import { loadNpcs, presentNpcs, validateEvaluation, applyEvaluation, affinityOf, emptyRelationship, validateFacts, contactAllowed, MAX_SHIFT_PER_ENCOUNTER, temporalContext, timedNotes, findNpcByHandle } from '../src/server/game/npcs.js';
 import { createRun, startEncounter, addExchange, endEncounter, applyAction, addContact, grantContact, leaveEncounter } from '../src/server/game/run.js';
 import { createNanoGPT } from '../src/server/ai/provider.js';
 import { createAppServer } from '../src/server/index.js';
@@ -31,35 +31,34 @@ test('the engine rejects impressions that do not cite what the player said and c
       { text: 'Es educado.', valence: 2, evidence: 'gracias', tags: ['respeto'] },
       { text: 'Otro extra.', valence: 2, evidence: 'Hola' }
     ],
-    contactOffer: true, farewell: 'Vuelve pronto.', summary: 'Pidió una recomendación.'
+    summary: 'Pidió una recomendación.'
   }, lines);
   assert.equal(result.notes.length, 3);
   assert.ok(result.notes.every((note) => note.evidence));
   assert.deepEqual(result.notes[0].tags, ['amabilidad']);
   assert.ok(result.notes.reduce((sum, note) => sum + Math.abs(note.valence), 0) <= MAX_SHIFT_PER_ENCOUNTER);
-  assert.equal(result.wantsContact, true);
+  assert.equal(result.summary, 'Pidió una recomendación.');
   const empty = validateEvaluation({ notes: [{ text: 'x', valence: 2, evidence: 'no existe' }] }, lines);
   assert.equal(empty.notes.length, 1);
   assert.equal(empty.notes[0].valence, 0, 'sin evidencia válida queda una nota neutra');
 });
 
-test('contact is granted only when the GM wants it, affinity allows it and every condition is met', () => {
+test('contact is shared only when the character decides, affinity allows it and every condition is met', () => {
   const plain = { contact: { conditions: [] } };
   const gated = { contact: { conditions: ['ser amigos', 'haber regalado café'] } };
-  const good = validateEvaluation({ notes: [{ text: 'Buena charla.', valence: 2, evidence: 'gracias' }, { text: 'Escucha.', valence: 1, evidence: 'Hola' }], contactOffer: true }, lines);
-  const granted = applyEvaluation(emptyRelationship(), good, 'DAY_1_08:00', plain);
-  assert.equal(granted.contactGranted, true);
-  assert.equal(granted.relationship.contact, true);
-  const cold = validateEvaluation({ notes: [{ text: 'Meh.', valence: 1, evidence: 'Hola' }], contactOffer: true }, lines);
-  assert.equal(applyEvaluation(emptyRelationship(), cold, 't', plain).contactGranted, false);
-  const bad = validateEvaluation({ notes: [{ text: 'Incómodo.', valence: -2, evidence: 'gracias' }], contactOffer: true }, lines);
-  assert.equal(applyEvaluation(emptyRelationship(), bad, 't', plain).contactGranted, false);
-  const withConditions = (met) => validateEvaluation({ notes: [{ text: 'Bien.', valence: 1, evidence: 'Hola' }], contactOffer: true, contactConditions: met }, lines);
-  assert.equal(applyEvaluation(emptyRelationship(), withConditions([true, false]), 't', gated).contactGranted, false, 'falta una condición');
-  assert.equal(applyEvaluation(emptyRelationship(), withConditions([true]), 't', gated).contactGranted, false, 'faltan condiciones por declarar');
-  assert.equal(applyEvaluation(emptyRelationship(), withConditions([true, true]), 't', gated).contactGranted, true);
-  assert.equal(applyEvaluation({ ...emptyRelationship(), contact: true }, withConditions([true, true]), 't', gated).contactGranted, false, 'no se comparte dos veces');
-  assert.ok(affinityOf(good.notes.map((note) => ({ ...note }))) >= 2);
+  const liked = { ...emptyRelationship(), notes: [{ text: 'Buena charla.', valence: 2 }, { text: 'Escucha.', valence: 1 }] };
+  const cold = { ...emptyRelationship(), notes: [{ text: 'Meh.', valence: 1 }] };
+  const bad = { ...emptyRelationship(), notes: [{ text: 'Incómodo.', valence: -2 }] };
+  assert.equal(contactAllowed(plain, liked, { give: true }), true);
+  assert.equal(contactAllowed(plain, liked, { give: false }), false, 'sin intención del personaje no se comparte');
+  assert.equal(contactAllowed(plain, cold, { give: true }), false, 'sin condiciones exige buena impresión');
+  assert.equal(contactAllowed(plain, bad, { give: true }), false);
+  assert.equal(contactAllowed(gated, cold, { give: true, conditionsMet: [true, false] }), false, 'falta una condición');
+  assert.equal(contactAllowed(gated, cold, { give: true, conditionsMet: [true] }), false, 'faltan condiciones por declarar');
+  assert.equal(contactAllowed(gated, cold, { give: true, conditionsMet: [true, true] }), true);
+  assert.equal(contactAllowed(gated, bad, { give: true, conditionsMet: [true, true] }), false, 'ni con condiciones si la impresión es mala');
+  assert.equal(contactAllowed(gated, { ...liked, contact: true }, { give: true, conditionsMet: [true, true] }), false, 'no se comparte dos veces');
+  assert.ok(affinityOf(liked.notes) >= 2);
 });
 
 test('NPCs know how long ago they last talked, so the same day is not a new day', () => {
@@ -91,9 +90,17 @@ test('contact handles are found case-insensitively and unknown handles reveal no
   assert.throws(() => addContact(run, luna), /ya está/);
 });
 
-test('name detection is accent and punctuation tolerant', () => {
-  assert.equal(mentionsName('Me llamo Mará, mucho gusto', 'Mara'), true);
-  assert.equal(mentionsName('Hola a todos', 'Mara'), false);
+test('the character only knows what the player actually told it: name (even a false one) and facts, always quoted', () => {
+  const told = [{ who: 'player', text: 'Me llamo Daekko y reparto paquetes en bici' }, { who: 'npc', text: 'Encantada.' }];
+  const facts = validateFacts({ playerName: { value: 'Daekko', evidence: 'Me llamo Daekko' }, learned: [{ fact: 'Reparte paquetes en bici', evidence: 'reparto paquetes' }, { fact: 'Es millonario', evidence: 'soy millonario' }] }, told);
+  assert.equal(facts.playerName, 'Daekko');
+  assert.deepEqual(facts.learned, ['Reparte paquetes en bici'], 'un dato sin cita real no se aprende');
+  assert.equal(validateFacts({ playerName: { value: 'Pedro', evidence: 'Me llamo Pedro' } }, told).playerName, null, 'un nombre que el jugador no dijo no cuenta');
+  assert.equal(validateFacts({ playerName: { value: 'Daekko', evidence: 'Encantada' } }, told).playerName, null, 'la cita debe ser del jugador');
+  const { relationship } = applyEvaluation({ ...emptyRelationship(), knownName: 'Dae' }, { notes: [], summary: '', ...facts }, 'DAY_1_09:00');
+  assert.equal(relationship.knownName, 'Daekko', 'el nombre puede cambiar si el jugador miente después');
+  assert.deepEqual(relationship.knows, ['Reparte paquetes en bici']);
+  assert.equal(applyEvaluation(relationship, { notes: [], summary: '', playerName: null, learned: [] }, 'DAY_1_10:00').relationship.knownName, 'Daekko', 'sin nombre nuevo se conserva');
 });
 
 test('encounters spend time, block other actions and store the impression on close', () => {
@@ -104,12 +111,11 @@ test('encounters spend time, block other actions and store the impression on clo
   assert.equal(run.encounter.npcId, 'luna_serp');
   assert.equal(run.world.minute, 1);
   assert.throws(() => applyAction(run, { type: 'travel', locationId: 'park' }, world), /conversación/);
-  run = addExchange(run, 'Hola, soy Mara', { say: 'Un gusto, Mara.' }, true);
+  run = addExchange(run, 'Hola, soy Mara', { say: 'Un gusto, Mara.' });
   assert.equal(run.world.minute, 4);
-  assert.equal(run.relationships.luna_serp.nameKnown, true);
-  const evaluation = validateEvaluation({ notes: [{ text: 'Amable.', valence: 1, evidence: 'soy Mara' }], farewell: 'Hasta luego.' }, run.encounter.lines);
-  const { relationship, contactGranted } = applyEvaluation(run.relationships.luna_serp, evaluation, run.encounter.startedAt);
-  run = endEncounter(run, luna, { relationship, farewell: evaluation.farewell, contactGranted });
+  const evaluation = validateEvaluation({ notes: [{ text: 'Amable.', valence: 1, evidence: 'soy Mara' }] }, run.encounter.lines);
+  const { relationship } = applyEvaluation(run.relationships.luna_serp, evaluation, run.encounter.startedAt);
+  run = endEncounter(run, luna, { relationship, farewell: 'Hasta luego.', contactGranted: false });
   assert.equal(run.encounter.closed, true, 'la conversación queda abierta hasta pulsar Volver');
   assert.equal(run.encounter.lines.at(-1).text, 'Hasta luego.', 'la despedida es una línea más de la conversación');
   assert.throws(() => addExchange(run, 'Una cosa más', { say: 'x' }, false), /terminó/);
@@ -138,8 +144,9 @@ test('talk API: hidden notes stay hidden, failures keep the run intact, contact 
   const runs = new Map();
   let fail = false;
   const ai = {
-    npcReply: async ({ transcript }) => { if (fail) throw Object.assign(new Error('IA caída'), { status: 502 }); return { say: transcript.length ? 'Ajá.' : 'Bienvenida.' }; },
-    evaluateEncounter: async () => ({ notes: [{ text: 'Me cae bien.', valence: 2, evidence: 'qué tal', tags: ['amabilidad'] }, { text: 'Simpática.', valence: 1, evidence: 'qué tal' }], contactOffer: true, contactConditions: [true, true], farewell: 'Vuelve.', summary: 'Charla breve.' }),
+    // El personaje (npcReply) habla y se despide; el GM (evaluateEncounter) solo traduce a datos del motor.
+    npcReply: async ({ transcript, mode }) => { if (fail) throw Object.assign(new Error('IA caída'), { status: 502 }); if (mode === 'closing') return { say: 'Vuelve.', contact: { give: true, conditionsMet: [true, true] } }; return { say: transcript.length ? 'Ajá.' : 'Bienvenida.' }; },
+    evaluateEncounter: async () => ({ notes: [{ text: 'Me cae bien.', valence: 2, evidence: 'qué tal', tags: ['amabilidad'] }, { text: 'Simpática.', valence: 1, evidence: 'qué tal' }], summary: 'Charla breve.' }),
     prologue: async () => ({ text: 'Llegas.', locationId: 'station' })
   };
   const server = createAppServer({

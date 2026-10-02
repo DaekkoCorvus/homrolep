@@ -6,7 +6,7 @@ const ui = { phoneOpen:false, phoneView:'home', busy:false, sceneKey:null, hooks
 const PHONE_APPS = [
   ['profile', 'Perfil', '<circle cx="12" cy="8" r="4"/><path d="M4 21c1-5 5-7 8-7s7 2 8 7"/>'],
   ['map', 'Mapa', '<path d="M12 22s7-6.5 7-12a7 7 0 0 0-14 0c0 5.500 7 12 7 12Z"/><circle cx="12" cy="10" r="2.500"/>'],
-  ['social', 'Social', '<path d="M4 5h16v11H9l-5 4Z"/>'],
+  ['northlife', 'NorthLife', '<path d="M4 5h16v11H9l-5 4Z"/><path d="M8 9h8M8 12h5"/>'],
   ['missions', 'Misiones', '<path d="M6 3v18M6 4h12l-3 4 3 4H6"/>'],
   ['journal', 'Diario', '<path d="M6 3h11a2 2 0 0 1 2 2v16H8a2 2 0 0 1-2-2Z"/><path d="M10 8h6M10 12h6"/>'],
   ['settings', 'Ajustes', '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/>']
@@ -44,7 +44,7 @@ export function enterGame(hooks) {
     <section class="story" aria-live="polite"></section>
     <footer class="dock">
       <div class="chips" role="group" aria-label="Acciones del lugar"></div>
-      <form class="free-action"><textarea rows="1" maxlength="500" name="text" aria-label="Acción libre" placeholder="¿Qué haces?" required></textarea><button type="submit" class="send" aria-label="Actuar">${icon(SEND_ICON)}</button></form>
+      <form class="free-action"><textarea rows="1" maxlength="4000" name="text" aria-label="Acción libre" placeholder="¿Qué haces?" required></textarea><button type="submit" class="send" aria-label="Actuar">${icon(SEND_ICON)}</button></form>
     </footer>
     <div class="sheet-layer" hidden><div class="sheet" role="dialog" aria-label="Moverse"></div></div>
     <div class="phone-layer" hidden><div class="phone" role="dialog" aria-label="Teléfono"><div class="phone-notch"></div><div class="phone-status"><span class="ps-time"></span><span class="ps-net">${escapeHtml(state.world.name)} ▪▪▪</span></div><div class="phone-screen"></div><button class="phone-home" type="button" aria-label="Inicio del teléfono"></button></div></div>
@@ -272,6 +272,7 @@ function renderConversation(story) {
   const fresh = animate ? lines.findLastIndex((line) => line.who === 'npc') : -1;
   const rows = lines.map((line, index) => {
     if (line.who === 'system') return `<div class="contact-card" ${fresh >= 0 && index > fresh ? 'hidden data-after' : ''}><small>${escapeHtml(line.text)}</small><strong>${escapeHtml(line.handle)}</strong><button type="button" data-copy="${escapeHtml(line.handle)}">Copiar</button><small>Guárdalo en tu Diario o escríbelo en Mensajes para agregarla.</small></div>`;
+    if (line.who === 'narrator') return `<p class="dlg narr">${escapeHtml(line.text)}</p>`;
     if (line.who === 'npc') return `<p class="dlg npc"><b>${escapeHtml(npc.name)}</b>${line.gesture ? `<em>${escapeHtml(line.gesture)}</em>` : ''}<span data-index="${index}">${index === fresh ? '' : escapeHtml(line.text)}</span></p>`;
     return `<p class="dlg you">${formatSpeech(line.text)}</p>`;
   });
@@ -370,15 +371,16 @@ function renderPhone() {
   const view = ui.phoneView; const run = state.run;
   if (view === 'home') {
     screen.className = 'phone-screen home';
-    screen.innerHTML = `<div class="phone-clock"><strong>${clockText(run.world)}</strong><span>Día ${run.world.day} · ${period(run.world.hour)}</span></div><div class="app-grid">${PHONE_APPS.map(([id, label, path]) => `<button type="button" data-app="${id}"><span class="app-icon">${icon(path)}</span>${label}</button>`).join('')}<button type="button" data-app="messages"><span class="app-icon">${icon('<path d="M3 7l9 6 9-6M3 7v10h18V7Z"/>')}</span>Mensajes</button>${isDev() ? `<button type="button" data-app="gm"><span class="app-icon">${icon('<path d="M12 3l9 5-9 5-9-5ZM3 13l9 5 9-5"/>')}</span>Notas GM</button>` : ''}</div>`;
+    screen.innerHTML = `<div class="phone-clock"><strong>${clockText(run.world)}</strong><span>Día ${run.world.day} · ${period(run.world.hour)}</span></div><div class="app-grid">${PHONE_APPS.map(([id, label, path]) => `<button type="button" data-app="${id}"><span class="app-icon">${icon(path)}</span>${label}</button>`).join('')}${isDev() ? `<button type="button" data-app="gm"><span class="app-icon">${icon('<path d="M12 3l9 5-9 5-9-5ZM3 13l9 5 9-5"/>')}</span>Notas GM</button>` : ''}</div>`;
     screen.querySelectorAll('[data-app]').forEach((button) => button.onclick = () => openApp(button.dataset.app));
     return;
   }
-  const titles = { profile:'Perfil', map:'Mapa', social:'Social', missions:'Misiones', journal:'Diario', messages:'Mensajes', gm:'Notas del GM' };
-  const bodies = { profile:profileApp, map:mapApp, social:socialApp, missions:() => '<p class="empty">No tienes misiones activas. Las oportunidades llegarán cuando el mundo tenga algo que ofrecerte.</p>', journal:journalApp, messages:messagesApp, gm:gmApp };
+  const titles = { profile:'Perfil', map:'Mapa', northlife:'NorthLife', missions:'Misiones', journal:'Diario', gm:'Notas del GM' };
+  const bodies = { profile:profileApp, map:mapApp, northlife:northlifeApp, missions:() => '<p class="empty">No tienes misiones activas. Las oportunidades llegarán cuando el mundo tenga algo que ofrecerte.</p>', journal:journalApp, gm:gmApp };
   screen.className = 'phone-screen app';
   screen.innerHTML = `<div class="app-bar"><button type="button" data-back aria-label="Volver">${icon('<path d="M15 5l-7 7 7 7"/>')}</button><h2>${titles[view]}</h2></div><div class="app-body">${bodies[view]()}</div>`;
-  screen.querySelector('[data-back]').onclick = () => { ui.phoneView = 'home'; renderPhone(); };
+  screen.querySelector('[data-back]').onclick = () => { if (view === 'northlife' && ui.chatWith) ui.chatWith = null; else ui.phoneView = 'home'; renderPhone(); };
+  if (view === 'northlife') bindNorthlife(screen);
   bindTravel(screen);
   screen.querySelectorAll('[data-copy]').forEach((button) => button.onclick = async () => { try { await navigator.clipboard.writeText(button.dataset.copy); notify('Copiado.'); } catch { notify(button.dataset.copy); } });
   const contactForm = screen.querySelector('#contact-form');
@@ -400,7 +402,7 @@ function renderPhone() {
 
 function openApp(id) {
   if (id === 'settings') { togglePhone(false); ui.hooks.openSettings?.(); return; }
-  ui.phoneView = id; renderPhone();
+  ui.phoneView = id; if (id === 'northlife') { ui.nlTab ??= 'feed'; ui.chatWith = null; } renderPhone();
 }
 
 function profileApp() {
@@ -408,14 +410,6 @@ function profileApp() {
   const gender = p.gender === 'custom' ? p.genderCustom : p.gender === 'man' ? 'Hombre' : p.gender === 'woman' ? 'Mujer' : 'Sin definir';
   const rows = [['Edad', p.age], ['Identidad', gender], ['Raza', 'Humano'], ['Dinero', `$${p.money}`], ['Reputación', p.reputation], ['Ubicación', loc.name], ['Ocupación', p.occupation || 'Por descubrir'], ['Aspiración', p.aspiration || 'Por descubrir']];
   return `<div class="profile-head"><strong>${escapeHtml(p.name)}</strong><span>${escapeHtml(p.origin || 'Un pasado aún desconocido.')}</span></div><dl class="stat-rows">${rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${escapeHtml(String(v))}</dd></div>`).join('')}</dl>`;
-}
-
-function messagesApp() {
-  const contacts = state.run.contacts ?? [];
-  const list = contacts.length
-    ? contacts.map((npc) => `<div class="contact"><span class="avatar">${initial(npc.name)}</span><span><strong>${escapeHtml(npc.name)}</strong><small>${escapeHtml(npc.role)}</small></span><em>Chat próximamente</em></div>`).join('')
-    : '<p class="empty">Todavía no tienes contactos. Cuando alguien te comparta su usuario, escríbelo aquí para agregarlo.</p>';
-  return `<form id="contact-form"><input name="handle" placeholder="@usuario" autocapitalize="none" autocomplete="off" spellcheck="false" maxlength="30" required><button type="submit">Agregar contacto</button><p class="error" data-contact-error role="alert"></p></form>${list}`;
 }
 
 function gmApp() {
@@ -426,9 +420,69 @@ function gmApp() {
 
 function mapApp() { return `<p class="muted">${escapeHtml(state.world.name)} · toca un lugar para ir</p><div class="place-rows">${placeButtons()}</div>`; }
 
-function socialApp() {
-  const posts = state.run.social.posts.map((post) => `<article class="post"><strong>${escapeHtml(post.author)}</strong><p>${escapeHtml(post.text)}</p><small>${escapeHtml(post.time)}</small></article>`).join('');
-  return `<form id="post-form"><textarea name="text" maxlength="280" rows="2" placeholder="¿Qué está pasando?" required></textarea><button type="submit">Publicar</button></form>${posts || '<p class="empty">El feed está en silencio. Publica algo.</p>'}`;
+// ---- NorthLife: feed, chats con contactos y agenda de promesas ------------------------------------------------------------------
+const PRIORITY_TEXT = { low: 'Baja', medium: 'Media', high: 'Alta' };
+const hourOf = (key) => escapeHtml(String(key ?? '').replace(/^DAY_(\d+)_/, 'Día $1 · '));
+
+function northlifeApp() {
+  const pending = (state.run.commitments ?? []).filter((item) => item.status === 'active').length;
+  const tabs = [['feed', 'Feed'], ['chats', 'Chats'], ['agenda', 'Agenda']];
+  const body = ui.nlTab === 'chats' ? (ui.chatWith ? threadView() : chatsTab()) : ui.nlTab === 'agenda' ? agendaTab() : feedTab();
+  return `<nav class="nl-tabs">${tabs.map(([id, label]) => `<button type="button" data-nl="${id}" class="${ui.nlTab === id ? 'active' : ''}">${label}${id === 'agenda' && pending ? ` <i class="nl-badge">${pending}</i>` : ''}</button>`).join('')}</nav>${body}`;
+}
+
+function feedTab() {
+  const posts = state.run.social.posts.map((post) => `<article class="post"><header><span class="avatar">${initial(post.author)}</span><strong>${escapeHtml(post.author)}</strong><small>${hourOf(post.time)}</small></header><p>${escapeHtml(post.text)}</p></article>`).join('');
+  return `<form id="post-form"><textarea name="text" maxlength="280" rows="2" placeholder="¿Qué está pasando?" required></textarea><button type="submit">Publicar</button></form>${posts || '<p class="empty">El feed está en silencio. Agrega contactos para ver lo que publican.</p>'}`;
+}
+
+function chatsTab() {
+  const contacts = state.run.contacts ?? [];
+  const list = contacts.length
+    ? contacts.map((npc) => { const last = state.run.chats?.[npc.id]?.at(-1); return `<button type="button" class="contact chat-row" data-chat="${escapeHtml(npc.id)}"><span class="avatar">${initial(npc.name)}</span><span><strong>${escapeHtml(npc.name)}</strong><small>${last ? escapeHtml(last.text.slice(0, 60)) : escapeHtml(npc.role)}</small></span></button>`; }).join('')
+    : '<p class="empty">Todavía no tienes contactos. Cuando alguien te comparta su usuario, escríbelo aquí para agregarlo.</p>';
+  return `<form id="contact-form"><input name="handle" placeholder="@usuario" autocapitalize="none" autocomplete="off" spellcheck="false" maxlength="30" required><button type="submit">Agregar contacto</button><p class="error" data-contact-error role="alert"></p></form>${list}`;
+}
+
+function threadView() {
+  const npc = (state.run.contacts ?? []).find((item) => item.id === ui.chatWith);
+  if (!npc) return '<p class="empty">Contacto no disponible.</p>';
+  const messages = (state.run.chats?.[npc.id] ?? []).map((message) => `<div class="bubble ${message.who === 'player' ? 'you' : 'them'}">${escapeHtml(message.text)}<time>${hourOf(message.time)}</time></div>`);
+  if (ui.chatPending) messages.push(`<div class="bubble you">${escapeHtml(ui.chatPending)}</div><div class="bubble them typing"><i></i><i></i><i></i></div>`);
+  return `<div class="thread-head"><span class="avatar">${initial(npc.name)}</span><strong>${escapeHtml(npc.name)}</strong></div><div class="thread">${messages.join('') || '<p class="empty">Aún no hay mensajes. Saluda.</p>'}</div>
+    <form id="chat-form"><textarea name="text" rows="1" maxlength="4000" placeholder="Escribe un mensaje…" required></textarea><button type="submit" class="send-chat" aria-label="${ui.chatBusy ? 'Detener' : 'Enviar'}">${icon(ui.chatBusy ? STOP_ICON : SEND_ICON)}</button></form><p class="error" data-chat-error role="alert"></p>`;
+}
+
+function agendaTab() {
+  const items = state.run.commitments ?? [];
+  const row = (item) => `<div class="promise ${item.status} p-${item.priority}"><span class="p-flag">${PRIORITY_TEXT[item.priority]}</span><div><strong>${escapeHtml(item.text)}</strong><small>${escapeHtml(item.npcName)}${item.place ? ` · ${escapeHtml(place(item.place)?.name ?? item.place)}` : ''}${item.dueText ? ` · ${escapeHtml(item.dueText)}` : ''}</small></div></div>`;
+  const active = items.filter((item) => item.status === 'active').sort((x, y) => (x.dueMin ?? 1e9) - (y.dueMin ?? 1e9));
+  const done = items.filter((item) => item.status !== 'active').slice(-8).reverse();
+  const label = { kept: 'Cumplida', broken: 'Incumplida', cancelled: 'Cancelada' };
+  return (active.length ? `<h3 class="nl-h">Pendientes</h3>${active.map(row).join('')}` : '<p class="empty">No tienes promesas ni citas pendientes. Solo se anotan cuando tú y la otra persona llegan a un acuerdo.</p>')
+    + (done.length ? `<h3 class="nl-h">Historial</h3>${done.map((item) => `${row(item)}<small class="p-state ${item.status}">${label[item.status]}</small>`).join('')}` : '');
+}
+
+function bindNorthlife(screen) {
+  screen.querySelectorAll('[data-nl]').forEach((button) => button.onclick = () => { ui.nlTab = button.dataset.nl; ui.chatWith = null; renderPhone(); });
+  screen.querySelectorAll('[data-chat]').forEach((button) => button.onclick = () => { ui.chatWith = button.dataset.chat; renderPhone(); });
+  const thread = screen.querySelector('.thread'); if (thread) thread.scrollTop = thread.scrollHeight;
+  const form = screen.querySelector('#chat-form'); if (!form) return;
+  form.querySelector('.send-chat').addEventListener('click', (event) => { if (ui.chatBusy) { event.preventDefault(); ui.chatAbort?.abort(); } });
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    if (ui.chatBusy) return;
+    const text = new FormData(form).get('text').toString().trim(); if (!text) return;
+    const npcId = ui.chatWith;
+    ui.chatBusy = true; ui.chatPending = text; ui.chatAbort = new AbortController(); activeSignal.current = ui.chatAbort.signal;
+    renderPhone();
+    try {
+      state.run = await request(`/api/runs/${state.run.id}/chat`, { method: 'POST', body: JSON.stringify({ npcId, text }) });
+    } catch (error) {
+      if (error.name !== 'AbortError') ui.chatError = error.message; else notify('Mensaje detenido.');
+      await reloadRun();
+    } finally { activeSignal.current = null; ui.chatBusy = false; ui.chatPending = null; ui.chatAbort = null; updateGame(); renderPhone(); const failure = app.querySelector('[data-chat-error]'); if (failure && ui.chatError) { failure.textContent = ui.chatError; ui.chatError = ''; } }
+  };
 }
 
 const npcName = (id) => state.run.sharedContacts?.find((npc) => npc.id === id)?.name ?? state.run.contacts?.find((npc) => npc.id === id)?.name ?? state.run.encounterNpc?.name ?? state.run.presence?.find((npc) => npc.id === id)?.name ?? id;
@@ -443,6 +497,10 @@ function eventText(event) {
   if (event.type === 'slept') return 'Dormiste ocho horas.';
   if (event.type === 'worked') return `Trabajaste y ganaste $${event.data.earned}.`;
   if (event.type === 'social_post_created') return 'Publicaste en la red social.';
+  if (event.type === 'commitment_made') return `Quedaste en algo con ${escapeHtml(npcName(event.data.npcId))}: ${escapeHtml(event.data.text)}`;
+  if (event.type === 'commitment_kept') return `Cumpliste: ${escapeHtml(event.data.text)}`;
+  if (event.type === 'commitment_broken') return `No cumpliste: ${escapeHtml(event.data.text)}`;
+  if (event.type === 'commitment_cancelled') return `Cancelado: ${escapeHtml(event.data.text)}`;
   if (event.type === 'contact_shared') return `${escapeHtml(npcName(event.data.npcId))} te compartió su contacto: ${escapeHtml(event.data.handle)}`;
   if (event.type === 'contact_added') return `Agregaste a ${escapeHtml(npcName(event.data.npcId))} a tus contactos.`;
   if (event.type === 'conversation_started') return 'Empezaste a hablar con alguien.';
@@ -490,8 +548,12 @@ async function perform(operation, { onError, animate = false } = {}) {
   const story = root.querySelector('.story');
   story.classList.add('thinking');
   let stopped = false;
+  const before = { made: (state.run.commitments ?? []).length, broken: (state.run.commitments ?? []).filter((item) => item.status === 'broken').length };
   try {
     state.run = await operation();
+    const after = state.run.commitments ?? [];
+    if (after.length > before.made) notify('Anotado en tu Agenda de NorthLife.');
+    else if (after.filter((item) => item.status === 'broken').length > before.broken) notify('Incumpliste un compromiso. Revisa tu Agenda.');
     ui.pendingLine = null;
     ui.animateNext = animate;
     updateGame();
@@ -519,7 +581,7 @@ async function perform(operation, { onError, animate = false } = {}) {
   }
 }
 
-const runAction = (action) => perform(() => request(`/api/runs/${state.run.id}/action`, { method:'POST', body:JSON.stringify(action) }));
+const runAction = (action) => perform(() => request(`/api/runs/${state.run.id}/action`, { method:'POST', body:JSON.stringify(action) }), { animate: action.type === 'freeform' });
 const talkRequest = (body) => request(`/api/runs/${state.run.id}/talk`, { method:'POST', body:JSON.stringify(body) });
 const startTalk = (npcId) => perform(() => talkRequest({ op:'start', npcId }), { animate:true });
 const endTalk = () => perform(() => talkRequest({ op:'end' }), { animate:true });

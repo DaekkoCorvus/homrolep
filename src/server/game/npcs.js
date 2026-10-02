@@ -159,7 +159,7 @@ export function stickyFrom(lines, npc) {
 }
 
 export function emptyRelationship() {
-  return { met: false, nameKnown: false, contact: false, added: false, contactAt: null, encounters: 0, lastEnd: null, notes: [], history: [] };
+  return { met: false, knownName: null, knows: [], contact: false, added: false, contactAt: null, encounters: 0, lastEnd: null, notes: [], history: [] };
 }
 
 export function relationshipOf(run, npcId) {
@@ -189,16 +189,28 @@ export function attitudeOf(affinity) {
   return 'confiada y cercana contigo';
 }
 
-export function mentionsName(text, name) {
-  const first = normalize(name).split(' ')[0];
-  return first.length >= 2 && normalize(text).split(' ').includes(first);
-}
 
 export function transcriptText(lines) {
   return lines.filter((line) => line.who === 'player').map((line) => line.text).join('\n');
 }
 
 // Filtra la evaluación del GM: cada nota debe citar algo que el jugador realmente dijo.
+// Lo que el personaje puede llegar a saber del jugador: el nombre que este le dio (aunque sea falso) y hechos que contó.
+export function validateFacts(raw, lines) {
+  const playerLines = lines.filter((line) => line.who === 'player').map((line) => normalize(line.text));
+  const cited = (quote) => { const q = normalize(quote); return q.length >= 3 && playerLines.some((line) => line.includes(q)); };
+  const clip = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
+  // El personaje solo «sabe» el nombre si el jugador lo dijo de verdad (aunque sea un apodo o una mentira).
+  const given = clip(raw?.playerName?.value, 40);
+  const playerName = given && cited(raw?.playerName?.evidence) && playerLines.some((line) => line.includes(normalize(given))) ? given : null;
+  const learned = [];
+  for (const item of Array.isArray(raw?.learned) ? raw.learned.slice(0, 6) : []) {
+    const fact = clip(item?.fact, 200);
+    if (fact && cited(item?.evidence) && !learned.some((known) => normalize(known) === normalize(fact))) learned.push(fact);
+  }
+  return { playerName, learned };
+}
+
 export function validateEvaluation(raw, lines) {
   const playerLines = lines.filter((line) => line.who === 'player').map((line) => normalize(line.text));
   const cited = (quote) => {
@@ -221,22 +233,20 @@ export function validateEvaluation(raw, lines) {
   const lastLine = lines.filter((line) => line.who === 'player').at(-1)?.text ?? '';
   const notes = accepted.length ? accepted : [{ text: 'Charlamos un rato, sin nada que destacar.', valence: 0, evidence: lastLine.slice(0, 80), tags: [] }];
   const clip = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
-  return {
-    notes, wantsContact: raw?.contactOffer === true, conditionsMet: Array.isArray(raw?.contactConditions) ? raw.contactConditions.map((value) => value === true) : [],
-    farewell: clip(raw?.farewell, 600), summary: clip(raw?.summary, 200)
-  };
+  const { playerName, learned } = validateFacts(raw, lines);
+  return { notes, summary: clip(raw?.summary, 200), playerName, learned };
 }
 
-export function applyEvaluation(relationship, evaluation, time, npc) {
+// Traduce el juicio del GM a estado del personaje: impresiones, lo que sabe del jugador y el nombre que este le dio.
+export function applyEvaluation(relationship, evaluation, time) {
   const notes = [...relationship.notes, ...evaluation.notes.map((note) => ({ ...note, time }))].slice(-MAX_NOTES);
-  const withNotes = { ...relationship, notes };
-  const contactGranted = contactAllowed(npc, withNotes, { give: evaluation.wantsContact, conditionsMet: evaluation.conditionsMet });
+  const knows = [...(relationship.knows ?? [])];
+  for (const fact of evaluation.learned ?? []) if (!knows.some((known) => normalize(known) === normalize(fact))) knows.push(fact);
   return {
     relationship: {
-      ...relationship, notes, contact: relationship.contact || contactGranted,
+      ...relationship, notes, knows: knows.slice(-40), knownName: evaluation.playerName ?? relationship.knownName ?? null,
       history: evaluation.summary ? [...relationship.history, { time, text: evaluation.summary }].slice(-6) : relationship.history
-    },
-    contactGranted
+    }
   };
 }
 
