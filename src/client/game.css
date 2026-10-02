@@ -466,3 +466,4 @@ body:has(.game) { background:#05070d; overflow:hidden; }
 .nl-tabs { overflow-y:hidden; min-height:52px; align-items:center; }
 .xp-handle-input input { padding:0; }
 .xp-actions > * { justify-self:start; }
+.xp-av img[data-avatar] { object-position:center; }

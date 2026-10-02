@@ -30,11 +30,17 @@ export function ago(minutes, now) {
   return Math.floor(now / 1440) - Math.floor(minutes / 1440) === 1 ? `ayer ${clock}` : `Día ${Math.floor(minutes / 1440) + 1} · ${clock}`;
 }
 
+// Solo se pintan avatares que el servidor ya validó (https del catálogo o imágenes locales de assets/social); aun así se vuelve a comprobar.
+const SAFE_AVATAR = /^(?:https:\/\/[^\s"'<>`]+|\/assets\/social\/[A-Za-z0-9_\-./]+)$/;
+
 function avatar(entry, size = '') {
   const portrait = entry.npcId ? state.run.contacts?.find((npc) => npc.id === entry.npcId)?.portraits?.default : null;
   if (portrait) return `<span class="xp-av ${size}"><img src="${escapeHtml(portrait)}" alt=""></span>`;
   if (entry.own && profile().hasAvatar) return `<span class="xp-av ${size}"><img src="${mediaUrl('avatar')}" alt=""></span>`;
-  return `<span class="xp-av ${size}" style="--h:${hue(entry.handle)}">${escapeHtml(String(entry.name || entry.handle).replace(/^@/, '').charAt(0).toUpperCase())}</span>`;
+  const letter = escapeHtml(String(entry.name || entry.handle).replace(/^@/, '').charAt(0).toUpperCase());
+  // Con imagen, la inicial queda como respaldo: si la URL ya no existe (error de carga) se sustituye sola (ver bindFeed).
+  if (typeof entry.avatar === 'string' && SAFE_AVATAR.test(entry.avatar)) return `<span class="xp-av ${size}" style="--h:${hue(entry.handle)}" data-letter="${letter}"><img src="${escapeHtml(entry.avatar)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-avatar></span>`;
+  return `<span class="xp-av ${size}" style="--h:${hue(entry.handle)}">${letter}</span>`;
 }
 
 // Botón con la foto del jugador en la barra de la app (abre su perfil).
@@ -156,6 +162,11 @@ const api = (op) => request(`/api/runs/${state.run.id}/social`, { method: 'POST'
 export function bindFeed(screen, ctx) {
   const { ui } = ctx;
   const body = screen.querySelector('.app-body');
+  // Un avatar que no carga (URL caída) vuelve al avatar de respaldo con la inicial. Un único oyente por pantalla.
+  if (!screen.dataset.avatarFallback) {
+    screen.dataset.avatarFallback = '1';
+    screen.addEventListener('error', (event) => { const img = event.target; if (img instanceof HTMLImageElement && img.matches('[data-avatar]') && img.parentElement) img.parentElement.textContent = img.parentElement.dataset.letter ?? ''; }, true);
+  }
   const fire = async (operation) => { try { state.run = await operation(); ctx.rerender(true); ctx.refresh(); } catch (error) { notify(error.message); } };
 
   screen.querySelector('[data-compose]')?.addEventListener('click', () => { ui.composing = !ui.composing; ctx.rerender(); screen.querySelector('#compose-form textarea')?.focus(); });

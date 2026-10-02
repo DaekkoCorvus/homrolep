@@ -1,4 +1,4 @@
-const CACHE = 'hom-rpg-v19';
+const CACHE = 'hom-rpg-v20';
 const ASSETS = ['/', '/styles.css', '/app.js', '/core.js', '/game.js', '/devtools.js', '/prompteditor.js', '/northlife.js', '/scenes.js', '/game.css', '/manifest.json', '/assets/V%C3%B3rtice%20liminal.html'];
 
 self.addEventListener('install', (event) => {
@@ -10,7 +10,7 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET' || new URL(event.request.url).pathname.startsWith('/api/')) return;
+  if (event.request.method !== 'GET' || new URL(event.request.url).origin !== self.location.origin || new URL(event.request.url).pathname.startsWith('/api/')) return;
   event.respondWith(fetch(event.request).then((response) => {
     const copy = response.clone();
     caches.open(CACHE).then((cache) => cache.put(event.request, copy));

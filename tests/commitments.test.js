@@ -107,13 +107,14 @@ test('updates only resolve real pending items with a quote from the player', () 
 
 test('character and GM prompts are separate roles and the character prompt never names the work or says "NPC"', () => {
   const character = characterRules('Luna Serp');
-  assert.match(character, /^Interpretas a Luna Serp\./);
+  assert.match(character, /^You are Luna Serp:/);
+  assert.match(character, /natural, neutral contemporary Spanish/i, 'el módulo de idioma define el idioma de salida');
+  assert.match(character, /name supplied for \{\{user\}\} is specific to this character/i, 'el nombre conocido es propio de cada personaje');
   assert.doesNotMatch(character, /Heroes of Misery|NPC|jugador/i, 'el personaje no ve el juego');
-  assert.match(character, /entre 1 y 6 frases/);
-  assert.doesNotMatch(character, /finge|fingir|haz como que no sabes/i, 'la información limitada la impone el motor, no se le pide actuar');
+  assert.doesNotMatch(character, /pretend not to know|fake ignorance/i, 'el motor impone qué información conoce');
   const gm = compose('gm', 'evaluation', defaultPreset('gm'), { data: {}, format: GM_FORMATS.evaluation }).map((message) => message.content).join('\n');
-  assert.match(gm, /traductor hacia el motor/);
-  assert.match(gm, /no interpretas a ningún personaje/);
+  assert.match(gm, /narrative and semantic interpreter/i);
+  assert.match(gm, /server applies deterministic actions and validates/i);
 });
 
 test('API: closing registers confirmed agreements; chats and the feed are processed in one background batch when the player acts', async (t) => {

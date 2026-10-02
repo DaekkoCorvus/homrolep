@@ -18,6 +18,11 @@ export const REFRESH_GAP = 120;              // si el jugador publica, el feed s
 const MAX_BIO = 160; const MAX_AVATAR = 200_000; const MAX_BANNER = 320_000;
 const IMAGE = /^data:image\/(webp|png|jpeg);base64,[A-Za-z0-9+/=]+$/;
 const MAX_POSTS = 120; const MAX_REPLIES = 12; const MAX_ACCOUNTS = 150; const MAX_NOTIFICATIONS = 60;
+export const MAX_GENERATED_POSTS = 14;       // publicaciones que el motor acepta por generación (el prompt social pide el mismo máximo)
+const MAX_NEW_ACCOUNTS = 40;                 // cuentas nuevas que se registran como máximo por generación
+const SAMPLES = 2; const SAMPLE_CHARS = 140; // muestra de la voz de cada cuenta que se conserva
+// Lo que se envía al modelo en cada generación: tope fijo, no crece con la partida.
+export const PROMPT_LIMITS = { seeds: 4, contacts: 8, popular: 4, recent: 5, random: 5, thread: 8, posts: 12, excerpt: 160 };
 const HANDLE = /^@[A-Za-z0-9_]{3,20}$/;
 
 const pad = (value) => String(value).padStart(2, '0');
@@ -25,6 +30,58 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const whole = (value) => (Number.isFinite(Number(value)) ? Math.round(Number(value)) : 0);
 const text = (value, max) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, max) : '');
 export const handleKey = (handle) => String(handle ?? '').toLowerCase();
+
+// Cuentas generadas: cada una conserva una identidad estable (usuario, nombre, popularidad), el avatar que el servidor le asignó
+// y una muestra de lo último que escribió (su «voz»); eso es todo lo que se guarda. Los avatares salen de un catálogo local
+// (socialCatalog.js) y los asigna el servidor: el modelo ni los ve ni los elige.
+const hash32 = (value) => { let h = 0x811c9dc5; for (const char of String(value)) { h ^= char.charCodeAt(0); h = Math.imul(h, 0x01000193); } return h >>> 0; };
+const seededRandom = (seed) => {
+  let a = seed >>> 0;
+  return () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+};
+
+// Avatar «aleatorio» pero estable: se elige por el usuario y la partida, prefiriendo uno que nadie más use en esa partida.
+export function pickAvatar(catalog, used, runId, handle) {
+  if (!catalog?.length) return null;
+  const start = hash32(`${runId}:${handleKey(handle)}`) % catalog.length;
+  for (let step = 0; step < catalog.length; step++) {
+    const url = catalog[(start + step) % catalog.length];
+    if (!used.has(url)) return url;
+  }
+  return catalog[start];
+}
+
+// Partidas anteriores: a las cuentas guardadas sin avatar se les asigna uno al cargar (solo a ellas; nada más cambia). Si no hay
+// catálogo, la partida se devuelve tal cual y la interfaz usa el avatar de respaldo.
+export function withAvatars(run, avatars, seeds = []) {
+  const accounts = run?.social?.accounts;
+  if (!avatars?.length || !accounts) return run;
+  const seedKeys = new Set(seeds.map((seed) => handleKey(seed.handle)));
+  const missing = Object.entries(accounts).filter(([key, account]) => !account.avatar && !account.npcId && !seedKeys.has(key));
+  if (!missing.length) return run;
+  const used = new Set(Object.values(accounts).map((account) => account.avatar).filter(Boolean));
+  const next = { ...run, social: { ...run.social, accounts: { ...accounts } } };
+  for (const [key, account] of missing) {
+    const avatar = pickAvatar(avatars, used, run.id, account.handle ?? key);
+    if (avatar) { used.add(avatar); next.social.accounts[key] = { ...account, avatar }; }
+  }
+  return next;
+}
+
+// Solo estos campos se guardan por cuenta; cualquier otra cosa que llegue se descarta.
+const cleanAccount = (account) => ({
+  handle: account.handle, name: text(account.name, 30) || String(account.handle).slice(1), popularity: clamp(whole(account.popularity), 0, 100), verified: account.verified === true,
+  ...(account.npcId ? { npcId: account.npcId } : {}), ...(typeof account.avatar === 'string' && account.avatar ? { avatar: account.avatar } : {}),
+  ...(account.samples?.length ? { samples: account.samples.slice(0, SAMPLES).map((sample) => text(sample, SAMPLE_CHARS)).filter(Boolean) } : {}),
+  ...(Number.isFinite(account.first) ? { first: account.first } : {}), ...(Number.isFinite(account.seen) ? { seen: account.seen } : {})
+});
+// Anota actividad reciente de una cuenta (las canónicas no se guardan en la partida).
+function remember(account, body, minutes) {
+  if (account.seed) return;
+  const sample = text(body, SAMPLE_CHARS);
+  account.samples = [sample, ...(account.samples ?? []).filter((item) => item !== sample)].slice(0, SAMPLES);
+  account.seen = Math.max(account.seen ?? 0, minutes);
+}
 
 export const keyOfMinutes = (minutes) => {
   const rest = ((minutes % 1440) + 1440) % 1440;
@@ -79,7 +136,7 @@ export function migrateSocial(social, player) {
 export function accountDirectory(social, seeds = []) {
   const directory = new Map();
   for (const [key, account] of Object.entries(social.accounts ?? {})) directory.set(key, { ...account });
-  for (const seed of seeds) directory.set(handleKey(seed.handle), { handle: seed.handle, name: seed.name, popularity: seed.popularity, verified: seed.verified === true, bio: seed.bio ?? '', seed: true });
+  for (const seed of seeds) directory.set(handleKey(seed.handle), { handle: seed.handle, name: seed.name, popularity: seed.popularity, verified: seed.verified === true, bio: seed.bio ?? '', ...(seed.avatar ? { avatar: seed.avatar } : {}), seed: true });
   return directory;
 }
 
@@ -94,7 +151,8 @@ export function resolveWhen(raw, world, fallback = minutesOfWorld(world)) {
   return clamp((world.day - 1 + offset) * 1440 + hour * 60 + minute, now - PAST, now + FUTURE);
 }
 
-// Resuelve (o crea) la cuenta de un autor propuesto por el modelo. Devuelve null si no se puede usar.
+// Resuelve (o registra) la cuenta de un autor propuesto por el modelo. Devuelve null si no se puede usar. Las cuentas nuevas reciben
+// su avatar del catálogo en este momento y ya no se vuelve a sortear; hay un máximo de cuentas nuevas por generación.
 function authorOf(rawHandle, rawName, rawPopularity, context) {
   const handle = typeof rawHandle === 'string' ? rawHandle.trim() : '';
   const key = handleKey(handle);
@@ -102,7 +160,13 @@ function authorOf(rawHandle, rawName, rawPopularity, context) {
   const known = context.directory.get(key);
   if (known) return { account: known, npcId: context.contacts.get(key)?.id };
   const npc = context.contacts.get(key);
-  const account = { handle, name: npc ? npc.name : (text(rawName, 30) || handle.slice(1)), popularity: clamp(rawPopularity == null ? (npc ? 25 : 10) : whole(rawPopularity), 0, 90), verified: false, ...(npc ? { npcId: npc.id } : {}) };
+  if (!npc && context.created >= MAX_NEW_ACCOUNTS) return null;
+  const account = { handle, name: npc ? npc.name : (text(rawName, 30) || handle.slice(1)), popularity: clamp(rawPopularity == null ? (npc ? 25 : 10) : whole(rawPopularity), 0, 90), verified: false, first: context.minutes, ...(npc ? { npcId: npc.id } : {}) };
+  if (!npc) {
+    context.created += 1;
+    const avatar = pickAvatar(context.avatars, context.usedAvatars, context.runId, handle);
+    if (avatar) { account.avatar = avatar; context.usedAvatars.add(avatar); }
+  }
   context.directory.set(key, account);
   return { account, npcId: npc?.id };
 }
@@ -110,10 +174,11 @@ function authorOf(rawHandle, rawName, rawPopularity, context) {
 function cleanReplies(rawReplies, post, context, { floor, ceiling, defaultStep = 9 }) {
   const out = [];
   for (const [index, raw] of (Array.isArray(rawReplies) ? rawReplies : []).slice(0, MAX_REPLIES).entries()) {
-    const author = authorOf(raw?.usuario, raw?.nombre, raw?.popularidad, context);
     const body = text(raw?.texto, MAX_TEXT);
-    if (!author || !body) continue;
+    const author = body ? authorOf(raw?.usuario, raw?.nombre, raw?.popularidad, context) : null;
+    if (!author) continue;
     const minutes = clamp(resolveWhen(raw, context.world, floor + (index + 1) * defaultStep), floor, ceiling);
+    remember(author.account, body, minutes);
     out.push({
       id: randomUUID(), handle: author.account.handle, name: author.account.name, ...(author.npcId ? { npcId: author.npcId } : {}), text: body,
       minutes, time: keyOfMinutes(minutes), likes: clamp(whole(raw?.likes), 0, Math.min(post.likes || maxLikes(author.account.popularity), maxLikes(author.account.popularity))), liked: false,
@@ -124,7 +189,7 @@ function cleanReplies(rawReplies, post, context, { floor, ceiling, defaultStep =
 }
 
 // Contexto común de validación.
-export function validationContext(run, { npcs, seeds = [] }) {
+export function validationContext(run, { npcs, seeds = [], avatars = [] }) {
   const social = migrateSocial(run.social, run.player);
   const directory = accountDirectory(social, seeds);
   const contacts = new Map(); const reserved = new Set();
@@ -132,13 +197,25 @@ export function validationContext(run, { npcs, seeds = [] }) {
     const handle = npc.contact?.handle; if (!handle) continue;
     if (run.relationships?.[npc.id]?.added) contacts.set(handleKey(handle), npc); else reserved.add(handleKey(handle));
   }
-  return { world: run.world, directory, contacts, reserved, playerHandle: playerHandle(run.player) };
+  return {
+    world: run.world, directory, contacts, reserved, playerHandle: playerHandle(run.player), avatars, runId: run.id, created: 0, minutes: minutesOfWorld(run.world),
+    usedAvatars: new Set([...directory.values()].map((account) => account.avatar).filter(Boolean))
+  };
 }
 
-const directoryToAccounts = (directory, contacts) => {
-  const entries = [...directory.entries()].filter(([, account]) => !account.seed);
-  const trimmed = entries.length > MAX_ACCOUNTS ? entries.filter(([key]) => contacts.has(key)).concat(entries.filter(([key]) => !contacts.has(key)).slice(-(MAX_ACCOUNTS - contacts.size))) : entries;
-  return Object.fromEntries(trimmed);
+// Cuentas que siguen apareciendo en el feed (publicaciones, respuestas, notificaciones): no se descartan al recortar el registro.
+export const referencedHandles = (social) => new Set([
+  ...social.posts.flatMap((post) => [handleKey(post.handle), ...post.replies.map((reply) => handleKey(reply.handle))]),
+  ...social.notifications.map((item) => handleKey(item.handle))
+]);
+
+// Registro persistente de cuentas generadas, con tamaño máximo: primero se conservan los contactos, luego las que aún se ven en el feed
+// y por último las más recientes.
+const directoryToAccounts = (directory, contacts, referenced = new Set()) => {
+  const entries = [...directory.entries()].filter(([, account]) => !account.seed).map(([key, account]) => [key, cleanAccount(account)]);
+  if (entries.length <= MAX_ACCOUNTS) return Object.fromEntries(entries);
+  const rank = ([key]) => (contacts.has(key) ? 2 : referenced.has(key) ? 1 : 0);
+  return Object.fromEntries(entries.sort((a, b) => rank(b) - rank(a) || (b[1].seen ?? 0) - (a[1].seen ?? 0)).slice(0, MAX_ACCOUNTS));
 };
 
 // Publicaciones propuestas por el modelo (prompt social, modo «post») → publicaciones programadas.
@@ -148,25 +225,39 @@ export function applyGeneratedPosts(run, raw, options) {
   const context = validationContext(next, options);
   const recent = new Set(next.social.posts.slice(0, 60).map((post) => post.text.toLowerCase()));
   const fresh = [];
-  for (const item of (Array.isArray(raw) ? raw : []).slice(0, 14)) {
-    const author = authorOf(item?.usuario, item?.nombre, item?.popularidad, context);
+  for (const item of (Array.isArray(raw) ? raw : []).slice(0, MAX_GENERATED_POSTS)) {
     const body = text(item?.texto, MAX_TEXT);
-    if (!author || !body || recent.has(body.toLowerCase())) continue;
+    if (!body || recent.has(body.toLowerCase())) continue;
+    const author = authorOf(item?.usuario, item?.nombre, item?.popularidad, context);
+    if (!author) continue;
     recent.add(body.toLowerCase());
     const minutes = resolveWhen(item, next.world);
+    remember(author.account, body, minutes);
     const cap = maxLikes(author.account.popularity);
     const likes = clamp(whole(item?.likes), 0, cap);
     const post = {
       id: randomUUID(), handle: author.account.handle, name: author.account.name, ...(author.npcId ? { npcId: author.npcId } : {}), text: body,
       minutes, time: keyOfMinutes(minutes), likes, reposts: clamp(whole(item?.reposts), 0, likes), liked: false, replies: []
     };
-    post.replies = cleanReplies(item?.respuestas, post, context, { floor: minutes + 1, ceiling: minutes + 2880 });
-    fresh.push(post);
+    fresh.push({ post, replies: item?.respuestas });
   }
-  next.social.posts = trimPosts([...fresh, ...next.social.posts]);
-  next.social.accounts = directoryToAccounts(context.directory, context.contacts);
+  for (const entry of fresh) entry.post.replies = cleanReplies(entry.replies, entry.post, context, { floor: entry.post.minutes + 1, ceiling: entry.post.minutes + 2880 });
+  next.social.posts = trimPosts([...fresh.map((entry) => entry.post), ...next.social.posts]);
+  next.social.accounts = directoryToAccounts(context.directory, context.contacts, referencedHandles(next.social));
   next.social.generatedAt = minutesOfWorld(next.world);
   return next;
+}
+
+// Herramienta de desarrollo: restablece el feed. Borra todas las publicaciones (también las del jugador), las cuentas registradas por el motor
+// (con sus avatares asignados), las notificaciones y el contador de generaciones; la siguiente actividad vuelve a generarlo desde cero.
+// Se conserva todo lo demás: la cuenta del jugador (usuario, foto, banner, descripción), contactos, relaciones y el resto de la partida.
+export function wipeFeed(run) {
+  const next = structuredClone(run);
+  const social = migrateSocial(next.social, next.player);
+  const removed = { posts: social.posts.length, accounts: Object.keys(social.accounts).length, notifications: social.notifications.length };
+  next.social = { ...emptySocial(), profile: social.profile };
+  next.updatedAt = new Date().toISOString();
+  return { run: next, removed };
 }
 
 export const feedDue = (run, gap = GENERATION_GAP) => run.social?.generatedAt == null || minutesOfWorld(run.world) - run.social.generatedAt >= gap;
@@ -294,7 +385,7 @@ export function applyReactions(run, postId, raw, options, since = null) {
     post.reposts = clamp(post.reposts + clamp(whole(raw?.reposts), 0, cap), 0, post.likes);
   }
   next.social.notifications = next.social.notifications.slice(0, MAX_NOTIFICATIONS);
-  next.social.accounts = directoryToAccounts(context.directory, context.contacts);
+  next.social.accounts = directoryToAccounts(context.directory, context.contacts, referencedHandles(next.social));
   return next;
 }
 
@@ -335,20 +426,28 @@ export function markNotificationsRead(run) {
 
 // --- Lo que ve el cliente ---------------------------------------------------------------------------------------------------
 // Solo lo ya publicado; los likes crecen con el tiempo hasta su valor final; el «me gusta» del jugador suma uno.
-export function socialView(run, { dev = false, seeds = [] } = {}) {
+// El avatar de una cuenta generada solo se muestra si sigue en el catálogo vigente; si no, la interfaz usa el avatar de respaldo.
+export function socialView(run, { dev = false, seeds = [], avatars = [] } = {}) {
   const social = migrateSocial(run.social, run.player);
   const now = minutesOfWorld(run.world);
   const grow = (entry) => Math.round((entry.likes ?? 0) * clamp((now - entry.minutes) / RAMP, 0.12, 1)) + (entry.liked ? 1 : 0);
   const directory = accountDirectory(social, seeds);
+  const catalog = new Set(avatars);
   const verified = (handle) => directory.get(handleKey(handle))?.verified === true;
-  const reply = ({ id, handle, name, npcId, own, text: body, minutes, time, inReplyTo, liked, ...rest }) => ({ id, handle, name, verified: verified(handle), ...(npcId ? { npcId } : {}), own: own === true, text: body, minutes, time, liked: liked === true, likes: grow({ likes: rest.likes, minutes, liked }), ...(inReplyTo ? { inReplyTo } : {}) });
+  const avatarOf = (handle) => {
+    const account = directory.get(handleKey(handle));
+    if (!account || account.npcId) return {};
+    const url = account.seed ? account.avatar : (account.avatar && catalog.has(account.avatar) ? account.avatar : null);
+    return url ? { avatar: url } : {};
+  };
+  const reply = ({ id, handle, name, npcId, own, text: body, minutes, time, inReplyTo, liked, ...rest }) => ({ id, handle, name, verified: verified(handle), ...(own ? {} : avatarOf(handle)), ...(npcId ? { npcId } : {}), own: own === true, text: body, minutes, time, liked: liked === true, likes: grow({ likes: rest.likes, minutes, liked }), ...(inReplyTo ? { inReplyTo } : {}) });
   const posts = social.posts.filter((post) => visibleOf(post, now)).map((post) => ({
-    id: post.id, handle: post.handle, name: post.name, ...(post.npcId ? { npcId: post.npcId } : {}), own: post.own === true, text: post.text, minutes: post.minutes, time: post.time,
+    id: post.id, handle: post.handle, name: post.name, ...(post.own ? {} : avatarOf(post.handle)), ...(post.npcId ? { npcId: post.npcId } : {}), own: post.own === true, text: post.text, minutes: post.minutes, time: post.time,
     liked: post.liked === true, likes: grow(post), reposts: Math.round((post.reposts ?? 0) * clamp((now - post.minutes) / RAMP, 0.12, 1)) + (post.reposted ? 1 : 0),
     ...(post.reposted ? { reposted: true, repostedAt: post.repostedAt } : {}),
     replies: post.replies.filter((item) => item.minutes <= now).map(reply), verified: verified(post.handle)
   })).sort((a, b) => b.minutes - a.minutes);
-  const notifications = social.notifications.filter((item) => item.minutes <= now).map(({ id, kind, postId, replyId, handle, name, text: body, minutes, time, onYourPost, read }) => ({ id, kind, postId, replyId, handle, name, text: body, minutes, time, onYourPost, read }));
+  const notifications = social.notifications.filter((item) => item.minutes <= now).map(({ id, kind, postId, replyId, handle, name, text: body, minutes, time, onYourPost, read }) => ({ id, kind, postId, replyId, handle, name, ...avatarOf(handle), text: body, minutes, time, onYourPost, read }));
   return {
     posts, notifications, unread: notifications.filter((item) => !item.read).length, now, handle: playerHandle(run.player),
     profile: { created: social.profile.created, handle: playerHandle(run.player), name: run.player.name, bio: social.profile.bio, hasAvatar: Boolean(social.profile.avatar), hasBanner: Boolean(social.profile.banner), v: social.profile.v },
@@ -357,24 +456,47 @@ export function socialView(run, { dev = false, seeds = [] } = {}) {
 }
 
 // --- Datos para el prompt social --------------------------------------------------------------------------------------------
-// El modelo recibe las cuentas conocidas (con la popularidad que fija el motor), los contactos del jugador con su personalidad y
-// lo ya publicado, para no repetirse. Las cuentas de personajes que el jugador aún no conoce no aparecen.
+// El modelo NO recibe todo el registro ni todo el feed: una muestra acotada y variada de cuentas (canónicas, contactos del jugador, las
+// más populares, las más activas y unas al azar, además de quienes participan en el hilo) y las últimas publicaciones para dar continuidad
+// y no repetirse. Cada cuenta del registro lleva una muestra de lo último que escribió, para mantener su voz. Nunca se envían avatares ni URLs.
+// Las cuentas de personajes que el jugador aún no conoce no aparecen. El azar es determinista (partida + hora de juego).
 export function socialInput(run, mode, { npcs, seeds = [], places = [], ahora, extra = {} }) {
   const social = migrateSocial(run.social, run.player);
   const now = minutesOfWorld(run.world);
   const directory = accountDirectory(social, seeds);
-  const contactNpcs = [...npcs.values()].filter((npc) => run.relationships?.[npc.id]?.added);
-  const contactKeys = new Set(contactNpcs.map((npc) => handleKey(npc.contact?.handle)));
-  const accounts = [...directory.values()].filter((account) => !contactKeys.has(handleKey(account.handle)))
-    .sort((a, b) => Number(b.seed === true) - Number(a.seed === true) || b.popularity - a.popularity).slice(0, 30)
-    .map((account) => ({ usuario: account.handle, nombre: account.name, popularidad: account.popularity, verificado: account.verified === true, descripcion: account.bio || undefined }));
+  const contactNpcs = [...npcs.values()].filter((npc) => run.relationships?.[npc.id]?.added).slice(0, PROMPT_LIMITS.contacts);
+  const contactKeys = new Set([...npcs.values()].filter((npc) => run.relationships?.[npc.id]?.added).map((npc) => handleKey(npc.contact?.handle)));
+  const describe = (account) => ({
+    usuario: account.handle, nombre: account.name, popularidad: account.popularity, verificado: account.verified === true, descripcion: account.bio || undefined,
+    publicacionesAnteriores: account.samples?.length ? account.samples.slice(0, SAMPLES) : undefined
+  });
+
+  const seedAccounts = seeds.slice().sort((a, b) => b.popularity - a.popularity).slice(0, PROMPT_LIMITS.seeds).map((seed) => directory.get(handleKey(seed.handle)));
+  const pool = [...directory.entries()].filter(([key, account]) => !account.seed && !account.npcId && !contactKeys.has(key)).map(([, account]) => account);
+  const byPopularity = pool.slice().sort((a, b) => b.popularity - a.popularity).slice(0, PROMPT_LIMITS.popular);
+  const chosen = new Set(byPopularity);
+  const byActivity = pool.filter((account) => !chosen.has(account)).sort((a, b) => (b.seen ?? 0) - (a.seen ?? 0)).slice(0, PROMPT_LIMITS.recent);
+  byActivity.forEach((account) => chosen.add(account));
+  const random = seededRandom(hash32(`${run.id}:${social.generatedAt ?? 'x'}:${mode}:${Math.floor(now / 60)}`));
+  const shuffled = pool.filter((account) => !chosen.has(account)).map((account) => [random(), account]).sort((a, b) => a[0] - b[0]).map(([, account]) => account).slice(0, PROMPT_LIMITS.random);
+  const sampled = [...byPopularity, ...byActivity, ...shuffled];
+
+  // Quienes participan en el hilo siempre van, aunque no entren en la muestra.
+  const thread = extra.publicacion;
+  const participants = thread ? [thread.usuario, ...(thread.respuestas ?? []).map((item) => item.usuario)] : [];
+  const have = new Set([...seedAccounts, ...sampled].map((account) => handleKey(account.handle)));
+  const forced = [...new Set(participants.map(handleKey))].filter((key) => !have.has(key) && !contactKeys.has(key) && directory.has(key)).slice(0, PROMPT_LIMITS.thread).map((key) => directory.get(key));
+
   const contacts = contactNpcs.map((npc) => ({
     usuario: npc.contact.handle, nombre: npc.name, popularidad: directory.get(handleKey(npc.contact.handle))?.popularity ?? 25, contactoDelJugador: true,
     resumen: npc.summary, personalidad: npc.personality, haciendoAhora: scheduleFor(npc, run.world)?.activity ?? 'fuera de su horario habitual'
   }));
-  const recent = social.posts.filter((post) => post.minutes <= now + 60).slice(0, 12).map((post) => ({ usuario: post.handle, hora: post.time, texto: post.text }));
+  const excerpt = (post) => ({ usuario: post.handle, hora: post.time, texto: post.text.slice(0, PROMPT_LIMITS.excerpt) });
+  const visible = social.posts.filter((post) => post.minutes <= now).slice(0, PROMPT_LIMITS.posts - 4).map(excerpt);
+  const upcoming = social.posts.filter((post) => post.minutes > now).slice(-4).map(excerpt);
   return {
-    mode, ahora, dia: run.world.day, ciudad: 'Porta Magna', lugares: places, cuentas: [...contacts, ...accounts], recientes: recent,
+    mode, ahora, dia: run.world.day, ciudad: 'Porta Magna', lugares: places, cuentas: [...contacts, ...seedAccounts.map(describe), ...forced.map(describe), ...sampled.map(describe)],
+    recientes: [...visible, ...upcoming],
     jugador: { usuario: playerHandle(run.player), nombre: run.player.name, descripcion: social.profile.bio || undefined, popularidad: playerPopularity(run.player) }, ...extra
   };
 }

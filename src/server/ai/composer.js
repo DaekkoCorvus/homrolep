@@ -2,7 +2,7 @@
 // Un preset es una lista ordenada de módulos: de TEXTO (editable, con macros {{char}}…) o AUTOMÁTICOS (los rellena el motor con
 // datos del juego). Hay cuatro prompts: character (en persona), text (chat de mensajes), gm y social.
 import { randomUUID } from 'node:crypto';
-import { characterBehavior, characterEngine, CHARACTER_TASKS, TEXT_TASKS, GM_MAIN, GM_TASKS, SOCIAL_MAIN, SOCIAL_TASKS } from './prompts.js';
+import { characterBehavior, textBehavior, CHARACTER_LANGUAGE, characterEngine, CHARACTER_TASKS, TEXT_TASKS, GM_MAIN, GM_LANGUAGE, GM_TASKS, SOCIAL_MAIN, SOCIAL_LANGUAGE, SOCIAL_TASKS } from './prompts.js';
 
 const task = { label: 'Instrucción del turno', description: 'El texto de «Instrucciones por tipo de turno»: cambia según lo que se pide en cada llamada.', special: true };
 const format = { label: 'Formato de salida', description: 'JSON que el motor sabe leer. Obligatorio: puedes moverlo, no quitarlo ni editarlo.', special: true, locked: true };
@@ -37,7 +37,7 @@ export const KINDS = {
   },
   gm: {
     label: 'GM', short: 'GM',
-    description: 'Se envía cuando el modelo hace de narrador: narra acciones, evalúa conversaciones y traduce los chats para el motor.',
+    description: 'Interpreta conversaciones al cerrarlas, narra acciones que el motor ya aplicó, procesa chats pendientes y, en una acción libre, puede solicitar un encuentro con alguien presente mediante talkTo. El servidor valida sus datos y aplica los cambios permitidos.',
     modes: [{ id: 'evaluation', label: 'Evalúa una conversación' }, { id: 'narration', label: 'Narra acción libre' }, { id: 'action', label: 'Narra otras acciones' }, { id: 'chats', label: 'Procesa chats pendientes' }],
     macros: [['player', 'Nombre real del jugador'], ['user', 'Igual que player'], ['char', 'Personaje evaluado (si aplica)'], ['location', 'Lugar actual'], ['time', 'Fecha y hora del juego'], ['mode', 'Tipo de llamada']],
     autos: {
@@ -74,9 +74,15 @@ export const kindNames = Object.keys(KINDS);
 
 const MAIN_TEXT = {
   character: () => characterBehavior('{{char}}'),
-  text: () => characterBehavior('{{char}}'),
+  text: () => textBehavior('{{char}}'),
   gm: () => GM_MAIN,
   social: () => SOCIAL_MAIN
+};
+const LANGUAGE_TEXT = {
+  character: () => CHARACTER_LANGUAGE,
+  text: () => CHARACTER_LANGUAGE,
+  gm: () => GM_LANGUAGE,
+  social: () => SOCIAL_LANGUAGE
 };
 // Reglas técnicas que hacen funcionar el juego (solo los prompts de diálogo las tienen).
 const ENGINE_TEXT = {
@@ -85,10 +91,10 @@ const ENGINE_TEXT = {
 };
 // Qué módulos automáticos van activos de fábrica y en qué orden (con el texto principal primero).
 const DEFAULT_ORDER = {
-  character: ['main', 'engine', 'format', 'card', 'world', 'persona', 'relationship', 'commitments', 'contact', 'emotions', 'intent', 'history', 'task'],
-  text: ['main', 'engine', 'format', 'card', 'world', 'persona', 'relationship', 'commitments', 'history', 'task'],
-  gm: ['main', 'task', 'format', 'player', 'world', 'events', 'present', 'character', 'relationship', 'pending', 'history'],
-  social: ['main', 'task', 'format', 'world', 'accounts', 'player', 'feed', 'thread']
+  character: ['main', 'language', 'engine', 'format', 'card', 'world', 'persona', 'relationship', 'commitments', 'contact', 'emotions', 'intent', 'history', 'task'],
+  text: ['main', 'language', 'engine', 'format', 'card', 'world', 'persona', 'relationship', 'commitments', 'history', 'task'],
+  gm: ['main', 'language', 'task', 'format', 'player', 'world', 'events', 'present', 'character', 'relationship', 'pending', 'history'],
+  social: ['main', 'language', 'task', 'format', 'world', 'accounts', 'player', 'feed', 'thread']
 };
 const GM_TASK_ROLE = 'system';
 
@@ -96,6 +102,7 @@ export function defaultPreset(kind) {
   const spec = KINDS[kind];
   const modules = DEFAULT_ORDER[kind].map((key) => {
     if (key === 'main') return { id: 'main', name: 'Prompt principal', type: 'text', role: 'system', enabled: true, content: MAIN_TEXT[kind]() };
+    if (key === 'language') return { id: 'language', name: 'Idioma de respuesta', type: 'text', role: 'system', enabled: true, content: LANGUAGE_TEXT[kind]() };
     if (key === 'engine') return { id: 'engine', name: 'Reglas del motor', type: 'text', role: 'system', enabled: true, content: ENGINE_TEXT[kind]() };
     const auto = spec.autos[key];
     const role = key === 'format' ? 'system' : key === 'task' ? (kind === 'gm' || kind === 'social' ? GM_TASK_ROLE : 'user') : auto.role;
@@ -213,6 +220,13 @@ export function importSillyTavern(kind, json, current = null) {
     const content = stMacros(item.content);
     if (!content.trim()) { dropped.push(item.name || item.identifier); continue; }
     modules.push({ id: randomUUID(), name: clip(item.name || 'Módulo', 60), type: 'text', role: ROLES.has(item.role) ? item.role : 'system', enabled: entry.enabled !== false, content: clip(content, MAX_MODULE_CHARS) });
+  }
+  // Keep the response-language rule when importing a roleplay preset written for another language.
+  if (['character', 'text', 'gm', 'social'].includes(kind) && !modules.some((item) => item.id === 'language' || item.name === 'Idioma de respuesta')) {
+    const language = defaultPreset(kind).modules.find((item) => item.id === 'language');
+    // Va justo después del prompt principal importado: el primer módulo de texto activo (sea cual sea su nombre en el preset).
+    const mainIndex = modules.findIndex((item) => item.type === 'text' && item.enabled);
+    modules.splice(mainIndex < 0 ? 0 : mainIndex + 1, 0, structuredClone(language));
   }
   // Lo que el motor aporta y SillyTavern no tiene: se coloca justo antes de la conversación (o al final).
   const defaults = defaultPreset(kind);

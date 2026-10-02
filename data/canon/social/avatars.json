@@ -1,0 +1,4 @@
+{
+  "nota": "Catálogo de avatares para las cuentas aleatorias de NorthLife. Añade aquí URLs directas a imágenes (https). El servidor descarta las que no sean https, estén mal formadas, vacías o repetidas. Se asignan una sola vez por cuenta; el modelo nunca ve esta lista. Los cambios se detectan solos.",
+  "avatars": []
+}

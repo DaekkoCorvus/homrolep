@@ -35,6 +35,8 @@ Para desarrollo con recarga automática del servidor:
 npm run dev
 ```
 
+**Pruebas locales en Windows:** doble clic en `iniciar-local.bat` (o `node scripts/dev-local.mjs`). Arranca el servidor, abre el navegador y guarda un log temporal en `.local/logs/latest.log` (la ejecución anterior queda en `previous.log`; la carpeta está en `.gitignore`). El log incluye versión, rama, estado de la conexión de IA (sin la key), peticiones `/api` con su código y duración, y los errores del servidor. Opciones: `--no-open` (no abrir navegador), `--watch` (reiniciar al cambiar el código) y `--test` (ejecutar `npm test` antes de arrancar). Si el puerto 3000 está ocupado usa el siguiente libre.
+
 ## Termux
 
 ```bash
@@ -60,6 +62,8 @@ Escribe `/dev` en el campo de acción libre para activarlas (o abre `/?dev=1`). 
 **Editor de prompts:** `/prompts` abre cuatro prompts (Personaje, Texto, GM, Social) hechos de módulos ordenables, con vista previa, último enviado e importación de presets de SillyTavern. Los cambios se guardan en `data/prompts/`.
 
 **NorthLife:** red social del juego (feed tipo línea de tiempo con cuentas inventadas y canon, likes, hilos y avisos). El prompt Social genera varias publicaciones con su hora de publicación; el motor las valida y las muestra cuando llega esa hora. `/feed` genera publicaciones al momento.
+
+**Avatares de NorthLife:** añade URLs https directas a `data/canon/social/avatars.json` (`{"avatars": ["https://…"]}`); el servidor las asigna a las cuentas aleatorias que registre y las relee solo. Las cuentas canónicas usan imágenes locales de `assets/social/accounts/` (configuradas en `data/canon/social/accounts.json`).
 
 **Partidas guardadas:** «Partidas» en el inicio y en Ajustes permite tener varias partidas, renombrarlas, duplicarlas y eliminarlas.
 

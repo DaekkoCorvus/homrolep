@@ -13,6 +13,7 @@ const COMMANDS = [
   ['/npc [id]', 'Abre el editor de la ficha de un NPC'],
   ['/fichas', 'Abre el panel con el listado, importar y exportar'],
   ['/feed', 'Genera ahora publicaciones nuevas en NorthLife (prompt social)'],
+  ['/limpiarfeed', 'Borra todas las publicaciones y cuentas generadas del feed (conserva tu cuenta) para empezar de cero'],
   ['/prompts [personaje|texto|gm|social]', 'Abre el editor de prompts (módulos, orden, vista previa)'],
   ['/contacto id', 'Desbloquea el contacto de un NPC (como si lo hubiera compartido)'],
   ['/texto lento|normal|rapido', 'Velocidad con la que se escribe la respuesta del NPC'],
@@ -71,6 +72,7 @@ export async function runCommand(text) {
     if (argument) { const cards = await dreq('/api/dev/npcs'); const card = cards.find((item) => item.id === norm(argument) || norm(item.name).startsWith(norm(argument))); if (card) openEditor(card); else notify('No encontré ese NPC.'); }
     else openPanel();
   } else if (command === '/fichas') openPanel();
+  else if (command === '/limpiarfeed' || command === '/wipefeed') await wipeFeed();
   else if (command === '/feed') { try { await hooks.runDev({ op: 'social' }); await hooks.reload(); notify('Feed generado.'); } catch (error) { notify(error.message); } }
   else if (command === '/prompts' || command === '/prompt') {
     const kinds = { personaje: 'character', character: 'character', texto: 'text', text: 'text', gm: 'gm', social: 'social' };
@@ -87,7 +89,7 @@ export async function openPanel() {
     <header><h2>Desarrollo</h2><button type="button" data-close aria-label="Cerrar">×</button></header>
     <section><h3>Partida</h3><div class="dev-buttons">
       <button type="button" data-act="restart">Reiniciar cita</button><button type="button" data-act="regen">Regenerar respuesta</button>
-      <button type="button" data-act="hour">+1 hora</button><button type="button" data-act="social">Generar feed ahora</button></div></section>
+      <button type="button" data-act="hour">+1 hora</button><button type="button" data-act="social">Generar feed ahora</button><button type="button" data-act="social-wipe" class="danger">Limpiar feed</button></div></section>
     <section><h3>Prompts</h3><div class="dev-buttons"><button type="button" data-prompts="character">Personaje</button><button type="button" data-prompts="text">Texto</button><button type="button" data-prompts="gm">GM</button><button type="button" data-prompts="social">Social</button></div>
       <p class="dev-hint">Edita los módulos que se envían al modelo, su orden y su vista previa.</p></section>
     <section><h3>Fichas de NPC</h3><div class="dev-list">${cards.map((card) => `<div class="dev-row"><span><strong>${escapeHtml(card.name)}</strong><small>${escapeHtml(card.id)} · ${escapeHtml(card.role || 'sin rol')}</small></span><button type="button" data-edit="${escapeHtml(card.id)}">Editar</button><button type="button" data-export="${escapeHtml(card.id)}">Exportar</button></div>`).join('')}</div>
@@ -97,12 +99,20 @@ export async function openPanel() {
   node.querySelector('[data-act=restart]').onclick = () => { node.remove(); hooks.perform(() => hooks.runDev({ op: 'restart' }), { animate: true }); };
   node.querySelector('[data-act=regen]').onclick = () => { node.remove(); hooks.perform(() => hooks.runDev({ op: 'regen' }), { animate: true }); };
   node.querySelector('[data-act=social]').onclick = async () => { node.remove(); notify('Generando publicaciones…'); try { await hooks.runDev({ op: 'social' }); await hooks.reload(); notify('Feed generado.'); } catch (error) { notify(error.message); } };
+  node.querySelector('[data-act=social-wipe]').onclick = () => { node.remove(); wipeFeed(); };
   node.querySelector('[data-act=hour]').onclick = () => { const w = state.run.world; node.remove(); hooks.perform(() => hooks.runDev({ op: 'set_time', hour: (w.hour + 1) % 24, minute: w.minute, day: w.day + (w.hour === 23 ? 1 : 0) })); };
   node.querySelectorAll('[data-edit]').forEach((button) => button.onclick = () => openEditor(cards.find((card) => card.id === button.dataset.edit)));
   node.querySelectorAll('[data-export]').forEach((button) => button.onclick = () => exportCard(cards.find((card) => card.id === button.dataset.export)));
   node.querySelector('[data-new]').onclick = () => openEditor(null);
   node.querySelectorAll('[data-prompts]').forEach((button) => button.onclick = () => openPromptEditor(button.dataset.prompts));
   node.querySelector('[data-import]').onchange = (event) => importFile(event.target.files[0]);
+}
+
+// Restablece el feed de NorthLife: publicaciones, cuentas generadas y notificaciones. Conserva tu cuenta y el resto de la partida.
+async function wipeFeed() {
+  if (!confirm('¿Limpiar el feed de NorthLife? Se borran todas las publicaciones, las cuentas generadas (con sus avatares) y las notificaciones. Tu cuenta, tus contactos y el resto de la partida no cambian.')) return;
+  try { await hooks.runDev({ op: 'social_wipe' }); await hooks.reload(); notify('Feed limpiado. La próxima acción (o /feed) lo genera de nuevo.'); }
+  catch (error) { notify(error.message); }
 }
 
 function exportCard(card) {

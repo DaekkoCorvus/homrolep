@@ -34,7 +34,8 @@ test('every prompt has a factory preset that survives normalisation unchanged an
 
 test('the character prompt shows the character only what it knows: the player real name never leaks, a given name does', () => {
   const unknown = text(compose('character', 'reply', defaultPreset('character'), characterPlan(dialogue())));
-  assert.match(unknown, /Interpretas a Luna Serp\./, '{{char}} se expande');
+  assert.match(unknown, /You are Luna Serp:/, '{{char}} se expande');
+  assert.match(unknown, /natural, neutral contemporary Spanish/i, 'el idioma se pide en un módulo separado');
   assert.match(unknown, /"nombreQueTeDio":null/);
   assert.ok(unknown.includes('Daekko'), 'el nombre sí aparece donde el jugador lo dijo en la conversación');
   const noTalk = text(compose('character', 'reply', defaultPreset('character'), characterPlan(dialogue({ transcript: [{ who: 'player', text: 'Hola' }] }))));
@@ -97,8 +98,8 @@ test('normalisation protects what the engine needs: format and task are always p
 test('the GM prompt keeps the GM role separate and sees the real player name', () => {
   const messages = compose('gm', 'evaluation', defaultPreset('gm'), evaluationPlan({ ...dialogue(), locations: [], commitments: [] }));
   const joined = text(messages);
-  assert.match(joined, /no interpretas a ningún personaje/);
-  assert.match(joined, /Devuelve solo JSON con esta forma/);
+  assert.match(joined, /narrative and semantic interpreter/i);
+  assert.match(joined, /Return only JSON with this shape/);
   assert.match(joined, /"conversacion"/);
   const feed = compose('social', 'post', defaultPreset('social'), socialPlan({ mode: 'post', ahora: 'día 1', cuentas: [{ usuario: '@RexNova', popularidad: 99 }], jugador: { usuario: '@Mara', nombre: 'Mara', popularidad: 5 } }));
   assert.match(text(feed), /NorthLife/); assert.match(text(feed), /"posts"/); assert.match(text(feed), /"cuentas"/); assert.match(text(feed), /RexNova/);
@@ -128,7 +129,7 @@ test('a SillyTavern preset imports as modules: text kept, markers mapped to game
   };
   const { preset, report } = importSillyTavern('character', st, defaultPreset('character'));
   const names = preset.modules.map((item) => item.auto ?? item.name);
-  assert.deepEqual(names.slice(0, 5), ['Main Prompt', 'world', 'persona', 'card', 'Character Engine'], 'respeta el orden del último prompt_order');
+  assert.deepEqual(names.slice(0, 6), ['Main Prompt', 'Idioma de respuesta', 'world', 'persona', 'card', 'Character Engine'], 'respeta el orden del último prompt_order y conserva el módulo de idioma');
   assert.equal(preset.modules.find((item) => item.name === 'Apagado').enabled, false, 'conserva lo desactivado');
   assert.ok(!names.includes('Auxiliary Prompt'), 'un módulo vacío se omite');
   assert.ok(names.indexOf('relationship') < names.indexOf('history'), 'los datos del juego que faltaban van antes de la conversación');

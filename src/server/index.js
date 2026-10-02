@@ -10,9 +10,10 @@ import { loadNpcs, presentNpcs, publicNpc, relationshipOf, affinityOf, attitudeO
 import { createNanoGPT, AIError } from './ai/provider.js';
 import { createSettingsStore } from './ai/settings.js';
 import { createPromptStore } from './ai/promptStore.js';
+import { createSocialCatalog } from './game/socialCatalog.js';
 import { KINDS, kindNames, defaultPreset, normalizePreset, compose, importSillyTavern } from './ai/composer.js';
 import { characterPlan, evaluationPlan, narrationPlan, chatsPlan, socialPlan } from './ai/plans.js';
-import { feedDue, applyGeneratedPosts, applyReactions, publishPlayerPost, publishPlayerReply, toggleLike, toggleRepost, saveProfile, profileMedia, markNotificationsRead, socialView, socialInput, threadFor, migrateSocial, expectedReplies, playerPopularity, keyOfMinutes, REFRESH_GAP } from './game/social.js';
+import { feedDue, applyGeneratedPosts, applyReactions, wipeFeed, publishPlayerPost, publishPlayerReply, toggleLike, toggleRepost, saveProfile, profileMedia, markNotificationsRead, socialView, socialInput, threadFor, migrateSocial, expectedReplies, playerPopularity, keyOfMinutes, withAvatars, REFRESH_GAP } from './game/social.js';
 import { saveRun, loadRun, listRuns, deleteRun } from './saves/store.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -22,9 +23,13 @@ const clientDir = path.join(root, 'src/client');
 const worldData = JSON.parse(await readFile(path.join(root, 'data/canon/locations/porta_magna.json'), 'utf8'));
 const npcDir = path.join(root, 'data/canon/npcs');
 const npcs = await loadNpcs(npcDir);
-// Cuentas de la red social con popularidad fija (canon): p. ej. @RexNova. Todo lo demás lo inventa el modelo y lo valida el motor.
-const socialSeeds = await readFile(path.join(root, 'data/canon/social/accounts.json'), 'utf8').then((raw) => JSON.parse(raw).accounts ?? []).catch(() => []);
+// Datos locales de la red social: cuentas canónicas (popularidad e imagen fijas, p. ej. @RexNova) y catálogo de avatares https para las
+// cuentas aleatorias. Todo lo demás lo inventa el modelo y lo valida el motor. Se relee solo si cambian los archivos.
+const defaultSocialCatalog = createSocialCatalog({ dir: path.join(root, 'data/canon/social'), assetDir });
+await defaultSocialCatalog.refresh(true);
 const port = Number(process.env.PORT) || 3000;
+// HOM_DEBUG=1 (lo activa scripts/dev-local.mjs): registra en consola las peticiones /api y los errores del servidor.
+const debug = process.env.HOM_DEBUG === '1';
 
 const clientFiles = new Set(['/index.html', '/app.js', '/core.js', '/game.js', '/devtools.js', '/prompteditor.js', '/northlife.js', '/scenes.js', '/styles.css', '/game.css']);
 const mimeTypes = { '.png':'image/png', '.webp':'image/webp', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.json':'application/json; charset=utf-8', '.svg':'image/svg+xml' };
@@ -43,7 +48,7 @@ async function readBody(request, limit = 32_000) {
   return raw ? JSON.parse(raw) : {};
 }
 
-export function createAppServer({ prompts = createPromptStore(), ai = createNanoGPT(fetch, { prompts }), settings = createSettingsStore(), store = { saveRun, loadRun, listRuns, deleteRun } } = {}) {
+export function createAppServer({ socialCatalog = defaultSocialCatalog, prompts = createPromptStore(), ai = createNanoGPT(fetch, { prompts }), settings = createSettingsStore(), store = { saveRun, loadRun, listRuns, deleteRun } } = {}) {
 const active = new Set();
 async function exclusive(key, operation) {
   if (active.has(key)) throw new AIError('Ya hay una petición en curso. Espera a que termine.', 'REQUEST_BUSY', 409);
@@ -57,7 +62,7 @@ async function publicRun(run, dev = false) {
   const relationships = Object.fromEntries(Object.entries(run.relationships ?? {}).map(([id, item]) => [id, dev ? debugView(relationshipOf(run, id)) : { met: item.met, contact: item.contact, added: item.added === true, encounters: item.encounters }]));
   const encounterNpc = run.encounter ? await toPublic(npcs.get(run.encounter.npcId)) : null;
   return {
-    ...run, relationships, encounterNpc, social: socialView(run, { dev, seeds: socialSeeds }),
+    ...run, relationships, encounterNpc, social: socialView(run, { dev, seeds: socialCatalog.current().seeds, avatars: socialCatalog.current().avatars }),
     commitments: (run.commitments ?? []).map((item) => ({ ...item, npcName: npcs.get(item.npcId)?.name ?? item.npcId })),
     presence: await Promise.all(presentFor(run).map(toPublic)),
     sharedContacts: [...npcs.values()].filter((npc) => run.relationships?.[npc.id]?.contact).map((npc) => ({ id: npc.id, name: npc.name, handle: npc.contact.handle, added: run.relationships[npc.id].added === true })),
@@ -66,8 +71,9 @@ async function publicRun(run, dev = false) {
 }
 
 // Datos para el prompt social (cuentas, contactos, publicaciones recientes) y opciones de validación del motor.
-const socialOptions = () => ({ npcs, seeds: socialSeeds });
-const socialContext = (run, mode, extra = {}) => socialInput(run, mode, { npcs, seeds: socialSeeds, places: worldData.locations.map(({ name }) => name), ahora: temporalContext({ encounters: 0, notes: [], history: [] }, run.world).ahora, extra });
+const loadGame = async (id) => withAvatars(await store.loadRun(id), socialCatalog.current().avatars, socialCatalog.current().seeds);
+const socialOptions = () => ({ npcs, seeds: socialCatalog.current().seeds, avatars: socialCatalog.current().avatars });
+const socialContext = (run, mode, extra = {}) => socialInput(run, mode, { npcs, seeds: socialCatalog.current().seeds, places: worldData.locations.map(({ name }) => name), ahora: temporalContext({ encounters: 0, notes: [], history: [] }, run.world).ahora, extra });
 
 // Quién está aquí ahora: su horario, más quien espera al jugador en una cita acordada.
 function presentFor(run) {
@@ -173,6 +179,8 @@ async function devOperation(run, body, config) {
     if (typeof ai.socialPosts !== 'function') throw new Error('Este proveedor no genera publicaciones.');
     return applyGeneratedPosts(run, await ai.socialPosts(socialContext(run, 'post'), config), socialOptions());
   }
+  // Limpieza del feed (solo desarrollo): útil para tomar muestras de generación sin rehacer la partida.
+  if (body.op === 'social_wipe') return wipeFeed(run).run;
   if (body.op === 'set_time') return setWorldTime(run, body);
   if (body.op === 'unlock_contact') {
     const npc = npcs.get(String(body.npcId));
@@ -247,7 +255,7 @@ async function promptRoutes(request, response, pathname) {
   if (action === 'preview' && request.method === 'POST') {
     const body = await readBody(request, 2_000_000);
     const mode = KINDS[kind].modes.some(({ id }) => id === body.mode) ? body.mode : KINDS[kind].modes[0].id;
-    const run = await store.loadRun(String(body.runId ?? ''));
+    const run = await loadGame(String(body.runId ?? ''));
     const plan = await previewPlan(kind, mode, run, String(body.npcId ?? ''));
     const messages = compose(kind, mode, normalizePreset(kind, body.preset ?? prompts.get(kind)), plan);
     const chars = messages.reduce((total, message) => total + message.content.length, 0);
@@ -444,6 +452,7 @@ async function react(run, post, action, config, since, expected) {
 }
 
 async function api(request, response, pathname) {
+  if (pathname.startsWith('/api/runs')) await socialCatalog.refresh();
   // Si el cliente cancela (botón detener) o se desconecta, se aborta la llamada a la IA y no se guarda nada.
   const controller = new AbortController();
   response.on('close', () => { if (!response.writableEnded) controller.abort(); });
@@ -498,7 +507,7 @@ async function api(request, response, pathname) {
   }
   const media = pathname.match(/^\/api\/runs\/([0-9a-f-]{36})\/media\/(avatar|banner)$/i);
   if (media && request.method === 'GET') {
-    const file = profileMedia(await store.loadRun(media[1]), media[2]);
+    const file = profileMedia(await loadGame(media[1]), media[2]);
     if (!file) return sendJson(response, 404, { error: 'Sin imagen.' });
     response.writeHead(200, { 'content-type': file.mime, 'cache-control': 'private, max-age=31536000, immutable' });
     return response.end(file.buffer);
@@ -535,12 +544,12 @@ async function api(request, response, pathname) {
       throw new Error('Operación de partida desconocida.');
     });
   }
-  if (request.method === 'GET' && !operation) return sendRun(200, await store.loadRun(id));
+  if (request.method === 'GET' && !operation) return sendRun(200, await loadGame(id));
   if (request.method === 'POST' && operation === 'action') {
     const input = await readBody(request);
     return exclusive(id, async () => {
       const config = await requireConfig();
-      const run = await performAction(await store.loadRun(id), input, config);
+      const run = await performAction(await loadGame(id), input, config);
       await save(run);
       return sendRun(200, run);
     });
@@ -549,7 +558,7 @@ async function api(request, response, pathname) {
     const body = await readBody(request);
     return exclusive(id, async () => {
       const config = await requireConfig();
-      const run = await chatWith(await store.loadRun(id), body, config);
+      const run = await chatWith(await loadGame(id), body, config);
       await save(run);
       return sendRun(200, run);
     });
@@ -559,7 +568,7 @@ async function api(request, response, pathname) {
     const body = await readBody(request);
     return exclusive(id, async () => {
       const config = await requireConfig();
-      const run = await devOperation(await store.loadRun(id), body, config);
+      const run = await devOperation(await loadGame(id), body, config);
       await save(run);
       return sendRun(200, run);
     });
@@ -568,7 +577,7 @@ async function api(request, response, pathname) {
     const body = await readBody(request);
     return exclusive(id, async () => {
       // Sin pistas: un usuario inexistente y uno aún desconocido dan el mismo mensaje.
-      const run = addContact(await store.loadRun(id), findNpcByHandle(npcs, body.handle));
+      const run = addContact(await loadGame(id), findNpcByHandle(npcs, body.handle));
       await save(run);
       return sendRun(200, run);
     });
@@ -577,7 +586,7 @@ async function api(request, response, pathname) {
     const body = await readBody(request);
     return exclusive(id, async () => {
       const config = await requireConfig();
-      const run = await talk(await store.loadRun(id), body, config);
+      const run = await talk(await loadGame(id), body, config);
       await save(run);
       return sendRun(200, run);
     });
@@ -587,7 +596,7 @@ async function api(request, response, pathname) {
     const body = await readBody(request);
     return exclusive(id, async () => {
       const config = await requireConfig();
-      const { run: published, post } = publishPlayerPost(await store.loadRun(id), body.text);
+      const { run: published, post } = publishPlayerPost(await loadGame(id), body.text);
       const run = await react(published, post, { tipo: 'publicacion', texto: post.text }, config, post.minutes, expectedReplies(playerPopularity(published.player)));
       await save(run);
       return sendRun(200, run);
@@ -596,13 +605,13 @@ async function api(request, response, pathname) {
   if (request.method === 'POST' && operation === 'social') {
     const body = await readBody(request, 1_200_000);
     return exclusive(id, async () => {
-      if (body.op === 'profile') { const run = saveProfile(await store.loadRun(id), body, socialOptions()); await save(run); return sendRun(200, run); }
-      if (body.op === 'repost') { const run = toggleRepost(await store.loadRun(id), String(body.postId ?? '')); await save(run); return sendRun(200, run); }
-      if (body.op === 'like') { const run = toggleLike(await store.loadRun(id), String(body.postId ?? ''), body.replyId ? String(body.replyId) : null); await save(run); return sendRun(200, run); }
-      if (body.op === 'read') { const run = markNotificationsRead(await store.loadRun(id)); await save(run); return sendRun(200, run); }
+      if (body.op === 'profile') { const run = saveProfile(await loadGame(id), body, socialOptions()); await save(run); return sendRun(200, run); }
+      if (body.op === 'repost') { const run = toggleRepost(await loadGame(id), String(body.postId ?? '')); await save(run); return sendRun(200, run); }
+      if (body.op === 'like') { const run = toggleLike(await loadGame(id), String(body.postId ?? ''), body.replyId ? String(body.replyId) : null); await save(run); return sendRun(200, run); }
+      if (body.op === 'read') { const run = markNotificationsRead(await loadGame(id)); await save(run); return sendRun(200, run); }
       if (body.op === 'reply') {
         const config = await requireConfig();
-        const { run: published, post, reply, target } = publishPlayerReply(await store.loadRun(id), String(body.postId ?? ''), body.text, body.replyTo ? String(body.replyTo) : null);
+        const { run: published, post, reply, target } = publishPlayerReply(await loadGame(id), String(body.postId ?? ''), body.text, body.replyTo ? String(body.replyTo) : null);
         const run = await react(published, post, { tipo: 'respuesta', texto: reply.text, aQuien: (target ?? post).handle }, config, reply.minutes, { min: 1, max: 3 });
         await save(run);
         return sendRun(200, run);
@@ -627,6 +636,10 @@ async function staticFile(response, pathname) {
 }
 
 const server = http.createServer(async (request, response) => {
+  if (debug) {
+    const started = Date.now();
+    response.on('finish', () => { if (request.url.startsWith('/api/') || response.statusCode >= 400) console.log(`${request.method} ${request.url} ${response.statusCode} ${Date.now() - started}ms`); });
+  }
   try {
     const host = request.headers.host || '';
     const url = new URL(request.url, `http://${host}`);
@@ -641,6 +654,7 @@ const server = http.createServer(async (request, response) => {
   } catch (error) {
     const status = error.status || (error.code === 'ENOENT' ? 404 : 400);
     const message = error instanceof SyntaxError ? 'Solicitud JSON inválida.' : error.message;
+    if (debug && status !== 404) console.error(`[error] ${request.method} ${request.url} -> ${status} ${error.code || ''} ${error.message}`);
     if (!response.headersSent) sendJson(response, status, { error:message, code:error.code || 'INVALID_REQUEST' });
   }
 });
