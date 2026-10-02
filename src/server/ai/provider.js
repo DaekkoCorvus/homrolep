@@ -18,6 +18,22 @@ export class AIError extends Error {
   }
 }
 
+// Motivo textual que devolvió el proveedor (p. ej. «el modelo no admite tools»), recortado y sin la API key.
+async function providerDetail(response, key) {
+  try {
+    const body = await response.json();
+    const raw = typeof body?.error === 'string' ? body.error : body?.error?.message ?? body?.message ?? '';
+    return String(raw).split(key).join('[key]').replace(/\s+/g, ' ').trim().slice(0, 240);
+  } catch { return ''; }
+}
+
+const usageOf = (usage) => {
+  if (!usage || typeof usage !== 'object') return null;
+  const number = (value) => (Number.isFinite(value) ? value : undefined);
+  const out = { prompt: number(usage.prompt_tokens), completion: number(usage.completion_tokens), total: number(usage.total_tokens), reasoning: number(usage.completion_tokens_details?.reasoning_tokens) };
+  return Object.fromEntries(Object.entries(out).filter(([, value]) => value !== undefined));
+};
+
 function providerError(status) {
   if (status === 401 || status === 403) return new AIError('NanoGPT rechazó la API key o sus permisos. Revísala en Ajustes.', 'AI_AUTH', 403);
   if (status === 402) return new AIError('NanoGPT indica saldo o cuota insuficiente. Revisa tu cuenta.', 'AI_BALANCE', 402);
@@ -31,7 +47,8 @@ function providerError(status) {
 // La generación solo se corta si el jugador pulsa «detener» o se cierra la conexión (`signal`).
 // `prompts` entrega el preset de cada prompt (personaje, texto, GM, social) y registra lo enviado; por defecto, los de fábrica.
 export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = {}) {
-  async function call(route, key, payload, signal) {
+  // `detail` (solo sondas de desarrollo): añade al error el motivo que dio el proveedor, sin la API key.
+  async function call(route, key, payload, signal, { detail = false } = {}) {
     if (typeof key !== 'string' || !key.trim()) throw new AIError('Configura tu API key de NanoGPT en Ajustes.', 'AI_CONFIGURATION_REQUIRED', 428);
     try {
       const response = await fetchImpl(NANOGPT_BASE_URL + '/' + route, {
@@ -40,7 +57,11 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
         ...(payload ? { body:JSON.stringify(payload) } : {}),
         ...(signal ? { signal } : {})
       });
-      if (!response.ok) throw providerError(response.status);
+      if (!response.ok) {
+        const failure = providerError(response.status);
+        if (detail) failure.detail = await providerDetail(response, key);
+        throw failure;
+      }
       return await response.json();
     } catch (error) {
       if (error instanceof AIError) throw error;
@@ -52,13 +73,16 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
 
   // `maxTokens` es el tamaño esperado de la respuesta visible. Los modelos con razonamiento (p. ej. Spark) gastan tokens
   // pensando antes de responder, así que el tope real deja margen amplio y, si aun así se agota, se reintenta con más.
-  async function chat(config, messages, maxTokens = 1600, params = {}) {
+  // Devuelve el texto y las métricas de la llamada (tiempo, tokens, intentos) para la traza de desarrollo.
+  async function chatDetailed(config, messages, maxTokens = 1600, params = {}) {
     let budget = Math.min(32000, maxTokens * 6 + 4000);
+    const started = Date.now(); const usage = {};
     for (let attempt = 0; ; attempt++) {
       const result = await call('chat/completions', config.apiKey, {
         model:config.model, messages, stream:false, max_tokens:budget,
         ...(Number.isFinite(params?.temperature) ? { temperature:params.temperature } : {}), ...(Number.isFinite(params?.top_p) ? { top_p:params.top_p } : {})
       }, config.signal);
+      for (const [name, value] of Object.entries(usageOf(result.usage) ?? {})) usage[name] = (usage[name] ?? 0) + value;
       const choice = result.choices?.[0];
       const text = choice?.message?.content;
       const hasText = typeof text === 'string' && text.trim();
@@ -67,12 +91,21 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
         throw new AIError('El modelo agotó el límite de respuesta pensando. Reintenta, o prueba un modelo con menos razonamiento en Ajustes.', 'AI_RESPONSE');
       }
       if (!hasText) throw new AIError('El modelo no devolvió texto. Prueba de nuevo o cambia de modelo.', 'AI_RESPONSE');
-      return text.trim();
+      return { text:text.trim(), meta:{ model:config.model, ms:Date.now() - started, attempts:attempt + 1, maxTokens:budget, finishReason:choice?.finish_reason ?? null, usage } };
     }
+  }
+  const chat = async (...args) => (await chatDetailed(...args)).text;
+
+  // Llamada de bajo nivel a chat/completions con un cuerpo arbitrario (tools, response_format…): la usan las sondas de desarrollo
+  // y, más adelante, el bucle de herramientas. Devuelve la respuesta tal cual y el tiempo que tardó.
+  async function complete(config, body, { detail = false } = {}) {
+    const started = Date.now();
+    const json = await call('chat/completions', config.apiKey, { model:config.model, stream:false, ...body }, config.signal, { detail });
+    return { json, ms:Date.now() - started, usage:usageOf(json.usage) };
   }
 
   return {
-    chat,
+    chat, chatDetailed, complete,
     async models(apiKey) {
       const result = await call('models', apiKey);
       if (!Array.isArray(result.data)) throw new AIError('NanoGPT no devolvió un catálogo de modelos válido.', 'AI_RESPONSE');
@@ -115,12 +148,13 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
       const preset = prompts.get(plan.kind);
       const messages = compose(plan.kind, plan.mode, preset, plan);
       const entry = { kind:plan.kind, mode:plan.mode, at:new Date().toISOString(), messages };
+      const started = Date.now();
       try {
-        const text = await chat(config, messages, maxTokens, preset.params);
-        prompts.record?.({ ...entry, response:text });
+        const { text, meta } = await chatDetailed(config, messages, maxTokens, preset.params);
+        prompts.record?.({ ...entry, response:text, meta });
         return text;
       } catch (error) {
-        prompts.record?.({ ...entry, error:error.message });
+        prompts.record?.({ ...entry, error:error.message, meta:{ model:config.model, ms:Date.now() - started, errorCode:error.code ?? null } });
         throw error;
       }
     },

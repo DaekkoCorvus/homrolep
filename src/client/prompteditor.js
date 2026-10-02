@@ -2,6 +2,7 @@
 // de texto (editables, con macros) o automáticos (datos del juego que rellena el motor). Funciona sobre un borrador:
 // nada cambia hasta pulsar «Guardar».
 import { state, notify, escapeHtml, dreq, layer } from './core.js';
+import { describeMeta, openStats } from './aitrace.js';
 
 const ROLES = [['system', 'Sistema'], ['user', 'Usuario'], ['assistant', 'Asistente']];
 const roleLabel = Object.fromEntries(ROLES);
@@ -117,7 +118,7 @@ export async function openPromptEditor(startKind = 'character') {
       <p class="dev-hint">Déjalos vacíos para usar los valores del modelo. Algunos modelos con razonamiento los ignoran.</p>
       <h3>Ver lo que recibe el modelo</h3>
       <div class="dev-buttons"><select data-preview-mode aria-label="Tipo de turno">${spec.modes.map((mode) => `<option value="${mode.id}" ${previewMode[kind] === mode.id ? 'selected' : ''}>${escapeHtml(mode.label)}</option>`).join('')}</select>
-        <button type="button" data-preview>Vista previa</button><button type="button" data-sent>Último enviado</button></div>
+        <button type="button" data-preview>Vista previa</button><button type="button" data-sent>Último enviado</button><button type="button" data-stats>Estadísticas</button></div>
       <p class="dev-hint">La vista previa usa tu partida abierta y el borrador actual, sin llamar al modelo.</p>`;
     // Los valores se asignan como propiedades (sin pasar por el HTML) para no romper con comillas ni saltos de línea.
     body.querySelectorAll('.pm.open').forEach((row) => {
@@ -204,6 +205,8 @@ export async function openPromptEditor(startKind = 'character') {
         const result = await dreq(`/api/dev/prompts/${kind}/preview`, { method: 'POST', body: JSON.stringify({ runId: state.run.id, mode: previewMode[kind], preset: draft }) });
         viewer(`${info[kind].label} · ${modeLabelOf(result.mode)}`, `${result.messages.length} mensajes · ${result.chars} caracteres · ~${result.approxTokens} tokens (estimado). Así quedaría con tu borrador.`, result.messages);
       } catch (failure) { notify(failure.message); }
+    } else if (button.matches('[data-stats]')) {
+      openStats();
     } else if (button.matches('[data-sent]')) {
       try {
         const { entries } = await dreq('/api/dev/prompts/log');
@@ -211,7 +214,7 @@ export async function openPromptEditor(startKind = 'character') {
         if (!mine.length) { notify('Aún no se ha enviado nada con este prompt en esta sesión del servidor.'); return; }
         const show = (entry) => {
           const tail = `<article class="pv-msg"><header><span class="pv-role r-answer">${entry.error ? 'Error' : 'Respuesta del modelo'}</span><small>${(entry.response ?? entry.error ?? '').length} caracteres</small></header><pre data-answer></pre></article>`;
-          const node2 = viewer(`${info[kind].label} · ${modeLabelOf(entry.mode)}`, `Enviado el ${new Date(entry.at).toLocaleString('es')}. Es exactamente lo que recibió el modelo.${mine.length > 1 ? ' <button type="button" class="pm-link" data-older>ver el anterior</button>' : ''}`, entry.messages, tail);
+          const node2 = viewer(`${info[kind].label} · ${modeLabelOf(entry.mode)}`, `Enviado el ${new Date(entry.at).toLocaleString('es')}. Es exactamente lo que recibió el modelo.${entry.meta ? `<br><small>${escapeHtml(describeMeta(entry.meta))}</small>` : ''}${mine.length > 1 ? ' <button type="button" class="pm-link" data-older>ver el anterior</button>' : ''}`, entry.messages, tail);
           node2.querySelector('[data-answer]').textContent = entry.response ?? entry.error ?? '';
           node2.querySelector('[data-older]')?.addEventListener('click', () => { const next = mine[(mine.indexOf(entry) + 1) % mine.length]; node2.remove(); show(next); });
         };

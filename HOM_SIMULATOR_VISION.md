@@ -22,7 +22,7 @@ Un inicio adecuado presenta días relativamente tranquilos y oportunidades peque
 
 El umbral de creación es místico y automático: tras confirmar una nueva partida, el vórtice liminal se abre y la entidad parece moldear una vida con preguntas breves sobre edad, género (hombre, mujer o personalizado), apariencia e historia opcional. El diálogo aparece gradualmente sobre un fondo oscuro; después, la entidad interrumpe el cruce para preguntar el nombre. La apariencia se guarda como referencia privada para interacciones pertinentes con NPC; no se muestra en la ficha ni se envía al prólogo o a narraciones generales. Por ahora la raza humana se asigna como única opción disponible. El GM elegido usa edad, identidad e historia para crear un prólogo breve y situar al personaje en la estación de Porta Magna, ciudad nexo con línea de metro hacia Northfortress. La ocupación y la aspiración **no** se preguntan en la creación: se descubren, eligen y transforman jugando.
 
-Una nueva Run y las acciones de juego requieren conexión NanoGPT verificada. Ajustes y partidas guardadas siguen accesibles sin ella. Si falla una llamada de IA, no se crea ni avanza la Run. La clave permanece en el servidor local, nunca en el cliente ni en Git.
+Una nueva Run y las acciones de juego requieren una conexión NanoGPT configurada (API key y modelo; comprobar la conexión es opcional). Ajustes y partidas guardadas siguen accesibles sin ella. Si falla una llamada de IA, no se crea ni avanza la Run. La clave permanece en el servidor local, nunca en el cliente ni en Git.
 
 ## Libertad del jugador y coherencia del canon
 

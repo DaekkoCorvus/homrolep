@@ -2,6 +2,7 @@
 import { state, request, notify, escapeHtml, isDev, setDev, place, dreq, layer } from './core.js';
 import { setTextSpeed } from './game.js';
 import { openPromptEditor } from './prompteditor.js';
+import { openProbe, openStats } from './aitrace.js';
 
 const COMMANDS = [
   ['/dev', 'Activa o desactiva las herramientas de desarrollo'],
@@ -15,6 +16,8 @@ const COMMANDS = [
   ['/feed', 'Genera ahora publicaciones nuevas en NorthLife (prompt social)'],
   ['/limpiarfeed', 'Borra todas las publicaciones y cuentas generadas del feed (conserva tu cuenta) para empezar de cero'],
   ['/prompts [personaje|texto|gm|social]', 'Abre el editor de prompts (módulos, orden, vista previa)'],
+  ['/sonda [modelo …]', 'Prueba herramientas nativas, protocolo JSON y tiempos de uno o varios modelos'],
+  ['/stats', 'Tiempos y tokens medios de las llamadas a la IA, por tipo'],
   ['/contacto id', 'Desbloquea el contacto de un NPC (como si lo hubiera compartido)'],
   ['/texto lento|normal|rapido', 'Velocidad con la que se escribe la respuesta del NPC'],
   ['/fx lite|full|auto', 'Calidad de efectos de la escena (lite congela las animaciones)']
@@ -74,6 +77,8 @@ export async function runCommand(text) {
   } else if (command === '/fichas') openPanel();
   else if (command === '/limpiarfeed' || command === '/wipefeed') await wipeFeed();
   else if (command === '/feed') { try { await hooks.runDev({ op: 'social' }); await hooks.reload(); notify('Feed generado.'); } catch (error) { notify(error.message); } }
+  else if (command === '/sonda' || command === '/probe') openProbe(argument.split(/[\s,]+/).filter(Boolean));
+  else if (command === '/stats') openStats();
   else if (command === '/prompts' || command === '/prompt') {
     const kinds = { personaje: 'character', character: 'character', texto: 'text', text: 'text', gm: 'gm', social: 'social' };
     openPromptEditor(kinds[norm(argument)] ?? 'character');
@@ -92,6 +97,8 @@ export async function openPanel() {
       <button type="button" data-act="hour">+1 hora</button><button type="button" data-act="social">Generar feed ahora</button><button type="button" data-act="social-wipe" class="danger">Limpiar feed</button></div></section>
     <section><h3>Prompts</h3><div class="dev-buttons"><button type="button" data-prompts="character">Personaje</button><button type="button" data-prompts="text">Texto</button><button type="button" data-prompts="gm">GM</button><button type="button" data-prompts="social">Social</button></div>
       <p class="dev-hint">Edita los módulos que se envían al modelo, su orden y su vista previa.</p></section>
+    <section><h3>Modelos y medición</h3><div class="dev-buttons"><button type="button" data-probe>Sonda de modelos</button><button type="button" data-stats>Estadísticas de llamadas</button></div>
+      <p class="dev-hint">Compara modelos (herramientas nativas, JSON, tiempos) y mira cuántos tokens y segundos cuesta cada tipo de llamada. El modelo se cambia en Ajustes sin necesidad de comprobarlo.</p></section>
     <section><h3>Fichas de NPC</h3><div class="dev-list">${cards.map((card) => `<div class="dev-row"><span><strong>${escapeHtml(card.name)}</strong><small>${escapeHtml(card.id)} · ${escapeHtml(card.role || 'sin rol')}</small></span><button type="button" data-edit="${escapeHtml(card.id)}">Editar</button><button type="button" data-export="${escapeHtml(card.id)}">Exportar</button></div>`).join('')}</div>
       <div class="dev-buttons"><button type="button" data-new>Nuevo NPC</button><label class="file-button">Importar ficha<input type="file" accept=".json,.png,application/json,image/png" hidden data-import></label></div>
       <p class="dev-hint">Importa JSON propio, fichas «character card» v1/v2/v3 (JSON o PNG). También puedes dejar archivos en <code>data/canon/npcs/</code> y <code>assets/portraits/&lt;id&gt;/default.png</code> y reiniciar el servidor.</p></section>
@@ -104,6 +111,8 @@ export async function openPanel() {
   node.querySelectorAll('[data-edit]').forEach((button) => button.onclick = () => openEditor(cards.find((card) => card.id === button.dataset.edit)));
   node.querySelectorAll('[data-export]').forEach((button) => button.onclick = () => exportCard(cards.find((card) => card.id === button.dataset.export)));
   node.querySelector('[data-new]').onclick = () => openEditor(null);
+  node.querySelector('[data-probe]').onclick = () => openProbe();
+  node.querySelector('[data-stats]').onclick = () => openStats();
   node.querySelectorAll('[data-prompts]').forEach((button) => button.onclick = () => openPromptEditor(button.dataset.prompts));
   node.querySelector('[data-import]').onchange = (event) => importFile(event.target.files[0]);
 }

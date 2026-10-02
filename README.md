@@ -75,9 +75,19 @@ npm test
 
 ## Configuración y seguridad
 
-En la pantalla inicial, abre **Ajustes**, pega tu API key de NanoGPT y elige un GM: **Spark 1.3** (interpretativo y estricto) o **DeepSeek** (creativo y más suave). Pulsa **Probar y guardar**: se realiza una llamada de Chat Completions y solo si responde se habilita **Nueva partida**. La prueba, las frases de la entidad y las narraciones pueden consumir saldo o cuota de NanoGPT. No envíes tu key por chat ni la introduzcas en archivos del repositorio.
+En la pantalla inicial, abre **Ajustes**, pega tu API key de NanoGPT y elige un GM: **Spark 1.3** (interpretativo y estricto), **DeepSeek** (creativo y más suave) u **Otro modelo** (escribe cualquier identificador de NanoGPT, o pulsa «Ver modelos de NanoGPT» para listarlos). **Guardar** es instantáneo y no llama al modelo, así que puedes cambiar de uno a otro para comparar respuestas; **Probar conexión** es opcional y hace una llamada corta. Las frases de la entidad y las narraciones pueden consumir saldo o cuota de NanoGPT. No envíes tu key por chat ni la introduzcas en archivos del repositorio.
 
 La key se guarda en `.local/ai.json` en el servidor local, fuera de Git y de las partidas; el navegador nunca la guarda en localStorage ni la recibe de vuelta por la API. **Olvidar API key** la elimina. Este prototipo es para uso local de una persona; mantén protegidos el dispositivo y esa carpeta. La historia inicial, el personaje, las acciones y hasta 12 eventos recientes se envían a NanoGPT. Las frases breves y personalizadas de la entidad usan `deepseek/deepseek-v4.1-flash`; el GM que elijas narra la llegada a la estación y las acciones. Si NanoGPT falla al crear la partida o narrar una acción, no se guarda ningún avance; las frases de la entidad tienen un texto de respaldo. Las partidas existentes se pueden leer sin conexión configurada.
+
+### Medir y comparar modelos
+
+En modo desarrollador (`/dev`): **Sonda de modelos** (`/sonda [modelo …]`) prueba con uno o varios modelos texto plano, el protocolo JSON de reserva, herramientas nativas (`tools`, también varias a la vez y la segunda vuelta con el resultado) y salida con esquema, y muestra tiempos y tokens; **Estadísticas de llamadas** (`/stats`) da la media de segundos y tokens por tipo de llamada (`gm:action`, `character:reply`…), y «Último enviado» del editor de prompts muestra modelo, tiempo, tokens e intentos de cada llamada. Lo mismo desde la consola, con la key de Ajustes:
+
+```bash
+npm run probe                                   # el modelo guardado en Ajustes
+npm run probe -- modelo1 modelo2                # compara hasta 4 modelos
+npm run probe -- --json --tests tools,multi …   # salida JSON / solo algunas pruebas
+```
 
 La creación pregunta edad, género, apariencia e historia personal opcional; el nombre se pide justo antes de cruzar. La apariencia se guarda como referencia para futuras interacciones con NPC, pero no aparece en la ficha ni se envía al GM durante el prólogo o narraciones generales. La raza humana se asigna automáticamente por ser la única disponible. El prólogo comienza en la estación de Porta Magna. Ocupación y aspiración quedan sin definir al inicio y se desarrollarán durante el juego. El atajo de trabajo solo funciona en partidas que ya tengan la ocupación `worker`.
 

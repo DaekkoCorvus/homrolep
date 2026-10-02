@@ -467,3 +467,16 @@ body:has(.game) { background:#05070d; overflow:hidden; }
 .xp-handle-input input { padding:0; }
 .xp-actions > * { justify-self:start; }
 .xp-av img[data-avatar] { object-position:center; }
+
+/* Medición de la IA (sonda de modelos y estadísticas) */
+.at-scroll { overflow-x:auto; margin:.4rem 0; }
+.at-table { width:100%; border-collapse:collapse; font-size:.82rem; }
+.at-table th,.at-table td { padding:.45rem .5rem; text-align:left; border-bottom:1px solid #ffffff14; white-space:nowrap; }
+.at-table th { color:#9af0b1; font-weight:600; font-size:.7rem; letter-spacing:.08em; text-transform:uppercase; }
+.at-model h3 { text-transform:none; letter-spacing:0; font-size:.95rem; color:#f3ead9; overflow-wrap:anywhere; }
+.at-verdict { margin:.2rem 0 .5rem; padding:.45rem .7rem; border-left:3px solid #9b96ad; background:#ffffff0a; }
+.at-good { border-color:#9af0b1; } .at-mid { border-color:#f2c791; } .at-bad { border-color:#ffb4a6; }
+.at-tests { list-style:none; margin:0 0 1rem; padding:0; display:grid; gap:.5rem; }
+.at-tests li { display:grid; grid-template-columns:1.4rem 1fr; gap:.4rem; }
+.at-tests .ok .at-mark { color:#9af0b1; } .at-tests .fail .at-mark { color:#ffb4a6; }
+.at-note { color:#9b96ad; overflow-wrap:anywhere; }

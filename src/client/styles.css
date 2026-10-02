@@ -151,6 +151,8 @@ button.primary:hover:not(:disabled) { box-shadow:0 10px 30px #e0a36655; }
 .gm-option:has(input:checked) .gm-check { opacity:1; }
 .gm-option:has(input:focus-visible) { outline:2px solid #ebd5aa; outline-offset:3px; }
 .gm-option:hover { border-color:#e9c396; }
+.custom-model { display:grid; gap:.6rem; }
+.custom-model[hidden] { display:none; }
 .confirmation-card { max-width:440px; }
 .confirmation .portal { transition:transform .65s cubic-bezier(.2,.7,.15,1),opacity .65s ease,filter .65s ease; }
 .confirmation-card h1 { font:400 clamp(2rem,8vw,3.2rem)/1.15 Georgia,serif; text-wrap:balance; }

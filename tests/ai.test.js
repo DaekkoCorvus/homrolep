@@ -63,11 +63,14 @@ test('settings gate, generation, persistence, failures and concurrent requests w
   assert.equal((await api('/api/ai/models','POST',{apiKey:'test-secret'})).body.models[0].id,'test-model');
   assert.equal((await api('/api/ai/settings')).body.configured,false);
   fail=true;
-  assert.equal((await api('/api/ai/settings','POST',{apiKey:'test-secret',model:'meta/muse-spark-1.3-contributor'})).status,403);
-  assert.equal((await settings.status()).configured,false);
+  assert.equal((await api('/api/ai/settings','POST',{apiKey:'test-secret',model:'meta/muse-spark-1.3-contributor',verify:true})).status,403);
+  assert.equal((await settings.status()).configured,false); // la comprobación opcional falló: no se guarda nada
   fail=false;
+  assert.equal((await api('/api/ai/settings','POST',{apiKey:'test-secret',model:'no es un modelo'})).status,400);
+  assert.equal((await settings.status()).configured,false);
   const saved=await api('/api/ai/settings','POST',{apiKey:'test-secret',model:'meta/muse-spark-1.3-contributor'});
   assert.equal(saved.body.configured,true);
+  assert.equal(saved.body.verifiedAt,null); // guardar no llama al modelo
   assert.ok(!JSON.stringify(saved).includes('test-secret'));
   assert.equal((await createSettingsStore(directory).status()).configured,true);
   badPrologue=true;
@@ -100,4 +103,71 @@ test('settings gate, generation, persistence, failures and concurrent requests w
   assert.equal((await api('/api/runs','POST',profile)).status,428);
   assert.equal((await api(`/api/runs/${id}/posts`,'POST',{text:'Hola ciudad.'})).status,428);
   assert.equal((await api(`/api/runs/${id}`)).status,200);
+});
+
+test('settings accept any model id, save without calling the provider and keep older files working', async (t) => {
+  const directory=await mkdtemp(path.join(tmpdir(),'hom-settings-'));
+  t.after(()=>rm(directory,{recursive:true,force:true}));
+  const settings=createSettingsStore(directory);
+  for (const bad of ['', 'con espacios', 'x'.repeat(201), '../../etc', 'a;b']) {
+    await assert.rejects(settings.candidate({apiKey:'k',model:bad}), {code:'AI_MODEL'}, bad);
+  }
+  const custom=await settings.candidate({apiKey:'k',model:'anthropic/claude-sonnet-4.5:thinking'});
+  assert.deepEqual(await settings.save(custom), {provider:'nanogpt',configured:true,hasKey:true,model:'anthropic/claude-sonnet-4.5:thinking',verifiedAt:null});
+  assert.equal((await settings.require()).model,'anthropic/claude-sonnet-4.5:thinking');
+  // Un ai.json guardado por la versión anterior (con verifiedAt) sigue siendo válido; cambiar solo el modelo conserva la key.
+  await settings.save({apiKey:'k',model:'deepseek/deepseek-v4.1-flash'},{verified:true});
+  assert.ok((await settings.status()).verifiedAt);
+  const switched=await settings.candidate({model:'meta/muse-spark-1.3-contributor'});
+  assert.equal(switched.apiKey,'k');
+});
+
+test('provider reports tokens, latency and attempts and the prompt store aggregates them per call type', async () => {
+  const { createPromptStore } = await import('../src/server/ai/promptStore.js');
+  const prompts=createPromptStore(await mkdtemp(path.join(tmpdir(),'hom-prompts-')));
+  let first=true;
+  const ai=createNanoGPT(async()=>{
+    const truncated=first; first=false;
+    return { ok:true, json:async()=>({ choices:[{ message:{ content:truncated?'':'{"narration":"Hola"}' }, finish_reason:truncated?'length':'stop' }], usage:{ prompt_tokens:100, completion_tokens:40, total_tokens:140, completion_tokens_details:{ reasoning_tokens:25 } } }) };
+  },{prompts});
+  const { text, meta }=await ai.chatDetailed({apiKey:'k',model:'m'},[{role:'user',content:'x'}],100);
+  assert.equal(text,'{"narration":"Hola"}');
+  assert.equal(meta.attempts,2);
+  assert.deepEqual(meta.usage,{prompt:200,completion:80,total:280,reasoning:50}); // suma los dos intentos
+  assert.ok(meta.ms>=0 && meta.model==='m');
+  prompts.record({kind:'gm',mode:'action',messages:[],response:'x',meta});
+  prompts.record({kind:'gm',mode:'action',messages:[],error:'boom',meta:{model:'m',ms:10}});
+  const [row]=prompts.stats();
+  assert.equal(row.calls,2); assert.equal(row.errors,1); assert.equal(row.promptTokens,200); assert.equal(row.byModel.m.calls,2);
+  prompts.resetStats(); assert.deepEqual(prompts.stats(),[]);
+});
+
+test('model probe measures native tools, the JSON fallback and unsupported features per model', async () => {
+  const { runProbe } = await import('../src/server/ai/probe.js');
+  const reply=(message)=>({ ok:true, json:async()=>({ choices:[{ message, finish_reason:'stop' }], usage:{ prompt_tokens:50, completion_tokens:10, total_tokens:60 } }) });
+  const toolCall={ id:'c1', type:'function', function:{ name:'travel', arguments:'{"place":"cafe"}' } };
+  const fetchImpl=async(url,options)=>{
+    const body=JSON.parse(options.body);
+    if(body.model==='no-tools'&&(body.tools||body.response_format)) return { ok:false, status:400, json:async()=>({ error:{ message:'tools unsupported, key=secret-key' } }) };
+    const last=body.messages.at(-1);
+    if(body.tools) {
+      if(last.role==='tool') return reply({ content:'Llegas a la cafetería.' });
+      if(/miro quién hay/.test(last.content)) return reply({ content:null, tool_calls:[{...toolCall,function:{name:'who_is_here',arguments:'{}'}},{...toolCall,id:'c2',function:{name:'spend_time',arguments:'{"activity":"rest"}'}}] });
+      return reply({ content:null, tool_calls:[toolCall] });
+    }
+    if(body.response_format) return reply({ content:'{"narration":"Esperas.","minutes":15}' });
+    if(/travel\(place\)/.test(body.messages[0].content)) return reply({ content:'```json\n{"say":"Vas.","calls":[{"tool":"travel","args":{"place":"cafe"}}]}\n```' });
+    return reply({ content:'LISTO' });
+  };
+  const ai=createNanoGPT(fetchImpl);
+  const { results }=await runProbe(ai,{apiKey:'secret-key',model:'good'},{models:['good','no-tools']});
+  const good=results[0].tests; const bad=results[1].tests;
+  assert.deepEqual(good.map((item)=>item.ok),[true,true,true,true,true]);
+  assert.equal(good.find((item)=>item.id==='tools').calls,2); // llamada + segunda vuelta con el resultado
+  assert.equal(good.find((item)=>item.id==='tools').usage.prompt,100);
+  assert.deepEqual(bad.map((item)=>item.ok),[true,true,false,false,false]); // el texto y el protocolo JSON funcionan sin tools
+  assert.equal(bad.find((item)=>item.id==='tools').unsupported,true);
+  assert.match(bad.find((item)=>item.id==='tools').note,/tools unsupported/);
+  assert.ok(!JSON.stringify(results).includes('secret-key')); // el motivo del proveedor nunca incluye la key
+  await assert.rejects(runProbe(createNanoGPT(async()=>({ok:false,status:401,json:async()=>({})})),{apiKey:'k',model:'m'}),{code:'AI_AUTH'});
 });

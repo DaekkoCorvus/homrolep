@@ -146,9 +146,19 @@ Y tres reglas que ahorran de verdad:
 5. **Editor de prompts simplificado y traza completa.**
 6. **Director y misiones** sobre el mismo registro.
 
-## 7. Decisiones que necesito de ti
+## 7. Decisiones tomadas
 
-1. **Modelos objetivo.** ¿Cuáles usas o quieres soportar (DeepSeek, Spark, otros)? Define si el adaptador de reserva es opcional u obligatorio.
-2. **Importador de SillyTavern.** ¿Lo usas de verdad o lo retiramos del camino principal?
-3. **Cierre de conversación.** ¿Aceptas que la evaluación del GM (impresiones, hechos) se aplique en segundo plano y no bloquee «Volver»? Implica que la actitud del NPC se actualiza un instante después.
-4. **Por dónde empezar.** Recomiendo Fase 0 + 1 y luego 2 (mundo libre), porque es donde hoy el jugador choca con el límite del motor.
+1. **Modelos.** Principales: DeepSeek y Muse Spark 1.3, que son los que se conocen. Se añade la opción de un **modelo personalizado** para probar alternativas, y se elimina la comprobación obligatoria al guardar (el botón «Probar conexión» queda como opcional). *(Hecho en la Fase 0.)* Como no se asume que todos los modelos hablen `tools`, el adaptador JSON de reserva es **obligatorio**, no opcional.
+2. **SillyTavern y retrocompatibilidad.** El importador de presets de ST y la compatibilidad con versiones anteriores **no importan**: si algo antiguo queda roto, se rehace. Se retirará el importador en la Fase 5 y las partidas viejas no se migran.
+3. **Trabajo en segundo plano.** Ninguna acción debe bloquear al jugador esperando al modelo. Aplica al cierre de conversación (la evaluación del GM), y también a **publicar y responder en NorthLife**: la publicación se guarda al instante y la generación de reacciones corre en segundo plano; cuando llegan, el jugador recibe un aviso (sonido/icono) y actualiza el feed cuando quiere. Es la base para actividades simultáneas cuando haya más contenido. Esto se añade al plan como **Fase 1b**.
+
+## 8. Plan por fases actualizado
+
+0. **Prueba y medición — hecha.** Modelo libre y guardado sin verificación; `usage`, tiempo, intentos y modelo en cada llamada; estadísticas por tipo; sonda de modelos (UI en `/dev` → «Sonda de modelos», `/sonda`, y `npm run probe`).
+1. **Registro de herramientas y ejecutor** (sin cambiar el juego): `travel`, `wait`, `sleep`, `work`, `start_conversation`, `share_contact`; `chat()` con `tools`, bucle con tope y codec de reserva obligatorio.
+1b. **Trabajo en segundo plano con avisos.** Cola de tareas del servidor por partida: la acción del jugador se aplica y se guarda al instante, y las llamadas al modelo (reacciones de NorthLife, evaluación al cerrar una conversación, feed) corren después; los resultados se aplican al guardar con bloqueo por partida y se avisa al cliente (sondeo o SSE) con un icono/sonido. Hay que decidir cómo se muestran los pendientes («escribiendo…», «N novedades») y qué pasa si el jugador actúa antes de que termine (las tareas se encolan, no se pisan).
+2. **Mundo libre con herramientas.**
+3. **Rol de personaje unificado** (herramientas del personaje; reflexión del GM en segundo plano).
+4. **Broker de contexto** (cabecera ambiente, ficha core/deep, ventana + resumen, avisos).
+5. **Editor de prompts simplificado y traza completa**; retirada del importador de ST.
+6. **Director y misiones.**

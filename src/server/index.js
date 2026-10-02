@@ -8,7 +8,8 @@ import { validateAgreements, addCommitments, applyUpdates, settleCommitments, ke
 import { validateNpcCard, fromForeignCard, parsePngCard, savePortrait, listPortraits, saveNpcCard, imageKind, removePortrait, renamePortrait, normalizeEmotion } from './game/cards.js';
 import { loadNpcs, presentNpcs, publicNpc, relationshipOf, affinityOf, attitudeOf, validateEvaluation, validateFacts, scheduleFor, minutesOfWorld, applyEvaluation, debugView, temporalContext, timedNotes, timedHistory, contactAllowed, findNpcByHandle, parseSpeech, stripMarks, contactInfo, stickyFrom } from './game/npcs.js';
 import { createNanoGPT, AIError } from './ai/provider.js';
-import { createSettingsStore } from './ai/settings.js';
+import { createSettingsStore, isModelId } from './ai/settings.js';
+import { runProbe } from './ai/probe.js';
 import { createPromptStore } from './ai/promptStore.js';
 import { createSocialCatalog } from './game/socialCatalog.js';
 import { KINDS, kindNames, defaultPreset, normalizePreset, compose, importSillyTavern } from './ai/composer.js';
@@ -31,7 +32,7 @@ const port = Number(process.env.PORT) || 3000;
 // HOM_DEBUG=1 (lo activa scripts/dev-local.mjs): registra en consola las peticiones /api y los errores del servidor.
 const debug = process.env.HOM_DEBUG === '1';
 
-const clientFiles = new Set(['/index.html', '/app.js', '/core.js', '/game.js', '/devtools.js', '/prompteditor.js', '/northlife.js', '/scenes.js', '/styles.css', '/game.css']);
+const clientFiles = new Set(['/index.html', '/app.js', '/core.js', '/game.js', '/devtools.js', '/prompteditor.js', '/aitrace.js', '/northlife.js', '/scenes.js', '/styles.css', '/game.css']);
 const mimeTypes = { '.png':'image/png', '.webp':'image/webp', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.json':'application/json; charset=utf-8', '.svg':'image/svg+xml' };
 
 function sendJson(response, status, body) {
@@ -237,7 +238,8 @@ async function previewPlan(kind, mode, run, npcId) {
 
 async function promptRoutes(request, response, pathname) {
   if (request.method === 'GET' && pathname === '/api/dev/prompts') return sendJson(response, 200, { kinds: kindNames.map(promptInfo) });
-  if (request.method === 'GET' && pathname === '/api/dev/prompts/log') return sendJson(response, 200, { entries: prompts.log?.() ?? [] });
+  if (request.method === 'GET' && pathname === '/api/dev/prompts/log') return sendJson(response, 200, { entries: prompts.log?.() ?? [], stats: prompts.stats?.() ?? [] });
+  if (request.method === 'DELETE' && pathname === '/api/dev/prompts/log') { prompts.resetStats?.(); return sendJson(response, 200, { entries: prompts.log?.() ?? [], stats: [] }); }
   const match = pathname.match(/^\/api\/dev\/prompts\/([a-z]+)(?:\/(import|preview))?$/);
   if (!match || !kindNames.includes(match[1])) return sendJson(response, 404, { error: 'Prompt desconocido.' });
   const [, kind, action] = match;
@@ -469,12 +471,24 @@ async function api(request, response, pathname) {
     const input = await readBody(request);
     return exclusive('settings', async () => {
       const candidate = await settings.candidate(input);
-      await ai.verify(candidate);
-      return sendJson(response, 200, await settings.save(candidate));
+      // Guardar no llama al modelo: así se cambia de modelo al instante para comparar respuestas. `verify: true` comprueba la conexión.
+      if (input.verify === true) await ai.verify(candidate);
+      return sendJson(response, 200, await settings.save(candidate, { verified: input.verify === true }));
     });
   }
   if (pathname === '/api/ai/settings' && request.method === 'DELETE') {
     return exclusive('settings', async () => sendJson(response, 200, await settings.clear()));
+  }
+  // Sonda de modelos (desarrollo): compara tools nativas, protocolo JSON y tiempos de uno o varios modelos. Gasta unos pocos miles de tokens por modelo.
+  if (request.method === 'POST' && pathname === '/api/dev/ai/probe') {
+    if (request.headers['x-hom-dev'] !== '1') throw new AIError('Las herramientas de desarrollo están desactivadas.', 'DEV_DISABLED', 403);
+    const body = await readBody(request);
+    return exclusive('probe', async () => {
+      if (typeof ai.complete !== 'function') throw new Error('Este proveedor no admite sondas.');
+      const config = await requireConfig();
+      const models = (Array.isArray(body.models) ? body.models : []).map((item) => String(item).trim()).filter(isModelId);
+      return sendJson(response, 200, await runProbe(ai, config, { models, ...(Array.isArray(body.tests) ? { tests: body.tests.map(String) } : {}) }));
+    });
   }
   if (pathname.startsWith('/api/dev/')) return devRoutes(request, response, pathname);
   if (request.method === 'GET' && pathname === '/api/world') return sendJson(response, 200, worldData);
