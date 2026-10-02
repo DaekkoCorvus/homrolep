@@ -2,7 +2,7 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createRun, setPrologue, applyAction, addPost, startEncounter, addExchange, endEncounter, rewindEncounter, replaceLastNpcLine, reapplyEnding, setWorldTime, addContact, grantContact, leaveEncounter, MAX_PLAYER_TEXT } from './game/run.js';
+import { createRun, setPrologue, applyAction, startEncounter, addExchange, endEncounter, rewindEncounter, replaceLastNpcLine, reapplyEnding, setWorldTime, addContact, grantContact, leaveEncounter, MAX_PLAYER_TEXT } from './game/run.js';
 import { advanceTime, timeKey } from './game/clock.js';
 import { validateAgreements, addCommitments, applyUpdates, settleCommitments, keepMeetings, meetingNpcIds, commitmentsFor } from './game/commitments.js';
 import { validateNpcCard, fromForeignCard, parsePngCard, savePortrait, listPortraits, saveNpcCard, imageKind, removePortrait, renamePortrait, normalizeEmotion } from './game/cards.js';
@@ -11,7 +11,8 @@ import { createNanoGPT, AIError } from './ai/provider.js';
 import { createSettingsStore } from './ai/settings.js';
 import { createPromptStore } from './ai/promptStore.js';
 import { KINDS, kindNames, defaultPreset, normalizePreset, compose, importSillyTavern } from './ai/composer.js';
-import { characterPlan, evaluationPlan, narrationPlan, chatsPlan, feedPlan } from './ai/plans.js';
+import { characterPlan, evaluationPlan, narrationPlan, chatsPlan, socialPlan } from './ai/plans.js';
+import { feedDue, applyGeneratedPosts, applyReactions, publishPlayerPost, publishPlayerReply, toggleLike, markNotificationsRead, socialView, socialInput, threadFor, migrateSocial } from './game/social.js';
 import { saveRun, loadRun, listRuns, deleteRun } from './saves/store.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -21,9 +22,11 @@ const clientDir = path.join(root, 'src/client');
 const worldData = JSON.parse(await readFile(path.join(root, 'data/canon/locations/porta_magna.json'), 'utf8'));
 const npcDir = path.join(root, 'data/canon/npcs');
 const npcs = await loadNpcs(npcDir);
+// Cuentas de la red social con popularidad fija (canon): p. ej. @RexNova. Todo lo demás lo inventa el modelo y lo valida el motor.
+const socialSeeds = await readFile(path.join(root, 'data/canon/social/accounts.json'), 'utf8').then((raw) => JSON.parse(raw).accounts ?? []).catch(() => []);
 const port = Number(process.env.PORT) || 3000;
 
-const clientFiles = new Set(['/index.html', '/app.js', '/core.js', '/game.js', '/devtools.js', '/prompteditor.js', '/scenes.js', '/styles.css', '/game.css']);
+const clientFiles = new Set(['/index.html', '/app.js', '/core.js', '/game.js', '/devtools.js', '/prompteditor.js', '/northlife.js', '/scenes.js', '/styles.css', '/game.css']);
 const mimeTypes = { '.png':'image/png', '.webp':'image/webp', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.json':'application/json; charset=utf-8', '.svg':'image/svg+xml' };
 
 function sendJson(response, status, body) {
@@ -54,13 +57,17 @@ async function publicRun(run, dev = false) {
   const relationships = Object.fromEntries(Object.entries(run.relationships ?? {}).map(([id, item]) => [id, dev ? debugView(relationshipOf(run, id)) : { met: item.met, contact: item.contact, added: item.added === true, encounters: item.encounters }]));
   const encounterNpc = run.encounter ? await toPublic(npcs.get(run.encounter.npcId)) : null;
   return {
-    ...run, relationships, encounterNpc,
+    ...run, relationships, encounterNpc, social: socialView(run, { dev, seeds: socialSeeds }),
     commitments: (run.commitments ?? []).map((item) => ({ ...item, npcName: npcs.get(item.npcId)?.name ?? item.npcId })),
     presence: await Promise.all(presentFor(run).map(toPublic)),
     sharedContacts: [...npcs.values()].filter((npc) => run.relationships?.[npc.id]?.contact).map((npc) => ({ id: npc.id, name: npc.name, handle: npc.contact.handle, added: run.relationships[npc.id].added === true })),
     contacts: await Promise.all([...npcs.values()].filter((npc) => run.relationships?.[npc.id]?.added).map(toPublic))
   };
 }
+
+// Datos para el prompt social (cuentas, contactos, publicaciones recientes) y opciones de validación del motor.
+const socialOptions = () => ({ npcs, seeds: socialSeeds });
+const socialContext = (run, mode, extra = {}) => socialInput(run, mode, { npcs, seeds: socialSeeds, places: worldData.locations.map(({ name }) => name), ahora: temporalContext({ encounters: 0, notes: [], history: [] }, run.world).ahora, extra });
 
 // Quién está aquí ahora: su horario, más quien espera al jugador en una cita acordada.
 function presentFor(run) {
@@ -162,6 +169,10 @@ async function devOperation(run, body, config) {
     }
     throw new Error('No hay nada que regenerar.');
   }
+  if (body.op === 'social') {
+    if (typeof ai.socialPosts !== 'function') throw new Error('Este proveedor no genera publicaciones.');
+    return applyGeneratedPosts(run, await ai.socialPosts(socialContext(run, 'post'), config), socialOptions());
+  }
   if (body.op === 'set_time') return setWorldTime(run, body);
   if (body.op === 'unlock_contact') {
     const npc = npcs.get(String(body.npcId));
@@ -208,8 +219,12 @@ async function previewPlan(kind, mode, run, npcId) {
     const context = await contextFor(run, npc);
     return evaluationPlan(context(relationshipOf(run, npc.id), withPlayer(run.encounter?.lines ?? run.lastEncounter?.lines), { commitments: context.gmCommitments, locations: context.locations }));
   }
-  const contacts = [...npcs.values()].filter((person) => run.relationships?.[person.id]?.added);
-  return feedPlan({ ahora, playerName: run.player.name, authors: (contacts.length ? contacts : [npc]).map((person) => ({ npcId: person.id, nombre: person.name, resumen: person.summary, personalidad: person.personality, haciendoAhora: scheduleFor(person, run.world)?.activity ?? 'fuera de su horario habitual' })) });
+  if (mode === 'reply') {
+    const social = migrateSocial(run.social, run.player);
+    const post = social.posts.find((item) => item.minutes <= minutesOfWorld(run.world)) ?? { id: 'ejemplo', handle: '@ejemplo', text: '(aquí irá la publicación)', time: '', replies: [], minutes: 0 };
+    return socialPlan(socialContext(run, 'reply', { publicacion: threadFor(post, minutesOfWorld(run.world)), accionDelJugador: { tipo: 'respuesta', texto: '(aquí irá lo que escriba el jugador)', aQuien: post.handle } }));
+  }
+  return socialPlan(socialContext(run, 'post'));
 }
 
 async function promptRoutes(request, response, pathname) {
@@ -388,17 +403,13 @@ function startBackground(run, config) {
     }, config).catch(() => null)
     : Promise.resolve(null);
 
-  const contacts = [...npcs.values()].filter((npc) => run.relationships?.[npc.id]?.added);
-  const feedDue = typeof ai.feedPosts === 'function' && contacts.length && (run.social.feedAt == null || minutesOfWorld(run.world) - run.social.feedAt >= 180);
-  const feedCall = feedDue
-    ? ai.feedPosts({
-      authors: contacts.map((npc) => ({ npcId: npc.id, nombre: npc.name, resumen: npc.summary, personalidad: npc.personality, haciendoAhora: scheduleFor(npc, run.world)?.activity ?? 'fuera de su horario habitual' })),
-      ahora: temporalContext({ encounters: 0, notes: [], history: [] }, run.world).ahora, playerName: run.player.name
-    }, config).catch(() => null)
+  // NorthLife: una o dos veces al día de juego, el prompt social genera varias publicaciones (con hora, likes y respuestas).
+  const socialCall = typeof ai.socialPosts === 'function' && feedDue(run)
+    ? ai.socialPosts(socialContext(run, 'post'), config).catch(() => null)
     : Promise.resolve(null);
 
   // Devuelve la función que vuelca los resultados en la partida final.
-  return Promise.all([chatCall, feedCall]).then(([results, posts]) => (next) => {
+  return Promise.all([chatCall, socialCall]).then(([results, posts]) => (next) => {
     for (const item of pending) {
       const result = results?.find?.((entry) => entry?.npcId === item.npcId);
       if (worth.includes(item) && !Array.isArray(results)) continue; // la llamada falló: se reintenta en la próxima acción
@@ -413,14 +424,16 @@ function startBackground(run, config) {
       }
       next.chatSeen = { ...next.chatSeen, [item.npcId]: item.total };
     }
-    if (Array.isArray(posts)) {
-      const fresh = posts.filter((post) => contacts.some((npc) => npc.id === post.npcId)).slice(0, contacts.length)
-        .map((post) => ({ id: crypto.randomUUID(), author: npcs.get(post.npcId).name, npcId: post.npcId, text: post.text, time: timeKey(next.world) }));
-      next.social.posts = [...fresh, ...next.social.posts].slice(0, 80);
-      next.social.feedAt = minutesOfWorld(next.world);
-    }
-    return next;
+    return Array.isArray(posts) ? applyGeneratedPosts(next, posts, socialOptions()) : next;
   });
+}
+
+// Reacción de la red a lo que el jugador acaba de publicar o responder. Si el proveedor no la implementa, la publicación se queda sola.
+async function react(run, post, action, config) {
+  if (typeof ai.socialReply !== 'function') return run;
+  const now = minutesOfWorld(run.world);
+  const raw = await ai.socialReply(socialContext(run, 'reply', { publicacion: threadFor(post, now), accionDelJugador: action }), config);
+  return applyReactions(run, post.id, raw, socialOptions());
 }
 
 async function api(request, response, pathname) {
@@ -476,7 +489,7 @@ async function api(request, response, pathname) {
       return sendRun(201, run);
     });
   }
-  const match = pathname.match(/^\/api\/runs\/([0-9a-f-]{36})(?:\/(action|posts|talk|dev|contacts|chat|slot))?$/i);
+  const match = pathname.match(/^\/api\/runs\/([0-9a-f-]{36})(?:\/(action|posts|social|talk|dev|contacts|chat|slot))?$/i);
   if (!match) return sendJson(response, 404, { error: 'Ruta no encontrada.' });
   const [, id, operation] = match;
   if (request.method === 'DELETE' && !operation) {
@@ -555,13 +568,30 @@ async function api(request, response, pathname) {
       return sendRun(200, run);
     });
   }
+  // El jugador publica: la red reacciona en la misma petición (si la IA falla, no se publica nada).
   if (request.method === 'POST' && operation === 'posts') {
     const body = await readBody(request);
     return exclusive(id, async () => {
-      await requireConfig();
-      const run = addPost(await store.loadRun(id), body.text);
+      const config = await requireConfig();
+      const { run: published, post } = publishPlayerPost(await store.loadRun(id), body.text);
+      const run = await react(published, post, { tipo: 'publicacion', texto: post.text }, config);
       await save(run);
       return sendRun(200, run);
+    });
+  }
+  if (request.method === 'POST' && operation === 'social') {
+    const body = await readBody(request);
+    return exclusive(id, async () => {
+      if (body.op === 'like') { const run = toggleLike(await store.loadRun(id), String(body.postId ?? ''), body.replyId ? String(body.replyId) : null); await save(run); return sendRun(200, run); }
+      if (body.op === 'read') { const run = markNotificationsRead(await store.loadRun(id)); await save(run); return sendRun(200, run); }
+      if (body.op === 'reply') {
+        const config = await requireConfig();
+        const { run: published, post, reply, target } = publishPlayerReply(await store.loadRun(id), String(body.postId ?? ''), body.text, body.replyTo ? String(body.replyTo) : null);
+        const run = await react(published, post, { tipo: 'respuesta', texto: reply.text, aQuien: (target ?? post).handle }, config, reply.id);
+        await save(run);
+        return sendRun(200, run);
+      }
+      throw new Error('Operación social desconocida.');
     });
   }
   return sendJson(response, 405, { error: 'Método no permitido.' });

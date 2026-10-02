@@ -370,3 +370,49 @@ body:has(.game) { background:#05070d; overflow:hidden; }
 .dev-sheet .pe-foot > * { flex:1 1 0; min-width:0; padding:.4rem .3rem; font-size:.8rem; justify-content:center; }
 .dev-field .pm-modes input[type=checkbox] { width:18px; height:18px; padding:0; flex:none; }
 .dev-field .pm-modes label { cursor:pointer; }
+
+/* NorthLife: red social estilo línea de tiempo */
+.app-body:has(.xp-feed) { padding:0 0 1rem; gap:0; }
+.app-body:has(.xp-feed) .nl-tabs { padding:.6rem .8rem .5rem; }
+.xp-feed { display:grid; align-content:start; }
+.xp { display:grid; grid-template-columns:44px 1fr; gap:.7rem; padding:.85rem 1rem; border-bottom:1px solid #ffffff14; cursor:pointer; color:#eceaf3; }
+.xp.xp-full { cursor:default; background:#ffffff06; }
+.xp.xp-own { background:#f2d6a808; }
+.xp-reply { padding-left:1.4rem; background:transparent; }
+.xp-av { width:44px; height:44px; border-radius:50%; display:grid; place-items:center; overflow:hidden; flex:none; background:hsl(var(--h,40) 38% 34%); color:#fff; font:600 1.1rem Georgia,serif; }
+.xp-av img { width:100%; height:100%; object-fit:cover; object-position:top; }
+.xp-body { min-width:0; }
+.xp-head { display:flex; align-items:center; flex-wrap:wrap; gap:.25rem .35rem; font-size:.88rem; line-height:1.2; }
+.xp-head strong { color:#fff; overflow-wrap:anywhere; }
+.xp-handle,.xp-dot,.xp-head time,.xp-to { color:#8f93a8; }
+.xp-head time { white-space:nowrap; }
+.xp-check { width:15px; height:15px; color:#58a6ff; flex:none; }
+.xp-text { margin:.3rem 0 .15rem; line-height:1.45; font-size:.96rem; white-space:pre-wrap; overflow-wrap:anywhere; }
+.xp-to { margin:.15rem 0 0; font-size:.8rem; }
+.xp-link { color:#58a6ff; }
+.xp-actions { display:grid; grid-template-columns:repeat(3,1fr); margin:.1rem -.4rem -.3rem; color:#8f93a8; }
+.xp-actions button,.xp-act { display:inline-flex; align-items:center; gap:.4rem; min-height:40px; padding:0 .4rem; border:0; background:transparent; color:inherit; font:inherit; font-size:.82rem; cursor:pointer; }
+.xp-actions svg { width:19px; height:19px; flex:none; }
+.xp-actions button.liked { color:#f4527c; }
+.xp-actions button:hover { color:#eceaf3; }
+.xp-new { margin:0 auto; position:sticky; top:48px; z-index:1; min-height:38px; padding:0 1rem; border:0; border-radius:999px; background:#2f8fff; color:#fff; font:600 .85rem Inter,system-ui,sans-serif; box-shadow:0 6px 18px #0008; }
+.xp-fab { position:sticky; bottom:14px; justify-self:end; margin:.5rem 14px 0 0; width:54px; height:54px; border-radius:50%; border:0; background:#2f8fff; color:#fff; display:grid; place-items:center; box-shadow:0 8px 22px #000a; cursor:pointer; }
+.xp-fab svg { width:26px; height:26px; }
+.xp-compose { padding:.8rem 1rem; border-bottom:1px solid #ffffff14; display:grid; gap:.5rem; }
+.xp-compose textarea { width:100%; background:#ffffff0d; border:1px solid #ffffff1f; color:#eceaf3; border-radius:14px; padding:.7rem .8rem; font:inherit; resize:none; }
+.xp-compose-foot { display:flex; align-items:center; gap:.6rem; }
+.xp-compose-foot small { color:#8f93a8; }
+.xp-pending { flex:1; font-size:.78rem; color:#8f93a8; }
+.xp-compose-foot::after { content:none; }
+.app-body .xp-compose button.xp-send { margin-left:auto; min-width:96px; min-height:40px; padding:0 1rem; border-radius:999px; background:#2f8fff; color:#fff; font-weight:600; display:inline-flex; align-items:center; justify-content:center; }
+.xp-send svg { width:20px; height:20px; }
+.xp-replying { margin:0; font-size:.82rem; color:#8f93a8; }
+.xp-replying button { background:transparent !important; color:#8f93a8 !important; min-height:32px !important; width:32px; padding:0 !important; }
+.xp-empty { padding:1.2rem 1rem; }
+.xp-note { display:grid; grid-template-columns:44px 1fr; gap:.7rem; padding:.85rem 1rem; border:0; border-bottom:1px solid #ffffff14; background:transparent; color:#eceaf3; text-align:left; font:inherit; cursor:pointer; }
+.xp-note.unread { background:#2f8fff14; box-shadow:inset 3px 0 0 #2f8fff; }
+.xp-note-body { display:grid; gap:.2rem; min-width:0; font-size:.9rem; }
+.xp-note-body time { color:#8f93a8; }
+.xp-note-body q { color:#b9bccd; quotes:none; overflow-wrap:anywhere; }
+.app-badge { position:absolute; top:-4px; right:-4px; }
+.app-icon { position:relative; }

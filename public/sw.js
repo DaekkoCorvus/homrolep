@@ -1,5 +1,5 @@
-const CACHE = 'hom-rpg-v18';
-const ASSETS = ['/', '/styles.css', '/app.js', '/core.js', '/game.js', '/devtools.js', '/prompteditor.js', '/scenes.js', '/game.css', '/manifest.json', '/assets/V%C3%B3rtice%20liminal.html'];
+const CACHE = 'hom-rpg-v19';
+const ASSETS = ['/', '/styles.css', '/app.js', '/core.js', '/game.js', '/devtools.js', '/prompteditor.js', '/northlife.js', '/scenes.js', '/game.css', '/manifest.json', '/assets/V%C3%B3rtice%20liminal.html'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));

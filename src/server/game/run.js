@@ -27,7 +27,7 @@ export function createRun(input = {}) {
       locationId: 'apartment'
     },
     world: { day: 1, hour: 8, minute: 0, cityId: 'porta_magna' },
-    social: { posts: [] }, missions: [], relationships: {}, knowledge: [], eventLog: [], prologue: null
+    social: { posts: [], accounts: {}, notifications: [], generatedAt: null }, missions: [], relationships: {}, knowledge: [], eventLog: [], prologue: null
   };
   run.eventLog.push({ time: timeKey(run.world), type: 'run_started', data: { cityId: 'porta_magna' } });
   return run;
@@ -82,17 +82,6 @@ export function applyAction(run, action, worldData) {
   next.world = advanceTime(next.world, minutes);
   next.updatedAt = new Date().toISOString();
   next.eventLog.push({ time: timeKey(next.world), ...event });
-  return next;
-}
-
-export function addPost(run, text) {
-  if (run.encounter) throw Object.assign(new Error('Estás en plena conversación. Despídete antes de hacer otra cosa.'), { code: 'ENCOUNTER_ACTIVE' });
-  const clean = String(text ?? '').trim().slice(0, 280);
-  if (!clean) throw new Error('La publicación está vacía.');
-  const next = structuredClone(run);
-  next.social.posts.unshift({ id: randomUUID(), author: next.player.name, text: clean, time: timeKey(next.world) });
-  next.updatedAt = new Date().toISOString();
-  next.eventLog.push({ time: timeKey(next.world), type: 'social_post_created', data: { text: clean } });
   return next;
 }
 

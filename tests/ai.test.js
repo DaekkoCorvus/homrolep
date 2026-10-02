@@ -27,7 +27,7 @@ test('settings gate, generation, persistence, failures and concurrent requests w
   t.after(()=>rm(directory,{recursive:true,force:true}));
   const settings=createSettingsStore(directory);
   const runs=new Map();
-  let fail=false, badPrologue=false, release=null, block=false;
+  let fail=false, badPrologue=false, block=false; const releases=[];
   const calls=[];
   const ai=createNanoGPT(async(url, options)=>{
     calls.push({url,options});
@@ -40,7 +40,7 @@ test('settings gate, generation, persistence, failures and concurrent requests w
     assert.equal(body.stream,false);
     assert.ok(body.max_tokens>0);
     assert.ok(!options.body.includes('test-secret'));
-    if(block) await new Promise(resolve=>{release=resolve;});
+    if(block) await new Promise(resolve=>{releases.push(resolve);}); // la narración y la actualización de fondo del GM van en paralelo
     if(body.messages[0].content.includes('prólogo de 2 a 4 frases')) return completion(JSON.stringify({text:'La estación te recibe entre murmullos.',locationId:badPrologue?'unknown':'station'}));
     return completion('Una viajera levanta la mirada y responde a tu saludo.');
   });
@@ -85,15 +85,15 @@ test('settings gate, generation, persistence, failures and concurrent requests w
   fail=false;
   block=true;
   const pending=api(`/api/runs/${id}/action`,'POST',{text:'Saludo a una viajera.'});
-  while(!release) await new Promise(resolve=>setTimeout(resolve,5));
+  while(!releases.length) await new Promise(resolve=>setTimeout(resolve,5));
   assert.equal((await api(`/api/runs/${id}/action`,'POST',{type:'wait'})).status,409);
-  release(); block=false;
+  block=false; releases.splice(0).forEach((release)=>release());
   const acted=await pending;
   assert.equal(acted.body.world.minute,10);
   assert.match(acted.body.narrative.text,/viajera/);
   assert.equal(acted.body.player.money,created.body.player.money);
   assert.ok(!JSON.stringify(acted).includes('test-secret'));
-  const prompt=JSON.parse(calls.at(-1).options.body).messages.at(-1).content;
+  const prompt=calls.filter(({options})=>options.body).map(({options})=>JSON.parse(options.body).messages.at(-1).content).find((content)=>content.includes('Saludo a una viajera'));
   assert.match(prompt,/Mara/); assert.match(prompt,/La estación/);
   assert.ok(calls.every(({url})=>url.startsWith(NANOGPT_BASE_URL)));
   await api('/api/ai/settings','DELETE');

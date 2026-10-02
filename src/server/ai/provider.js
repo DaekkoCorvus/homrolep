@@ -1,5 +1,5 @@
 import { compose } from './composer.js';
-import { characterPlan, evaluationPlan, narrationPlan, chatsPlan, feedPlan } from './plans.js';
+import { characterPlan, evaluationPlan, narrationPlan, chatsPlan, socialPlan } from './plans.js';
 import { factoryPrompts } from './promptStore.js';
 export const NANOGPT_BASE_URL = 'https://api.nano-gpt.com/api/v1';
 
@@ -145,10 +145,16 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
       return Array.isArray(result?.results) ? result.results : [];
     },
 
-    // ---- SOCIAL: publicaciones de NorthLife de los contactos del jugador. ------------------------------------------------------------
-    async feedPosts(input, config) {
-      const result = parseJson(await this.ask(feedPlan(input), config, 1000), 'No se pudo generar el feed.');
-      return Array.isArray(result?.posts) ? result.posts.map((post) => ({ npcId:clean(post?.npcId, 41), text:clean(post?.text, 280) })).filter((post) => post.npcId && post.text) : [];
+    // ---- SOCIAL (NorthLife): el modelo propone; game/social.js valida y decide cuándo se ve. -----------------------------------------
+    // Varias publicaciones (con hora, likes y respuestas) en una sola respuesta.
+    async socialPosts(input, config) {
+      const result = parseJson(await this.ask(socialPlan({ ...input, mode:'post' }), config, 3000), 'No se pudo generar el feed.');
+      return Array.isArray(result?.posts) ? result.posts : [];
+    },
+    // Reacción de la red a una publicación o respuesta del jugador.
+    async socialReply(input, config) {
+      const result = parseJson(await this.ask(socialPlan({ ...input, mode:'reply' }), config, 1600), 'No se pudo generar la reacción de la red.');
+      return result && typeof result === 'object' ? result : {};
     },
 
     async narrate(before, after, worldData, config) {

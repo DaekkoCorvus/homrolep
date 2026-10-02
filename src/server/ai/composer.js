@@ -55,13 +55,15 @@ export const KINDS = {
   },
   social: {
     label: 'Social', short: 'Social',
-    description: 'Se envía en la red social: publicaciones de los personajes y, más adelante, sus respuestas.',
-    modes: [{ id: 'post', label: 'Publicaciones del feed' }, { id: 'reply', label: 'Respuestas (aún sin usar)' }],
+    description: 'Se envía en NorthLife: genera las publicaciones del feed (también de cuentas inventadas) y las reacciones a lo que publica o responde el jugador.',
+    modes: [{ id: 'post', label: 'Genera publicaciones del feed' }, { id: 'reply', label: 'Reacciona al jugador' }],
     macros: [['player', 'Nombre real del jugador'], ['time', 'Fecha y hora del juego'], ['mode', 'Tipo de llamada']],
     autos: {
-      world: { label: 'Momento', description: 'Fecha y hora del juego.', keys: ['ahora'], role: 'user' },
-      authors: { label: 'Quién escribe', description: 'Los personajes (solo contactos del jugador) con su personalidad y lo que están haciendo.', keys: ['personajes'], role: 'user' },
-      feed: { label: 'Feed reciente', description: 'Publicaciones o comentarios a los que se responde (para las respuestas futuras).', keys: ['publicacionesRecientes', 'publicacion', 'comentario'], role: 'user' },
+      world: { label: 'Momento y ciudad', description: 'Fecha y hora del juego, ciudad y lugares (color local para las publicaciones).', keys: ['ahora', 'dia', 'ciudad', 'lugares'], role: 'user' },
+      accounts: { label: 'Cuentas conocidas', description: 'Cuentas con la popularidad que fija el motor (p. ej. @RexNova) y los contactos del jugador con su personalidad y lo que hacen ahora. El modelo puede añadir cuentas nuevas.', keys: ['cuentas'], role: 'user' },
+      player: { label: 'Jugador en la red', description: 'Su usuario y su popularidad (baja al empezar: crece con su reputación).', keys: ['jugador'], role: 'user' },
+      feed: { label: 'Publicaciones recientes', description: 'Lo ya publicado, para no repetirse.', keys: ['recientes'], role: 'user' },
+      thread: { label: 'Hilo y acción del jugador', description: 'Solo al reaccionar: el hilo con sus respuestas y lo que acaba de publicar o responder el jugador.', keys: ['publicacion', 'accionDelJugador'], role: 'user' },
       task, format
     },
     tasks: SOCIAL_TASKS
@@ -86,7 +88,7 @@ const DEFAULT_ORDER = {
   character: ['main', 'engine', 'format', 'card', 'world', 'persona', 'relationship', 'commitments', 'contact', 'emotions', 'intent', 'history', 'task'],
   text: ['main', 'engine', 'format', 'card', 'world', 'persona', 'relationship', 'commitments', 'history', 'task'],
   gm: ['main', 'task', 'format', 'player', 'world', 'events', 'present', 'character', 'relationship', 'pending', 'history'],
-  social: ['main', 'task', 'format', 'world', 'authors', 'feed']
+  social: ['main', 'task', 'format', 'world', 'accounts', 'player', 'feed', 'thread']
 };
 const GM_TASK_ROLE = 'system';
 
@@ -97,7 +99,7 @@ export function defaultPreset(kind) {
     if (key === 'engine') return { id: 'engine', name: 'Reglas del motor', type: 'text', role: 'system', enabled: true, content: ENGINE_TEXT[kind]() };
     const auto = spec.autos[key];
     const role = key === 'format' ? 'system' : key === 'task' ? (kind === 'gm' || kind === 'social' ? GM_TASK_ROLE : 'user') : auto.role;
-    return { id: key, name: auto.label, type: 'auto', auto: key, role, enabled: key !== 'feed', };
+    return { id: key, name: auto.label, type: 'auto', auto: key, role, enabled: true };
   });
   return { version: 1, modules, tasks: structuredClone(spec.tasks), params: {} };
 }

@@ -5,7 +5,7 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { KINDS, kindNames, defaultPreset, normalizePreset, compose, expand, importSillyTavern } from '../src/server/ai/composer.js';
-import { characterPlan, evaluationPlan, feedPlan } from '../src/server/ai/plans.js';
+import { characterPlan, evaluationPlan, socialPlan } from '../src/server/ai/plans.js';
 import { createPromptStore } from '../src/server/ai/promptStore.js';
 import { createNanoGPT } from '../src/server/ai/provider.js';
 import { createAppServer } from '../src/server/index.js';
@@ -100,8 +100,8 @@ test('the GM prompt keeps the GM role separate and sees the real player name', (
   assert.match(joined, /no interpretas a ningún personaje/);
   assert.match(joined, /Devuelve solo JSON con esta forma/);
   assert.match(joined, /"conversacion"/);
-  const feed = compose('social', 'post', defaultPreset('social'), feedPlan({ authors: [{ npcId: 'luna_serp', nombre: 'Luna Serp' }], ahora: 'día 1' }));
-  assert.match(text(feed), /NorthLife/); assert.match(text(feed), /"posts"/); assert.match(text(feed), /"personajes"/);
+  const feed = compose('social', 'post', defaultPreset('social'), socialPlan({ mode: 'post', ahora: 'día 1', cuentas: [{ usuario: '@RexNova', popularidad: 99 }], jugador: { usuario: '@Mara', nombre: 'Mara', popularidad: 5 } }));
+  assert.match(text(feed), /NorthLife/); assert.match(text(feed), /"posts"/); assert.match(text(feed), /"cuentas"/); assert.match(text(feed), /RexNova/);
 });
 
 test('a SillyTavern preset imports as modules: text kept, markers mapped to game data, format and task appended', () => {

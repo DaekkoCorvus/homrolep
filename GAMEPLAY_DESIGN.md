@@ -153,6 +153,16 @@ Prueba de concepto con un solo NPC, **Luna Serp** (`data/canon/npcs/luna_serp.js
 - **Importar presets de SillyTavern.** Toma el último `prompt_order`, conserva módulos de texto (rol y estado), convierte los marcadores (`charDescription`, `personaDescription`, `chatHistory`, `scenario`/`worldInfoBefore`…) en datos del juego y añade lo que falte (reglas del motor, relación, pendientes…, formato e instrucción del turno). Se carga como borrador; nada cambia hasta guardar.
 - Pendiente: lorebook de conocimientos (será otro módulo automático), reordenar arrastrando, perfiles de prompt intercambiables.
 
+### NorthLife como red social (actualización)
+- **Es un extra del mundo, no solo de la historia.** El feed tiene publicaciones de cuentas que no son canon (vecinos, bromistas, medios locales…) junto a las canon (`data/canon/social/accounts.json`: @RexNova, dueño de la plataforma, y @NorthLife, con la popularidad que fija el canon) y los contactos del jugador. Hay humor, quejas, curiosidades y pequeños hilos; no todo gira en torno al jugador.
+- **El prompt Social genera varias publicaciones en una sola respuesta**, cada una con `usuario`, `nombre`, `hora` (+ `dia`), `texto`, `likes`, `reposts` y `respuestas` (con su propia hora). El motor (`src/server/game/social.js`) lo valida y le da forma: cuentas nuevas permitidas (popularidad máx. 90, sin verificación), nunca suplanta al jugador ni a personajes que el jugador aún no conoce, textos de hasta 280 caracteres, los likes se limitan por la **popularidad de la cuenta** (que decide el motor, no el modelo) y las respuestas siempre llegan después de la publicación.
+- **La hora manda.** La hora que indica el modelo es cuando se publica: se guardan programadas y solo se ven cuando el reloj del mundo la alcanza (las de «ahora» o anteriores salen ya). Los likes crecen en ~3 horas hasta su valor final.
+- **Cuándo se activa.** Sin que el jugador haga nada, 1–2 veces por día de juego (como mucho cada 10 h de juego), aprovechando la llamada de fondo de una acción del jugador, en paralelo con la narración. Si el jugador publica o responde a un hilo o comentario, se activa en la misma petición (modo `reply`): la red reacciona con respuestas que llegan minutos u horas después; un mensaje trivial de un desconocido puede no recibir nada. Si la IA falla, no se publica nada.
+- **Avisos.** Cuando alguien responde a tu publicación o a un comentario tuyo se crea un aviso (pestaña «Avisos» y contador en el icono del teléfono); aparece a la hora de esa respuesta.
+- **Popularidad del jugador.** Empieza como un desconocido (5) y crece con su reputación (tope 60): limita los likes de sus publicaciones.
+- **Interfaz** (`src/client/northlife.js`): línea de tiempo tipo red social (avatar o retrato, nombre, insignia de verificado, @usuario, hora relativa, comentarios/reposts/likes), «N publicaciones nuevas ↑», hilos con respuestas y «Respondiendo a @…», botón + para publicar, me gusta sin coste de IA. Herramientas de desarrollo: `/feed` o «Generar feed ahora».
+- Pendiente: sucesos públicos del mundo (Director) como tema de conversación, menciones y seguidores, imágenes en publicaciones.
+
 ## 10. Preguntas abiertas
 
 - Cuántos NPC y qué personalidades para la primera rebanada.

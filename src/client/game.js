@@ -1,6 +1,7 @@
 import { state, app, request, notify, activeSignal, timeText, clockText, period, place, escapeHtml, isDev } from './core.js';
 import { initDevtools, runCommand, openPanel } from './devtools.js';
 import { sceneMarkup, applySky, SCENE_META } from './scenes.js';
+import { feedView, notificationsView, bindFeed, enterFeed, markRead } from './northlife.js';
 
 const ui = { phoneOpen:false, phoneView:'home', busy:false, sceneKey:null, hooks:{} };
 const PHONE_APPS = [
@@ -371,7 +372,7 @@ function renderPhone() {
   const view = ui.phoneView; const run = state.run;
   if (view === 'home') {
     screen.className = 'phone-screen home';
-    screen.innerHTML = `<div class="phone-clock"><strong>${clockText(run.world)}</strong><span>Día ${run.world.day} · ${period(run.world.hour)}</span></div><div class="app-grid">${PHONE_APPS.map(([id, label, path]) => `<button type="button" data-app="${id}"><span class="app-icon">${icon(path)}</span>${label}</button>`).join('')}${isDev() ? `<button type="button" data-app="gm"><span class="app-icon">${icon('<path d="M12 3l9 5-9 5-9-5ZM3 13l9 5 9-5"/>')}</span>Notas GM</button>` : ''}</div>`;
+    screen.innerHTML = `<div class="phone-clock"><strong>${clockText(run.world)}</strong><span>Día ${run.world.day} · ${period(run.world.hour)}</span></div><div class="app-grid">${PHONE_APPS.map(([id, label, path]) => `<button type="button" data-app="${id}"><span class="app-icon">${icon(path)}${id === 'northlife' && run.social?.unread ? `<i class="nl-badge app-badge">${run.social.unread}</i>` : ''}</span>${label}</button>`).join('')}${isDev() ? `<button type="button" data-app="gm"><span class="app-icon">${icon('<path d="M12 3l9 5-9 5-9-5ZM3 13l9 5 9-5"/>')}</span>Notas GM</button>` : ''}</div>`;
     screen.querySelectorAll('[data-app]').forEach((button) => button.onclick = () => openApp(button.dataset.app));
     return;
   }
@@ -379,7 +380,7 @@ function renderPhone() {
   const bodies = { profile:profileApp, map:mapApp, northlife:northlifeApp, missions:() => '<p class="empty">No tienes misiones activas. Las oportunidades llegarán cuando el mundo tenga algo que ofrecerte.</p>', journal:journalApp, gm:gmApp };
   screen.className = 'phone-screen app';
   screen.innerHTML = `<div class="app-bar"><button type="button" data-back aria-label="Volver">${icon('<path d="M15 5l-7 7 7 7"/>')}</button><h2>${titles[view]}</h2></div><div class="app-body">${bodies[view]()}</div>`;
-  screen.querySelector('[data-back]').onclick = () => { if (view === 'northlife' && ui.chatWith) ui.chatWith = null; else ui.phoneView = 'home'; renderPhone(); };
+  screen.querySelector('[data-back]').onclick = () => { if (view === 'northlife' && ui.chatWith) ui.chatWith = null; else if (view === 'northlife' && ui.thread) { ui.thread = null; ui.replyTo = null; } else ui.phoneView = 'home'; renderPhone(); };
   if (view === 'northlife') bindNorthlife(screen);
   bindTravel(screen);
   screen.querySelectorAll('[data-copy]').forEach((button) => button.onclick = async () => { try { await navigator.clipboard.writeText(button.dataset.copy); notify('Copiado.'); } catch { notify(button.dataset.copy); } });
@@ -392,17 +393,11 @@ function renderPhone() {
       renderPhone(); notify('Contacto agregado.');
     } catch (error) { failure.textContent = error.message; }
   };
-  const post = screen.querySelector('#post-form');
-  if (post) post.onsubmit = async (event) => {
-    event.preventDefault();
-    try { state.run = await request(`/api/runs/${state.run.id}/posts`, { method:'POST', body:JSON.stringify({ text:new FormData(post).get('text') }) }); renderPhone(); notify('Publicación guardada.'); }
-    catch (error) { notify(error.message); }
-  };
 }
 
 function openApp(id) {
   if (id === 'settings') { togglePhone(false); ui.hooks.openSettings?.(); return; }
-  ui.phoneView = id; if (id === 'northlife') { ui.nlTab ??= 'feed'; ui.chatWith = null; } renderPhone();
+  ui.phoneView = id; if (id === 'northlife') { ui.nlTab ??= 'feed'; ui.chatWith = null; ui.thread = null; ui.composing = false; ui.replyTo = null; ui.draft = ''; ui.socialError = ''; enterFeed(ui); } renderPhone();
 }
 
 function profileApp() {
@@ -426,15 +421,23 @@ const hourOf = (key) => escapeHtml(String(key ?? '').replace(/^DAY_(\d+)_/, 'Dí
 
 function northlifeApp() {
   const pending = (state.run.commitments ?? []).filter((item) => item.status === 'active').length;
-  const tabs = [['feed', 'Feed'], ['chats', 'Chats'], ['agenda', 'Agenda']];
-  const body = ui.nlTab === 'chats' ? (ui.chatWith ? threadView() : chatsTab()) : ui.nlTab === 'agenda' ? agendaTab() : feedTab();
-  return `<nav class="nl-tabs">${tabs.map(([id, label]) => `<button type="button" data-nl="${id}" class="${ui.nlTab === id ? 'active' : ''}">${label}${id === 'agenda' && pending ? ` <i class="nl-badge">${pending}</i>` : ''}</button>`).join('')}</nav>${body}`;
+  const unread = state.run.social?.unread ?? 0;
+  const tabs = [['feed', 'Feed'], ['notifs', 'Avisos'], ['chats', 'Chats'], ['agenda', 'Agenda']];
+  const badge = (id) => (id === 'agenda' && pending ? ` <i class="nl-badge">${pending}</i>` : id === 'notifs' && unread ? ` <i class="nl-badge">${unread}</i>` : '');
+  const body = ui.nlTab === 'chats' ? (ui.chatWith ? threadView() : chatsTab()) : ui.nlTab === 'agenda' ? agendaTab() : ui.nlTab === 'notifs' ? notificationsView() : feedView(nlContext());
+  return `<nav class="nl-tabs">${tabs.map(([id, label]) => `<button type="button" data-nl="${id}" class="${ui.nlTab === id ? 'active' : ''}">${label}${badge(id)}</button>`).join('')}</nav>${body}`;
 }
 
-function feedTab() {
-  const posts = state.run.social.posts.map((post) => `<article class="post"><header><span class="avatar">${initial(post.author)}</span><strong>${escapeHtml(post.author)}</strong><small>${hourOf(post.time)}</small></header><p>${escapeHtml(post.text)}</p></article>`).join('');
-  return `<form id="post-form"><textarea name="text" maxlength="280" rows="2" placeholder="¿Qué está pasando?" required></textarea><button type="submit">Publicar</button></form>${posts || '<p class="empty">El feed está en silencio. Agrega contactos para ver lo que publican.</p>'}`;
-}
+// Lo que NorthLife necesita de la pantalla del teléfono.
+const nlContext = () => ({
+  ui, stopIcon: icon(STOP_ICON), reload: reloadRun, refresh: () => updateGame(),
+  rerender: (keepScroll = false) => {
+    const top = app.querySelector('.phone-screen .app-body')?.scrollTop;
+    renderPhone();
+    const body = app.querySelector('.phone-screen .app-body');
+    if (keepScroll && body && top != null) body.scrollTop = top;
+  }
+});
 
 function chatsTab() {
   const contacts = state.run.contacts ?? [];
@@ -464,7 +467,11 @@ function agendaTab() {
 }
 
 function bindNorthlife(screen) {
-  screen.querySelectorAll('[data-nl]').forEach((button) => button.onclick = () => { ui.nlTab = button.dataset.nl; ui.chatWith = null; renderPhone(); });
+  screen.querySelectorAll('[data-nl]').forEach((button) => button.onclick = () => {
+    ui.nlTab = button.dataset.nl; ui.chatWith = null; if (ui.nlTab !== 'feed') ui.thread = null; renderPhone();
+    if (ui.nlTab === 'notifs') markRead().then(() => updateGame());
+  });
+  bindFeed(screen, nlContext());
   screen.querySelectorAll('[data-chat]').forEach((button) => button.onclick = () => { ui.chatWith = button.dataset.chat; renderPhone(); });
   const thread = screen.querySelector('.thread'); if (thread) thread.scrollTop = thread.scrollHeight;
   const form = screen.querySelector('#chat-form'); if (!form) return;
@@ -496,7 +503,8 @@ function eventText(event) {
   if (event.type === 'time_waited') return `Esperaste ${event.data.minutes} minutos.`;
   if (event.type === 'slept') return 'Dormiste ocho horas.';
   if (event.type === 'worked') return `Trabajaste y ganaste $${event.data.earned}.`;
-  if (event.type === 'social_post_created') return 'Publicaste en la red social.';
+  if (event.type === 'social_post_created') return 'Publicaste en NorthLife.';
+  if (event.type === 'social_reply_created') return 'Respondiste en NorthLife.';
   if (event.type === 'commitment_made') return `Quedaste en algo con ${escapeHtml(npcName(event.data.npcId))}: ${escapeHtml(event.data.text)}`;
   if (event.type === 'commitment_kept') return `Cumpliste: ${escapeHtml(event.data.text)}`;
   if (event.type === 'commitment_broken') return `No cumpliste: ${escapeHtml(event.data.text)}`;

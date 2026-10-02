@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRun, setPrologue, applyAction, addPost } from '../src/server/game/run.js';
+import { createRun, setPrologue, applyAction } from '../src/server/game/run.js';
+import { publishPlayerPost } from '../src/server/game/social.js';
 
 const world = { locations: [
   { id:'apartment', travelMinutes:0 },
@@ -40,11 +41,12 @@ test('travel updates location, time and semantic event log', () => {
 });
 
 test('social posts persist in state and create an event', () => {
-  const run = addPost(createRun(character), 'Primera mañana.');
+  const { run, post } = publishPlayerPost(createRun(character), 'Primera mañana.');
   assert.equal(run.social.posts[0].text, 'Primera mañana.');
+  assert.equal(post.own, true);
   assert.equal(run.eventLog.at(-1).type, 'social_post_created');
   const talking = { ...run, encounter:{ npcId:'luna_serp' } };
-  assert.throws(() => addPost(talking, 'Interrumpo la charla.'), /conversación/);
+  assert.throws(() => publishPlayerPost(talking, 'Interrumpo la charla.'), /conversación/);
 });
 
 test('a new character cannot use the work shortcut before finding a job', () => {

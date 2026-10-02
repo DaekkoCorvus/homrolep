@@ -132,7 +132,11 @@ test('API: closing registers confirmed agreements; chats and the feed are proces
     }),
     // UNA llamada por lote de chats, solo cuando el jugador actúa; nunca por mensaje.
     extractFromChats: async ({ chats }) => { calls.chats++; calls.chatBatch.push(chats.map((item) => item.npcId)); return chats.map((item) => ({ npcId: item.npcId, agreements: [meeting({ text: 'Café el sábado', when: { weekday: 5, hour: 17 }, playerQuote: 'nos vemos', npcQuote: 'nos vemos mañana' })] })); },
-    feedPosts: async ({ authors }) => { calls.feed++; return authors.map((author) => ({ npcId: author.npcId, text: 'Pan recién hecho ☕' })).concat([{ npcId: 'desconocido', text: 'no debería salir' }]); },
+    socialPosts: async () => { calls.feed++; return [
+      { usuario: '@LunaSerp', hora: '09:10', texto: 'Pan recién hecho ☕', likes: 12 },
+      { usuario: '@vecino99', nombre: 'Vecino', hora: '09:20', texto: 'Otra vez el metro con retraso', likes: 3 },
+      { usuario: '@vecino99', nombre: 'Vecino', hora: '22:00', texto: 'Buenas noches, ciudad', likes: 1 }
+    ]; },
     narrate: async () => 'Nada.', narrateFreeform: async (before, run, worldData, config, present) => ({ text: 'Te acercas a la barra.', talkTo: talkTo && present.some((person) => person.id === talkTo) ? talkTo : null }),
     prologue: async () => ({ text: 'x', locationId: 'station' })
   };
@@ -186,7 +190,7 @@ test('API: closing registers confirmed agreements; chats and the feed are proces
   const chatted2 = await call(`/api/runs/${id}/chat`, { npcId: 'luna_serp', text: 'Genial, mañana te cuento más' });
   assert.equal(chatted2.status, 200);
   assert.equal(calls.chats, 0, 'ningún mensaje de chat llama al GM por su cuenta');
-  assert.equal(calls.feed, 0, 'abrir el chat tampoco genera publicaciones');
+  assert.equal(calls.feed, 1, 'el feed se generó con la primera acción; escribir en el chat no lo repite');
   assert.ok(!chatted2.body.commitments.some((item) => item.text === 'Café el sábado'), 'aún no se ha procesado');
 
   // el GM procesa los chats pendientes y publica el feed de fondo cuando el jugador actúa: un solo lote
@@ -195,10 +199,10 @@ test('API: closing registers confirmed agreements; chats and the feed are proces
   assert.equal(calls.chats, 1, 'una única llamada para todos los chats pendientes');
   assert.deepEqual(calls.chatBatch[0], ['luna_serp']);
   assert.ok(acted.body.commitments.some((item) => item.text === 'Café el sábado'), 'el chat también registra acuerdos confirmados');
-  assert.deepEqual(acted.body.social.posts.map((post) => post.author), ['Luna Serp'], 'solo contactos');
+  assert.deepEqual(acted.body.social.posts.map((post) => post.handle), ['@vecino99'], 'Luna no era contacto cuando se generó (su cuenta está reservada) y la de las 22:00 aún no se publica');
   const calm = await call(`/api/runs/${id}/action`, { type: 'wait', minutes: 30 });
   assert.equal(calls.chats, 1, 'lo ya procesado no se vuelve a enviar');
-  assert.equal(calls.feed, 1, 'el feed no se regenera antes de 3 horas de juego');
+  assert.equal(calls.feed, 1, 'el feed no se regenera antes de 10 horas de juego');
   assert.equal(calm.body.social.posts.length, 1);
 
   // sin datos relevantes en el chat, ni siquiera hay llamada
