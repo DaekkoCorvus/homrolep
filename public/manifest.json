@@ -1,0 +1,9 @@
+{
+  "name": "Heroes of Misery RPG",
+  "short_name": "HOM RPG",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0d12",
+  "theme_color": "#171b24",
+  "icons": []
+}

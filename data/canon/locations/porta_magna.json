@@ -1,0 +1,12 @@
+{
+  "id": "porta_magna",
+  "name": "Porta Magna",
+  "status": "development-placeholder",
+  "locations": [
+    {"id":"apartment","name":"Apartamento","district":"Central","tags":["home","indoor"],"access":"public","hours":null,"travelMinutes":0,"description":"Tu pequeño espacio personal y punto de partida."},
+    {"id":"cafe","name":"Luna's Coffee","district":"Central","tags":["social","food"],"access":"public","hours":{"open":6,"close":22},"travelMinutes":20,"description":"Una cafetería pequeña y acogedora, con olor a pan y café recién hecho, donde la ciudad intercambia rumores."},
+    {"id":"park","name":"Parque","district":"Central","tags":["outdoor","quiet"],"access":"public","hours":null,"travelMinutes":15,"description":"Un respiro verde entre edificios grises."},
+    {"id":"store","name":"Tienda","district":"Central","tags":["shopping","indoor"],"access":"public","hours":{"open":8,"close":21},"travelMinutes":10,"description":"Productos básicos y conversaciones breves."},
+    {"id":"station","name":"Estación Porta Magna","district":"Transit","tags":["transport","busy"],"access":"public","hours":null,"travelMinutes":25,"description":"Un andén luminoso bajo la ciudad, lleno de viajeros, anuncios y nuevos comienzos."}
+  ]
+}

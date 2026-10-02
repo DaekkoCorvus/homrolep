@@ -7,7 +7,7 @@
 - Never hardcode secrets or API keys into frontend code.
 - Do not place canonical lore directly inside game-engine logic.
 - Prefer simple, maintainable systems over premature complexity.
-- The game must remain usable without AI features enabled.
+- New Runs and game actions require a verified NanoGPT connection. Settings and existing saves remain accessible without it; failed AI calls must never advance or overwrite a Run.
 
 ## Architecture
 - Canon/lore data belongs under `/data/canon`.

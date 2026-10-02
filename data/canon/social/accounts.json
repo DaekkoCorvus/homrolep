@@ -1,0 +1,6 @@
+{
+  "accounts": [
+    { "handle": "@RexNova", "name": "Rex Nova", "verified": true, "popularity": 99, "bio": "Fundador de Northfortress. Dueño de NorthLife. Patrocinador de la Organización de Héroes.", "avatar": "/assets/social/accounts/rexnova.svg" },
+    { "handle": "@NorthLife", "name": "NorthLife", "verified": true, "popularity": 97, "bio": "Cuenta oficial de la red social de Northfortress.", "avatar": "/assets/social/accounts/northlife.svg" }
+  ]
+}
