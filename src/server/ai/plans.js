@@ -85,10 +85,10 @@ export function chatsPlan({ chats, locations = [], ahora, playerName = '' }) {
 // SOCIAL (NorthLife): genera publicaciones del feed (mode 'post') o reacciona a lo que hizo el jugador (mode 'reply').
 // `input` lo prepara game/social.js → socialInput().
 export function socialPlan(input) {
-  const { mode, ahora, dia, ciudad, lugares, cuentas, recientes, jugador, publicacion, accionDelJugador } = input;
+  const { mode, ahora, dia, ciudad, lugares, cuentas, recientes, jugador, publicacion, accionDelJugador, respuestasEsperadas } = input;
   return {
     kind: 'social', mode, format: SOCIAL_FORMATS[mode],
     macros: { player: jugador?.nombre ?? '', time: ahora },
-    data: { ahora, dia, ciudad, lugares, cuentas, jugador, recientes, publicacion, accionDelJugador }
+    data: { ahora, dia, ciudad, lugares, cuentas, jugador, recientes, publicacion, accionDelJugador, respuestasEsperadas }
   };
 }

@@ -63,7 +63,7 @@ export const KINDS = {
       accounts: { label: 'Cuentas conocidas', description: 'Cuentas con la popularidad que fija el motor (p. ej. @RexNova) y los contactos del jugador con su personalidad y lo que hacen ahora. El modelo puede añadir cuentas nuevas.', keys: ['cuentas'], role: 'user' },
       player: { label: 'Jugador en la red', description: 'Su usuario y su popularidad (baja al empezar: crece con su reputación).', keys: ['jugador'], role: 'user' },
       feed: { label: 'Publicaciones recientes', description: 'Lo ya publicado, para no repetirse.', keys: ['recientes'], role: 'user' },
-      thread: { label: 'Hilo y acción del jugador', description: 'Solo al reaccionar: el hilo con sus respuestas y lo que acaba de publicar o responder el jugador.', keys: ['publicacion', 'accionDelJugador'], role: 'user' },
+      thread: { label: 'Hilo y acción del jugador', description: 'Solo al reaccionar: el hilo con sus respuestas y lo que acaba de publicar o responder el jugador.', keys: ['publicacion', 'accionDelJugador', 'respuestasEsperadas'], role: 'user' },
       task, format
     },
     tasks: SOCIAL_TASKS

@@ -12,7 +12,7 @@ import { createSettingsStore } from './ai/settings.js';
 import { createPromptStore } from './ai/promptStore.js';
 import { KINDS, kindNames, defaultPreset, normalizePreset, compose, importSillyTavern } from './ai/composer.js';
 import { characterPlan, evaluationPlan, narrationPlan, chatsPlan, socialPlan } from './ai/plans.js';
-import { feedDue, applyGeneratedPosts, applyReactions, publishPlayerPost, publishPlayerReply, toggleLike, markNotificationsRead, socialView, socialInput, threadFor, migrateSocial } from './game/social.js';
+import { feedDue, applyGeneratedPosts, applyReactions, publishPlayerPost, publishPlayerReply, toggleLike, toggleRepost, saveProfile, profileMedia, markNotificationsRead, socialView, socialInput, threadFor, migrateSocial, expectedReplies, playerPopularity, keyOfMinutes, REFRESH_GAP } from './game/social.js';
 import { saveRun, loadRun, listRuns, deleteRun } from './saves/store.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -222,7 +222,7 @@ async function previewPlan(kind, mode, run, npcId) {
   if (mode === 'reply') {
     const social = migrateSocial(run.social, run.player);
     const post = social.posts.find((item) => item.minutes <= minutesOfWorld(run.world)) ?? { id: 'ejemplo', handle: '@ejemplo', text: '(aquí irá la publicación)', time: '', replies: [], minutes: 0 };
-    return socialPlan(socialContext(run, 'reply', { publicacion: threadFor(post, minutesOfWorld(run.world)), accionDelJugador: { tipo: 'respuesta', texto: '(aquí irá lo que escriba el jugador)', aQuien: post.handle } }));
+    return socialPlan(socialContext(run, 'reply', { publicacion: threadFor(post, minutesOfWorld(run.world)), accionDelJugador: { tipo: 'publicacion', texto: '(aquí irá lo que escriba el jugador)', hora: keyOfMinutes(minutesOfWorld(run.world)).slice(-5) }, respuestasEsperadas: expectedReplies(playerPopularity(run.player)) }));
   }
   return socialPlan(socialContext(run, 'post'));
 }
@@ -428,12 +428,19 @@ function startBackground(run, config) {
   });
 }
 
-// Reacción de la red a lo que el jugador acaba de publicar o responder. Si el proveedor no la implementa, la publicación se queda sola.
-async function react(run, post, action, config) {
+// Reacción de la red a lo que el jugador acaba de publicar o responder (con `expected` respuestas mínimas y máximas). Si hace
+// más de un par de horas de juego que no se genera el feed, se renueva en la misma petición y en paralelo: no suma espera.
+// Si el proveedor no implementa el prompt social, la publicación se queda sola. Si la IA falla, no se guarda nada.
+async function react(run, post, action, config, since, expected) {
   if (typeof ai.socialReply !== 'function') return run;
   const now = minutesOfWorld(run.world);
-  const raw = await ai.socialReply(socialContext(run, 'reply', { publicacion: threadFor(post, now), accionDelJugador: action }), config);
-  return applyReactions(run, post.id, raw, socialOptions());
+  const refresh = typeof ai.socialPosts === 'function' && feedDue(run, REFRESH_GAP);
+  const [raw, feed] = await Promise.all([
+    ai.socialReply(socialContext(run, 'reply', { publicacion: threadFor(post, now), accionDelJugador: { ...action, hora: keyOfMinutes(since).slice(-5) }, respuestasEsperadas: expected }), config),
+    refresh ? ai.socialPosts(socialContext(run, 'post'), config).catch(() => null) : null
+  ]);
+  const base = Array.isArray(feed) ? applyGeneratedPosts(run, feed, socialOptions()) : run;
+  return applyReactions(base, post.id, raw, socialOptions(), since);
 }
 
 async function api(request, response, pathname) {
@@ -488,6 +495,13 @@ async function api(request, response, pathname) {
       await save(run);
       return sendRun(201, run);
     });
+  }
+  const media = pathname.match(/^\/api\/runs\/([0-9a-f-]{36})\/media\/(avatar|banner)$/i);
+  if (media && request.method === 'GET') {
+    const file = profileMedia(await store.loadRun(media[1]), media[2]);
+    if (!file) return sendJson(response, 404, { error: 'Sin imagen.' });
+    response.writeHead(200, { 'content-type': file.mime, 'cache-control': 'private, max-age=31536000, immutable' });
+    return response.end(file.buffer);
   }
   const match = pathname.match(/^\/api\/runs\/([0-9a-f-]{36})(?:\/(action|posts|social|talk|dev|contacts|chat|slot))?$/i);
   if (!match) return sendJson(response, 404, { error: 'Ruta no encontrada.' });
@@ -574,20 +588,22 @@ async function api(request, response, pathname) {
     return exclusive(id, async () => {
       const config = await requireConfig();
       const { run: published, post } = publishPlayerPost(await store.loadRun(id), body.text);
-      const run = await react(published, post, { tipo: 'publicacion', texto: post.text }, config);
+      const run = await react(published, post, { tipo: 'publicacion', texto: post.text }, config, post.minutes, expectedReplies(playerPopularity(published.player)));
       await save(run);
       return sendRun(200, run);
     });
   }
   if (request.method === 'POST' && operation === 'social') {
-    const body = await readBody(request);
+    const body = await readBody(request, 1_200_000);
     return exclusive(id, async () => {
+      if (body.op === 'profile') { const run = saveProfile(await store.loadRun(id), body, socialOptions()); await save(run); return sendRun(200, run); }
+      if (body.op === 'repost') { const run = toggleRepost(await store.loadRun(id), String(body.postId ?? '')); await save(run); return sendRun(200, run); }
       if (body.op === 'like') { const run = toggleLike(await store.loadRun(id), String(body.postId ?? ''), body.replyId ? String(body.replyId) : null); await save(run); return sendRun(200, run); }
       if (body.op === 'read') { const run = markNotificationsRead(await store.loadRun(id)); await save(run); return sendRun(200, run); }
       if (body.op === 'reply') {
         const config = await requireConfig();
         const { run: published, post, reply, target } = publishPlayerReply(await store.loadRun(id), String(body.postId ?? ''), body.text, body.replyTo ? String(body.replyTo) : null);
-        const run = await react(published, post, { tipo: 'respuesta', texto: reply.text, aQuien: (target ?? post).handle }, config, reply.id);
+        const run = await react(published, post, { tipo: 'respuesta', texto: reply.text, aQuien: (target ?? post).handle }, config, reply.minutes, { min: 1, max: 3 });
         await save(run);
         return sendRun(200, run);
       }

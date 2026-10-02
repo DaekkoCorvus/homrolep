@@ -416,3 +416,53 @@ body:has(.game) { background:#05070d; overflow:hidden; }
 .xp-note-body q { color:#b9bccd; quotes:none; overflow-wrap:anywhere; }
 .app-badge { position:absolute; top:-4px; right:-4px; }
 .app-icon { position:relative; }
+
+/* Notificaciones: círculo rojo con el número */
+.phone-badge { top:5px; right:5px; width:auto; min-width:19px; height:19px; padding:0 5px; border-radius:10px; background:#e5383b; color:#fff; box-shadow:0 0 0 2px #0b0d17; font:700 .68rem/19px Inter,system-ui,sans-serif; font-style:normal; text-align:center; }
+.nl-badge { background:#e5383b; color:#fff; }
+.nl-badge.app-badge { top:-6px; right:-8px; box-shadow:0 0 0 2px #1d2140; }
+.nl-tabs { overflow-x:auto; scrollbar-width:none; }
+.nl-tabs::-webkit-scrollbar { display:none; }
+.nl-tabs button { flex:1 0 auto; padding:.4rem .7rem; white-space:nowrap; }
+
+/* NorthLife: cuenta, perfil y compartir */
+.app-bar { position:relative; }
+.nl-me { margin-left:auto; flex:none; width:40px; height:40px; padding:0; border:0; border-radius:50%; background:transparent; cursor:pointer; display:grid; place-items:center; }
+.nl-me .xp-av { width:34px; height:34px; font-size:.95rem; }
+.xp-av-lg { width:76px !important; height:76px !important; font-size:1.9rem !important; border:3px solid #0f1220; }
+.xp-kicker { display:flex; align-items:center; gap:.35rem; margin:0 0 .2rem; font-size:.78rem; color:#8f93a8; }
+.xp-kicker svg { width:14px; height:14px; }
+.xp-actions button.shared { color:#3ddc97; }
+.xp-banner { height:110px; background:linear-gradient(135deg,#2b3a67,#6a3f5a); background-size:cover; background-position:center; }
+.xp-banner-edit { position:relative; display:flex; align-items:flex-end; gap:.5rem; padding:.6rem; border-radius:14px; height:96px; }
+.xp-banner-edit button { min-height:36px; padding:0 .8rem; border:0; border-radius:999px; background:#000a; color:#fff; font:600 .8rem Inter,system-ui,sans-serif; display:inline-flex; align-items:center; gap:.4rem; cursor:pointer; }
+.xp-banner-edit svg,.xp-pfp-pick svg { width:18px; height:18px; }
+.xp-pf-top { display:flex; justify-content:space-between; align-items:flex-end; padding:0 1rem; margin-top:-38px; }
+.xp-edit { min-height:38px; padding:0 1rem; border-radius:999px; border:1px solid #ffffff40; background:transparent; color:#eceaf3; font:600 .85rem Inter,system-ui,sans-serif; cursor:pointer; }
+.xp-pf-info { padding:.5rem 1rem 1rem; }
+.xp-pf-info h2 { margin:.2rem 0 0; font:600 1.3rem Georgia,serif; color:#fff; }
+.xp-bio { margin:.5rem 0; line-height:1.45; white-space:pre-wrap; overflow-wrap:anywhere; }
+.xp-muted { color:#8f93a8; }
+.xp-stats { margin:.4rem 0 0; color:#8f93a8; font-size:.85rem; } .xp-stats b { color:#fff; }
+.xp-ptabs { display:flex; border-bottom:1px solid #ffffff14; position:sticky; top:48px; z-index:1; background:#0f1220; }
+.xp-ptabs button { flex:1; min-height:46px; border:0; border-bottom:3px solid transparent; background:transparent; color:#8f93a8; font:600 .88rem Inter,system-ui,sans-serif; cursor:pointer; }
+.xp-ptabs button.active { color:#fff; border-bottom-color:#2f8fff; }
+.xp-setup { display:grid; gap:.9rem; padding:1.2rem 1rem; }
+.xp-setup h2 { margin:0; font:600 1.35rem Georgia,serif; color:#fff; }
+.xp-lead { margin:0; color:#b9bccd; line-height:1.45; }
+.xp-pfp-pick { display:flex; align-items:center; gap:1rem; }
+.xp-pfp-pick > div { display:grid; gap:.3rem; justify-items:start; }
+.app-body .xp-setup button { min-height:42px; padding:0 1rem; border-radius:999px; border:1px solid #ffffff3a; background:transparent; color:#eceaf3; font:600 .85rem Inter,system-ui,sans-serif; display:inline-flex; align-items:center; gap:.4rem; cursor:pointer; }
+.app-body .xp-setup button.xp-link-btn { border:0; min-height:32px; padding:0; color:#58a6ff; font-weight:500; }
+.app-body .xp-setup button.xp-send { background:#2f8fff; border-color:#2f8fff; color:#fff; min-width:130px; justify-content:center; }
+.xp-setup-actions { display:flex; justify-content:flex-end; gap:.6rem; }
+.xp-field { display:grid; gap:.3rem; }
+.xp-field > span { font-size:.82rem; color:#b9bccd; } .xp-field em { color:#8f93a8; font-style:normal; }
+.xp-field small { color:#8f93a8; }
+.xp-field textarea,.xp-handle-input { background:#ffffff0d; border:1px solid #ffffff1f; color:#eceaf3; border-radius:14px; padding:.7rem .8rem; font:inherit; resize:none; }
+.xp-handle-input { display:flex; align-items:center; gap:.3rem; padding:0 .8rem; }
+.xp-handle-input b { color:#8f93a8; }
+.xp-handle-input input { flex:1; min-width:0; min-height:44px; background:transparent; border:0; color:#eceaf3; font:inherit; outline:none; }
+.nl-tabs { overflow-y:hidden; min-height:52px; align-items:center; }
+.xp-handle-input input { padding:0; }
+.xp-actions > * { justify-self:start; }

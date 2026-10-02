@@ -1,7 +1,7 @@
 import { state, app, request, notify, activeSignal, timeText, clockText, period, place, escapeHtml, isDev } from './core.js';
 import { initDevtools, runCommand, openPanel } from './devtools.js';
 import { sceneMarkup, applySky, SCENE_META } from './scenes.js';
-import { feedView, notificationsView, bindFeed, enterFeed, markRead } from './northlife.js';
+import { feedView, notificationsView, setupView, profileView, meButton, bindFeed, enterFeed, markRead } from './northlife.js';
 
 const ui = { phoneOpen:false, phoneView:'home', busy:false, sceneKey:null, hooks:{} };
 const PHONE_APPS = [
@@ -124,6 +124,8 @@ export function updateGame({ announce=false }={}) {
   root.querySelector('.ps-time').textContent = clockText(run.world);
   root.classList.toggle('talking', Boolean(run.encounter));
   root.querySelector('[data-dev]').hidden = !isDev();
+  const unread = run.social?.unread ?? 0; const dot = root.querySelector('.phone-badge');
+  dot.hidden = !unread; dot.textContent = unread > 99 ? '99+' : String(unread);
   root.classList.toggle('closed', Boolean(run.encounter?.closed));
   root.querySelector('.free-action textarea').placeholder = run.encounter?.closed ? 'La conversación terminó' : run.encounter ? `Dile algo a ${run.encounterNpc.name}…` : '¿Qué haces?';
   renderScene(root, loc, announce);
@@ -379,8 +381,8 @@ function renderPhone() {
   const titles = { profile:'Perfil', map:'Mapa', northlife:'NorthLife', missions:'Misiones', journal:'Diario', gm:'Notas del GM' };
   const bodies = { profile:profileApp, map:mapApp, northlife:northlifeApp, missions:() => '<p class="empty">No tienes misiones activas. Las oportunidades llegarán cuando el mundo tenga algo que ofrecerte.</p>', journal:journalApp, gm:gmApp };
   screen.className = 'phone-screen app';
-  screen.innerHTML = `<div class="app-bar"><button type="button" data-back aria-label="Volver">${icon('<path d="M15 5l-7 7 7 7"/>')}</button><h2>${titles[view]}</h2></div><div class="app-body">${bodies[view]()}</div>`;
-  screen.querySelector('[data-back]').onclick = () => { if (view === 'northlife' && ui.chatWith) ui.chatWith = null; else if (view === 'northlife' && ui.thread) { ui.thread = null; ui.replyTo = null; } else ui.phoneView = 'home'; renderPhone(); };
+  screen.innerHTML = `<div class="app-bar"><button type="button" data-back aria-label="Volver">${icon('<path d="M15 5l-7 7 7 7"/>')}</button><h2>${titles[view]}</h2>${view === 'northlife' ? meButton() : ''}</div><div class="app-body">${bodies[view]()}</div>`;
+  screen.querySelector('[data-back]').onclick = () => { if (view === 'northlife' && ui.chatWith) ui.chatWith = null; else if (view === 'northlife' && ui.nlTab === 'profile') { if (ui.editingProfile) ui.editingProfile = false; else ui.nlTab = 'feed'; } else if (view === 'northlife' && ui.thread) { ui.thread = null; ui.replyTo = null; } else ui.phoneView = 'home'; renderPhone(); };
   if (view === 'northlife') bindNorthlife(screen);
   bindTravel(screen);
   screen.querySelectorAll('[data-copy]').forEach((button) => button.onclick = async () => { try { await navigator.clipboard.writeText(button.dataset.copy); notify('Copiado.'); } catch { notify(button.dataset.copy); } });
@@ -397,7 +399,7 @@ function renderPhone() {
 
 function openApp(id) {
   if (id === 'settings') { togglePhone(false); ui.hooks.openSettings?.(); return; }
-  ui.phoneView = id; if (id === 'northlife') { ui.nlTab ??= 'feed'; ui.chatWith = null; ui.thread = null; ui.composing = false; ui.replyTo = null; ui.draft = ''; ui.socialError = ''; enterFeed(ui); } renderPhone();
+  ui.phoneView = id; if (id === 'northlife') { ui.nlTab ??= 'feed'; ui.chatWith = null; ui.thread = null; ui.composing = false; ui.replyTo = null; ui.draft = ''; ui.socialError = ''; ui.editingProfile = false; ui.accountError = ''; if (ui.nlTab === 'profile') ui.nlTab = 'feed'; enterFeed(ui); } renderPhone();
 }
 
 function profileApp() {
@@ -422,9 +424,10 @@ const hourOf = (key) => escapeHtml(String(key ?? '').replace(/^DAY_(\d+)_/, 'Dí
 function northlifeApp() {
   const pending = (state.run.commitments ?? []).filter((item) => item.status === 'active').length;
   const unread = state.run.social?.unread ?? 0;
-  const tabs = [['feed', 'Feed'], ['notifs', 'Avisos'], ['chats', 'Chats'], ['agenda', 'Agenda']];
+  if (!state.run.social?.profile?.created) return setupView(nlContext());
+  const tabs = [['feed', 'Feed'], ['notifs', 'Notificaciones'], ['chats', 'Chats'], ['agenda', 'Agenda']];
   const badge = (id) => (id === 'agenda' && pending ? ` <i class="nl-badge">${pending}</i>` : id === 'notifs' && unread ? ` <i class="nl-badge">${unread}</i>` : '');
-  const body = ui.nlTab === 'chats' ? (ui.chatWith ? threadView() : chatsTab()) : ui.nlTab === 'agenda' ? agendaTab() : ui.nlTab === 'notifs' ? notificationsView() : feedView(nlContext());
+  const body = ui.nlTab === 'chats' ? (ui.chatWith ? threadView() : chatsTab()) : ui.nlTab === 'agenda' ? agendaTab() : ui.nlTab === 'notifs' ? notificationsView() : ui.nlTab === 'profile' ? profileView(nlContext()) : feedView(nlContext());
   return `<nav class="nl-tabs">${tabs.map(([id, label]) => `<button type="button" data-nl="${id}" class="${ui.nlTab === id ? 'active' : ''}">${label}${badge(id)}</button>`).join('')}</nav>${body}`;
 }
 
@@ -467,8 +470,9 @@ function agendaTab() {
 }
 
 function bindNorthlife(screen) {
+  screen.querySelector('[data-me]')?.addEventListener('click', () => { ui.nlTab = 'profile'; ui.chatWith = null; ui.thread = null; ui.editingProfile = false; renderPhone(); const body = app.querySelector('.phone-screen .app-body'); if (body) body.scrollTop = 0; });
   screen.querySelectorAll('[data-nl]').forEach((button) => button.onclick = () => {
-    ui.nlTab = button.dataset.nl; ui.chatWith = null; if (ui.nlTab !== 'feed') ui.thread = null; renderPhone();
+    ui.nlTab = button.dataset.nl; ui.chatWith = null; ui.editingProfile = false; if (ui.nlTab !== 'feed') ui.thread = null; renderPhone();
     if (ui.nlTab === 'notifs') markRead().then(() => updateGame());
   });
   bindFeed(screen, nlContext());
@@ -503,6 +507,7 @@ function eventText(event) {
   if (event.type === 'time_waited') return `Esperaste ${event.data.minutes} minutos.`;
   if (event.type === 'slept') return 'Dormiste ocho horas.';
   if (event.type === 'worked') return `Trabajaste y ganaste $${event.data.earned}.`;
+  if (event.type === 'social_account_created') return `Creaste tu cuenta de NorthLife (${escapeHtml(event.data.handle)}).`;
   if (event.type === 'social_post_created') return 'Publicaste en NorthLife.';
   if (event.type === 'social_reply_created') return 'Respondiste en NorthLife.';
   if (event.type === 'commitment_made') return `Quedaste en algo con ${escapeHtml(npcName(event.data.npcId))}: ${escapeHtml(event.data.text)}`;

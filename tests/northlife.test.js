@@ -7,14 +7,15 @@ import { createRun } from '../src/server/game/run.js';
 import { createAppServer } from '../src/server/index.js';
 import {
   applyGeneratedPosts, applyReactions, publishPlayerPost, publishPlayerReply, toggleLike, markNotificationsRead, socialView, feedDue, maxLikes,
-  resolveWhen, playerHandle, GENERATION_GAP
+  resolveWhen, playerHandle, GENERATION_GAP, saveProfile, toggleRepost, profileMedia, expectedReplies, POST_MINUTES
 } from '../src/server/game/social.js';
 
 const npcs = await loadNpcs(fileURLToPath(new URL('../data/canon/npcs', import.meta.url)));
 const seeds = [{ handle: '@RexNova', name: 'Rex Nova', verified: true, popularity: 99, bio: 'Dueño de NorthLife' }];
 const options = { npcs, seeds };
 const player = { name: 'Mara', age: 24, gender: 'woman', race: 'human' };
-const fresh = () => { const run = createRun(player); run.world.hour = 9; run.world.minute = 0; return run; };
+const withAccount = (run, handle = '@MaraV') => saveProfile(run, { handle, bio: 'Recién llegada.' }, options);
+const fresh = () => { const run = createRun(player); run.world.hour = 9; run.world.minute = 0; return withAccount(run); };
 const at = (run, hour, minute = 0) => ({ ...run, world: { ...run.world, hour, minute } });
 const handles = (run, now = run) => socialView(now, { seeds }).posts.map((post) => post.handle);
 
@@ -76,7 +77,8 @@ test('the player posts, replies, likes and receives notifications when someone a
   const run = fresh();
   const { run: posted, post } = publishPlayerPost(run, `  ${'x'.repeat(400)}  `);
   assert.equal(post.text.length, 280);
-  assert.equal(posted.world.minute, 1, 'publicar cuesta un minuto');
+  assert.equal(posted.world.minute, POST_MINUTES, 'publicar cuesta unos minutos de juego');
+  assert.equal(post.minutes, 9 * 60, 'la publicación lleva la hora a la que se escribió, no la de después');
   assert.equal(post.own, true);
   assert.throws(() => publishPlayerPost(run, '   '), /vacío/);
   assert.throws(() => publishPlayerPost({ ...run, encounter: { npcId: 'luna_serp' } }, 'hola'), /conversación/);
@@ -150,6 +152,9 @@ test('API: the feed fills itself in the background, the player\'s posts get a re
   };
   const id = (await call('/api/runs', { name: 'Mara', age: 24, gender: 'woman', race: 'human' })).body.id;
   const stored = runs.get(id); stored.world.hour = 9; runs.set(id, stored);
+  assert.equal((await call(`/api/runs/${id}/posts`, { text: 'Sin cuenta' })).status, 400, 'sin cuenta no se publica');
+  const account = await call(`/api/runs/${id}/social`, { op: 'profile', handle: 'Mara_V', bio: 'Primera semana en la ciudad' });
+  assert.equal(account.status, 200); assert.equal(account.body.social.profile.handle, '@Mara_V'); assert.equal(account.body.social.profile.created, true);
 
   const acted = await call(`/api/runs/${id}/action`, { type: 'wait', minutes: 30 });
   assert.equal(acted.status, 200); assert.equal(calls.posts, 1);
@@ -164,9 +169,13 @@ test('API: the feed fills itself in the background, the player\'s posts get a re
   // el jugador publica: la red reacciona en la misma petición
   const published = await call(`/api/runs/${id}/posts`, { text: 'Primer día en la ciudad' });
   assert.equal(published.status, 200); assert.equal(calls.reply.length, 1);
+  assert.equal(calls.posts, 2, 'publicar renueva el feed si hace más de 2 horas de juego que no se generaba');
+  assert.ok(calls.reply[0].respuestasEsperadas.min >= 1, 'el jugador siempre recibe al menos una respuesta');
+  assert.match(calls.reply[0].accionDelJugador.hora, /^\d{2}:\d{2}$/);
   assert.equal(calls.reply[0].accionDelJugador.tipo, 'publicacion');
   assert.equal(published.body.social.posts.find((post) => post.own).text, 'Primer día en la ciudad');
-  assert.equal(published.body.social.unread, 0, 'la respuesta aún no ha llegado');
+  assert.equal(published.body.social.unread, 1, 'la primera respuesta llega en los minutos que tarda en publicarse');
+  assert.equal(published.body.social.posts.find((post) => post.own).replies.length, 1);
   const mine = published.body.social.posts.find((post) => post.own);
 
   // si la IA falla, no se publica nada
@@ -193,6 +202,58 @@ test('API: the feed fills itself in the background, the player\'s posts get a re
   // herramienta de desarrollo: generar ahora
   assert.equal((await call(`/api/runs/${id}/dev`, { op: 'social' })).status, 403);
   const forced = await call(`/api/runs/${id}/dev`, { op: 'social' }, 'POST', true);
-  assert.equal(forced.status, 200); assert.equal(calls.posts, 2);
+  assert.equal(forced.status, 200); assert.equal(calls.posts, 3);
   assert.ok(forced.body.social.scheduled >= 0);
+});
+
+test('the account: unique username, rename keeps posts, validated images, repost, and replies grow with popularity', () => {
+  const bare = createRun(player);
+  assert.throws(() => publishPlayerPost(bare, 'Hola'), /cuenta/, 'sin cuenta no se publica');
+  assert.throws(() => saveProfile(bare, { handle: 'a' }, options), /entre 3 y 20/);
+  assert.throws(() => saveProfile(bare, { handle: '@LunaSerp' }, options), /disponible/, 'no se puede tomar el usuario de un personaje');
+  assert.throws(() => saveProfile(bare, { handle: '@RexNova' }, options), /disponible/);
+  const pixel = 'data:image/webp;base64,UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==';
+  assert.throws(() => saveProfile(bare, { handle: '@MaraV', avatar: 'data:text/html;base64,AAAA' }, options), /imagen/);
+  assert.throws(() => saveProfile(bare, { handle: '@MaraV', avatar: `data:image/png;base64,${'A'.repeat(210000)}` }, options), /pesa/);
+  const account = saveProfile(bare, { handle: 'MaraV', bio: ' Hola   mundo ', avatar: pixel }, options);
+  assert.equal(account.player.handle, '@MaraV');
+  assert.equal(account.social.profile.bio, 'Hola mundo');
+  assert.equal(profileMedia(account, 'avatar').mime, 'image/webp');
+  assert.equal(profileMedia(account, 'banner'), null);
+  const view = socialView(account, { seeds }).profile;
+  assert.deepEqual({ created: view.created, hasAvatar: view.hasAvatar, hasBanner: view.hasBanner }, { created: true, hasAvatar: true, hasBanner: false });
+  assert.ok(!JSON.stringify(socialView(account, { seeds })).includes('base64'), 'las imágenes no viajan dentro del estado: se piden aparte');
+  assert.equal(account.eventLog.at(-1).type, 'social_account_created');
+
+  // renombrar arrastra las publicaciones propias y las menciones
+  const generated = applyGeneratedPosts(at(account, 10), [{ usuario: '@vecina', hora: '09:00', texto: 'Hilo ajeno' }], options);
+  const other = socialView(generated, { seeds }).posts[0];
+  const { run: posted } = publishPlayerPost(generated, 'Mi primera publicación');
+  const { run: replied } = publishPlayerReply(posted, other.id, 'Buen hilo');
+  const renamed = saveProfile(replied, { handle: '@MaraNueva' }, options);
+  assert.deepEqual(socialView(renamed, { seeds }).posts.filter((post) => post.own).map((post) => post.handle), ['@MaraNueva']);
+  assert.equal(socialView(renamed, { seeds }).posts.find((post) => post.id === other.id).replies[0].handle, '@MaraNueva');
+  assert.throws(() => saveProfile(renamed, { handle: '@vecina' }, options), /disponible/, 'usuarios de cuentas existentes no se pueden tomar');
+
+  // compartir una publicación ajena (aparece en el perfil); la propia no
+  const shared = toggleRepost(renamed, other.id);
+  const sharedPost = socialView(shared, { seeds }).posts.find((post) => post.id === other.id);
+  assert.equal(sharedPost.reposted, true); assert.ok(sharedPost.repostedAt >= 0);
+  assert.equal(sharedPost.reposts, socialView(renamed, { seeds }).posts.find((post) => post.id === other.id).reposts + 1);
+  assert.equal(socialView(toggleRepost(shared, other.id), { seeds }).posts.find((post) => post.id === other.id).reposted, undefined);
+  assert.throws(() => toggleRepost(renamed, socialView(renamed, { seeds }).posts.find((post) => post.own).id), /propia/);
+
+  // lo del jugador y lo que comparte no se pierde aunque el feed se llene
+  let flooded = shared;
+  for (let round = 0; round < 12; round++) {
+    flooded = applyGeneratedPosts(flooded, Array.from({ length: 14 }, (_, index) => ({ usuario: `@ruido${round}x${index}`, hora: '09:00', texto: `Ruido ${round}-${index}` })), options);
+  }
+  const kept = socialView(flooded, { seeds }).posts;
+  assert.ok(kept.some((post) => post.own) && kept.some((post) => post.id === other.id), 'las publicaciones propias y compartidas se conservan');
+  assert.ok(flooded.social.posts.length <= 140);
+
+  // más popularidad, más respuestas esperadas (siempre al menos una)
+  assert.deepEqual(expectedReplies(5), { min: 1, max: 3 });
+  assert.ok(expectedReplies(60).min >= 5 && expectedReplies(60).max === 12);
+  assert.ok(expectedReplies(30).min > expectedReplies(5).min && expectedReplies(30).max > expectedReplies(5).max);
 });

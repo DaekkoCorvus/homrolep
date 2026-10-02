@@ -12,7 +12,12 @@ export const GENERATION_GAP = 600;           // minutos de juego entre generacio
 const PAST = 24 * 60;                        // hasta cuánto hacia atrás puede fechar una publicación el modelo
 const FUTURE = 30 * 60;                      // y hacia delante
 const RAMP = 180;                            // minutos que tarda una publicación en alcanzar todos sus likes
-const MAX_POSTS = 120; const MAX_REPLIES = 8; const MAX_ACCOUNTS = 150; const MAX_NOTIFICATIONS = 60;
+export const POST_MINUTES = 5;               // publicar cuesta unos minutos: en ese tiempo ya llegan las primeras reacciones
+export const REPLY_MINUTES = 3;
+export const REFRESH_GAP = 120;              // si el jugador publica, el feed se renueva si pasaron al menos 2 h desde la última generación
+const MAX_BIO = 160; const MAX_AVATAR = 200_000; const MAX_BANNER = 320_000;
+const IMAGE = /^data:image\/(webp|png|jpeg);base64,[A-Za-z0-9+/=]+$/;
+const MAX_POSTS = 120; const MAX_REPLIES = 12; const MAX_ACCOUNTS = 150; const MAX_NOTIFICATIONS = 60;
 const HANDLE = /^@[A-Za-z0-9_]{3,20}$/;
 
 const pad = (value) => String(value).padStart(2, '0');
@@ -27,6 +32,7 @@ export const keyOfMinutes = (minutes) => {
 };
 
 export function playerHandle(player) {
+  if (HANDLE.test(player.handle ?? '')) return player.handle;
   const base = String(player.name ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9_]/g, '').slice(0, 20);
   return `@${base.length >= 3 ? base : `${base}Viajero`.slice(0, 20)}`;
 }
@@ -36,12 +42,26 @@ export const maxLikes = (popularity) => Math.round(8 + (clamp(popularity, 0, 100
 // El jugador empieza siendo un desconocido: su alcance sube con su reputación.
 export const playerPopularity = (player) => clamp(5 + whole(player.reputation), 0, 60);
 
-export const emptySocial = () => ({ posts: [], accounts: {}, notifications: [], generatedAt: null });
+// Respuestas que debería recibir una publicación del jugador: al menos una o dos y muchas más cuanto más popular es.
+export function expectedReplies(popularity) {
+  const pop = clamp(popularity, 0, 100);
+  return { min: pop < 12 ? 1 : Math.round(1 + pop / 12), max: Math.min(MAX_REPLIES, Math.round(2 + pop / 6)) };
+}
+
+export const emptyProfile = () => ({ created: false, bio: '', avatar: null, banner: null, v: 0 });
+export const emptySocial = () => ({ posts: [], accounts: {}, notifications: [], generatedAt: null, profile: emptyProfile() });
+// Publicaciones del jugador (o que repostea) nunca se pierden al recortar el feed.
+const trimPosts = (posts) => {
+  const sorted = posts.sort((a, b) => b.minutes - a.minutes);
+  const keep = sorted.filter((post) => post.own || post.reposted);
+  const rest = sorted.filter((post) => !(post.own || post.reposted)).slice(0, Math.max(20, MAX_POSTS - keep.length));
+  return [...keep, ...rest].sort((a, b) => b.minutes - a.minutes);
+};
 
 // Partidas anteriores guardaban {id, author, npcId, text, time}; se convierten sin perder nada.
 export function migrateSocial(social, player) {
   const base = { ...emptySocial(), ...(social ?? {}) };
-  base.accounts ??= {}; base.notifications ??= [];
+  base.accounts ??= {}; base.notifications ??= []; base.profile = { ...emptyProfile(), ...(base.profile ?? {}) };
   base.posts = (base.posts ?? []).map((post) => {
     if (post.handle) return post;
     const when = /^DAY_(\d+)_(\d{2}):(\d{2})$/.exec(post.time ?? '');
@@ -143,18 +163,67 @@ export function applyGeneratedPosts(run, raw, options) {
     post.replies = cleanReplies(item?.respuestas, post, context, { floor: minutes + 1, ceiling: minutes + 2880 });
     fresh.push(post);
   }
-  next.social.posts = [...fresh, ...next.social.posts].sort((a, b) => b.minutes - a.minutes).slice(0, MAX_POSTS);
+  next.social.posts = trimPosts([...fresh, ...next.social.posts]);
   next.social.accounts = directoryToAccounts(context.directory, context.contacts);
   next.social.generatedAt = minutesOfWorld(next.world);
   return next;
 }
 
-export const feedDue = (run) => run.social?.generatedAt == null || minutesOfWorld(run.world) - run.social.generatedAt >= GENERATION_GAP;
+export const feedDue = (run, gap = GENERATION_GAP) => run.social?.generatedAt == null || minutesOfWorld(run.world) - run.social.generatedAt >= gap;
+
+// --- Cuenta del jugador -----------------------------------------------------------------------------------------------------
+// Al abrir NorthLife por primera vez el jugador crea su cuenta: usuario, foto, descripción y, opcionalmente, un banner.
+function checkImage(value, max, label) {
+  if (typeof value !== 'string' || !IMAGE.test(value) || value.length > max) throw new Error(`La imagen de ${label} no es válida o pesa demasiado.`);
+  return value;
+}
+
+export function saveProfile(run, input, { npcs, seeds = [] }) {
+  const next = structuredClone(run);
+  next.social = migrateSocial(next.social, next.player);
+  const profile = next.social.profile;
+  const wanted = String(input?.handle ?? '').trim();
+  const handle = wanted.startsWith('@') ? wanted : `@${wanted}`;
+  if (!HANDLE.test(handle)) throw new Error('El usuario debe tener entre 3 y 20 letras, números o guiones bajos.');
+  const old = playerHandle(next.player);
+  const taken = new Set([...seeds.map((seed) => handleKey(seed.handle)), ...Object.keys(next.social.accounts), ...[...npcs.values()].map((npc) => handleKey(npc.contact?.handle)).filter(Boolean)]);
+  if (handleKey(handle) !== handleKey(old) && taken.has(handleKey(handle))) throw new Error('Ese usuario no está disponible.');
+  if (!profile.created && handleKey(handle) === handleKey(old) && taken.has(handleKey(handle))) throw new Error('Ese usuario no está disponible.');
+  if (input?.bio !== undefined) profile.bio = text(input.bio, MAX_BIO);
+  if (input?.avatar !== undefined) profile.avatar = input.avatar === null ? null : checkImage(input.avatar, MAX_AVATAR, 'perfil');
+  if (input?.banner !== undefined) profile.banner = input.banner === null ? null : checkImage(input.banner, MAX_BANNER, 'banner');
+  if (input?.avatar !== undefined || input?.banner !== undefined) profile.v += 1;
+  const first = !profile.created;
+  profile.created = true;
+  next.player.handle = handle;
+  if (handleKey(old) !== handleKey(handle)) {
+    for (const post of next.social.posts) {
+      if (post.own) post.handle = handle;
+      for (const reply of post.replies) {
+        if (reply.own) reply.handle = handle;
+        if (handleKey(reply.inReplyTo) === handleKey(old)) reply.inReplyTo = handle;
+      }
+    }
+  }
+  next.updatedAt = new Date().toISOString();
+  if (first) next.eventLog.push({ time: keyOfMinutes(minutesOfWorld(next.world)), type: 'social_account_created', data: { handle } });
+  return next;
+}
+
+export function profileMedia(run, which) {
+  const value = migrateSocial(run.social, run.player).profile[which];
+  const parsed = /^data:(image\/(?:webp|png|jpeg));base64,(.+)$/.exec(value ?? '');
+  return parsed ? { mime: parsed[1], buffer: Buffer.from(parsed[2], 'base64') } : null;
+}
 
 // --- Acciones del jugador ---------------------------------------------------------------------------------------------------
 function assertFree(run) {
   if (run.encounter) throw Object.assign(new Error('Estás en plena conversación. Despídete antes de hacer otra cosa.'), { code: 'ENCOUNTER_ACTIVE' });
 }
+function assertAccount(run) {
+  if (!migrateSocial(run.social, run.player).profile.created) throw Object.assign(new Error('Crea tu cuenta de NorthLife primero.'), { code: 'NO_ACCOUNT' });
+}
+// La entrada lleva la hora a la que el jugador actuó; después pasan unos minutos de juego (escribir, publicar, esperar reacciones).
 function playerEntry(next, body, extra = {}) {
   const minutes = minutesOfWorld(next.world);
   return { id: randomUUID(), handle: playerHandle(next.player), name: next.player.name, own: true, text: body, minutes, time: keyOfMinutes(minutes), likes: 0, liked: false, ...extra };
@@ -166,12 +235,12 @@ function cleanBody(value) {
 }
 
 export function publishPlayerPost(run, value) {
-  assertFree(run);
+  assertFree(run); assertAccount(run);
   const body = cleanBody(value);
   const next = structuredClone(run);
   next.social = migrateSocial(next.social, next.player);
-  next.world = advanceTime(next.world, 1);
   const post = playerEntry(next, body, { reposts: 0, replies: [] });
+  next.world = advanceTime(next.world, POST_MINUTES);
   next.social.posts.unshift(post);
   next.updatedAt = new Date().toISOString();
   next.eventLog.push({ time: post.time, type: 'social_post_created', data: { text: body } });
@@ -181,7 +250,7 @@ export function publishPlayerPost(run, value) {
 const visibleOf = (post, now) => post.minutes <= now;
 
 export function publishPlayerReply(run, postId, value, replyToId = null) {
-  assertFree(run);
+  assertFree(run); assertAccount(run);
   const body = cleanBody(value);
   const next = structuredClone(run);
   next.social = migrateSocial(next.social, next.player);
@@ -190,8 +259,8 @@ export function publishPlayerReply(run, postId, value, replyToId = null) {
   if (!post || !visibleOf(post, now)) throw new Error('Esa publicación ya no está disponible.');
   const target = replyToId ? post.replies.find((item) => item.id === replyToId && item.minutes <= now) : null;
   if (replyToId && !target) throw new Error('Ese comentario ya no está disponible.');
-  next.world = advanceTime(next.world, 1);
   const reply = playerEntry(next, body, { inReplyTo: (target ?? post).handle });
+  next.world = advanceTime(next.world, REPLY_MINUTES);
   post.replies.push(reply);
   next.updatedAt = new Date().toISOString();
   next.eventLog.push({ time: reply.time, type: 'social_reply_created', data: { text: body, postId } });
@@ -199,7 +268,7 @@ export function publishPlayerReply(run, postId, value, replyToId = null) {
 }
 
 // Reacción de la red (prompt social, modo «reply») a lo que acaba de hacer el jugador.
-export function applyReactions(run, postId, raw, options) {
+export function applyReactions(run, postId, raw, options, since = null) {
   const next = structuredClone(run);
   next.social = migrateSocial(next.social, next.player);
   const post = next.social.posts.find((item) => item.id === postId);
@@ -208,7 +277,8 @@ export function applyReactions(run, postId, raw, options) {
   const now = minutesOfWorld(next.world);
   const mine = playerHandle(next.player);
   const known = new Set([post.handle, mine, ...post.replies.map((reply) => reply.handle)].map(handleKey));
-  const fresh = cleanReplies(raw?.respuestas, post, context, { floor: now + 1, ceiling: now + 1440, defaultStep: 12 });
+  const from = since ?? now;
+  const fresh = cleanReplies(raw?.respuestas, post, context, { floor: from + 1, ceiling: from + 1440, defaultStep: 4 });
   for (const reply of fresh) {
     const wanted = reply.inReplyTo && known.has(handleKey(reply.inReplyTo)) ? reply.inReplyTo : mine;
     reply.inReplyTo = wanted;
@@ -240,6 +310,21 @@ export function toggleLike(run, postId, replyId = null) {
   return next;
 }
 
+// «Compartir» una publicación ajena: aparece en el perfil del jugador. Una segunda vez lo deshace.
+export function toggleRepost(run, postId) {
+  assertAccount(run);
+  const next = structuredClone(run);
+  next.social = migrateSocial(next.social, next.player);
+  const now = minutesOfWorld(next.world);
+  const post = next.social.posts.find((item) => item.id === postId);
+  if (!post || post.minutes > now) throw new Error('Esa publicación ya no está disponible.');
+  if (post.own) throw new Error('No puedes compartir tu propia publicación.');
+  post.reposted = !post.reposted;
+  if (post.reposted) post.repostedAt = now; else delete post.repostedAt;
+  next.updatedAt = new Date().toISOString();
+  return next;
+}
+
 export function markNotificationsRead(run) {
   const next = structuredClone(run);
   next.social = migrateSocial(next.social, next.player);
@@ -259,12 +344,14 @@ export function socialView(run, { dev = false, seeds = [] } = {}) {
   const reply = ({ id, handle, name, npcId, own, text: body, minutes, time, inReplyTo, liked, ...rest }) => ({ id, handle, name, verified: verified(handle), ...(npcId ? { npcId } : {}), own: own === true, text: body, minutes, time, liked: liked === true, likes: grow({ likes: rest.likes, minutes, liked }), ...(inReplyTo ? { inReplyTo } : {}) });
   const posts = social.posts.filter((post) => visibleOf(post, now)).map((post) => ({
     id: post.id, handle: post.handle, name: post.name, ...(post.npcId ? { npcId: post.npcId } : {}), own: post.own === true, text: post.text, minutes: post.minutes, time: post.time,
-    liked: post.liked === true, likes: grow(post), reposts: Math.round((post.reposts ?? 0) * clamp((now - post.minutes) / RAMP, 0.12, 1)),
+    liked: post.liked === true, likes: grow(post), reposts: Math.round((post.reposts ?? 0) * clamp((now - post.minutes) / RAMP, 0.12, 1)) + (post.reposted ? 1 : 0),
+    ...(post.reposted ? { reposted: true, repostedAt: post.repostedAt } : {}),
     replies: post.replies.filter((item) => item.minutes <= now).map(reply), verified: verified(post.handle)
   })).sort((a, b) => b.minutes - a.minutes);
   const notifications = social.notifications.filter((item) => item.minutes <= now).map(({ id, kind, postId, replyId, handle, name, text: body, minutes, time, onYourPost, read }) => ({ id, kind, postId, replyId, handle, name, text: body, minutes, time, onYourPost, read }));
   return {
     posts, notifications, unread: notifications.filter((item) => !item.read).length, now, handle: playerHandle(run.player),
+    profile: { created: social.profile.created, handle: playerHandle(run.player), name: run.player.name, bio: social.profile.bio, hasAvatar: Boolean(social.profile.avatar), hasBanner: Boolean(social.profile.banner), v: social.profile.v },
     ...(dev ? { scheduled: social.posts.filter((post) => !visibleOf(post, now)).length, generatedAt: social.generatedAt, accounts: Object.keys(social.accounts).length } : {})
   };
 }
@@ -288,7 +375,7 @@ export function socialInput(run, mode, { npcs, seeds = [], places = [], ahora, e
   const recent = social.posts.filter((post) => post.minutes <= now + 60).slice(0, 12).map((post) => ({ usuario: post.handle, hora: post.time, texto: post.text }));
   return {
     mode, ahora, dia: run.world.day, ciudad: 'Porta Magna', lugares: places, cuentas: [...contacts, ...accounts], recientes: recent,
-    jugador: { usuario: playerHandle(run.player), nombre: run.player.name, popularidad: playerPopularity(run.player) }, ...extra
+    jugador: { usuario: playerHandle(run.player), nombre: run.player.name, descripcion: social.profile.bio || undefined, popularidad: playerPopularity(run.player) }, ...extra
   };
 }
 
