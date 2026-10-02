@@ -32,3 +32,18 @@ export const clockText = (world) => `${String(world.hour).padStart(2,'0')}:${Str
 export const timeText = (world) => `Día ${world.day} · ${clockText(world)} · ${period(world.hour)}`;
 export const place = (id) => state.world.locations.find((item) => item.id === id);
 export function escapeHtml(value='') { const node=document.createElement('span'); node.textContent=value; return node.innerHTML.replace(/"/g, '&quot;'); }
+
+// Utilidades del modo desarrollador compartidas por sus paneles (devtools.js, prompteditor.js).
+export const dreq = (url, options = {}) => request(url, { ...options, dev: true });
+
+export function layer(className, html) {
+  document.querySelector(`.${className}`)?.remove();
+  const node = document.createElement('div');
+  node.className = `dev-layer ${className}`;
+  node.innerHTML = html;
+  document.body.append(node);
+  requestAnimationFrame(() => node.classList.add('open'));
+  node.addEventListener('click', (event) => { if (event.target === node) node.remove(); });
+  node.querySelectorAll('[data-close]').forEach((button) => button.onclick = () => node.remove());
+  return node;
+}

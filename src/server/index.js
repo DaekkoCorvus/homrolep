@@ -9,7 +9,10 @@ import { validateNpcCard, fromForeignCard, parsePngCard, savePortrait, listPortr
 import { loadNpcs, presentNpcs, publicNpc, relationshipOf, affinityOf, attitudeOf, validateEvaluation, validateFacts, scheduleFor, minutesOfWorld, applyEvaluation, debugView, temporalContext, timedNotes, timedHistory, contactAllowed, findNpcByHandle, parseSpeech, stripMarks, contactInfo, stickyFrom } from './game/npcs.js';
 import { createNanoGPT, AIError } from './ai/provider.js';
 import { createSettingsStore } from './ai/settings.js';
-import { saveRun, loadRun, listRuns } from './saves/store.js';
+import { createPromptStore } from './ai/promptStore.js';
+import { KINDS, kindNames, defaultPreset, normalizePreset, compose, importSillyTavern } from './ai/composer.js';
+import { characterPlan, evaluationPlan, narrationPlan, chatsPlan, feedPlan } from './ai/plans.js';
+import { saveRun, loadRun, listRuns, deleteRun } from './saves/store.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const publicDir = path.join(root, 'public');
@@ -20,7 +23,7 @@ const npcDir = path.join(root, 'data/canon/npcs');
 const npcs = await loadNpcs(npcDir);
 const port = Number(process.env.PORT) || 3000;
 
-const clientFiles = new Set(['/index.html', '/app.js', '/core.js', '/game.js', '/devtools.js', '/scenes.js', '/styles.css', '/game.css']);
+const clientFiles = new Set(['/index.html', '/app.js', '/core.js', '/game.js', '/devtools.js', '/prompteditor.js', '/scenes.js', '/styles.css', '/game.css']);
 const mimeTypes = { '.png':'image/png', '.webp':'image/webp', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.json':'application/json; charset=utf-8', '.svg':'image/svg+xml' };
 
 function sendJson(response, status, body) {
@@ -37,7 +40,7 @@ async function readBody(request, limit = 32_000) {
   return raw ? JSON.parse(raw) : {};
 }
 
-export function createAppServer({ ai = createNanoGPT(), settings = createSettingsStore(), store = { saveRun, loadRun, listRuns } } = {}) {
+export function createAppServer({ prompts = createPromptStore(), ai = createNanoGPT(fetch, { prompts }), settings = createSettingsStore(), store = { saveRun, loadRun, listRuns, deleteRun } } = {}) {
 const active = new Set();
 async function exclusive(key, operation) {
   if (active.has(key)) throw new AIError('Ya hay una petición en curso. Espera a que termine.', 'REQUEST_BUSY', 409);
@@ -176,10 +179,73 @@ async function devOperation(run, body, config) {
   throw new Error('Operación de desarrollo desconocida.');
 }
 
+// --- Editor de prompts (modo desarrollador) ------------------------------------------------------------------
+const promptInfo = (kind) => {
+  const spec = KINDS[kind];
+  return {
+    kind, label: spec.label, description: spec.description, modes: spec.modes, macros: spec.macros,
+    autos: Object.entries(spec.autos).map(([key, auto]) => ({ key, label: auto.label, description: auto.description, role: auto.role ?? 'system', locked: auto.locked === true, special: auto.special === true })),
+    preset: structuredClone(prompts.get(kind)), defaults: defaultPreset(kind), custom: prompts.isCustom(kind)
+  };
+};
+
+// Plan de ejemplo para la vista previa: usa la partida abierta (conversación, chats y contactos reales cuando existen).
+async function previewPlan(kind, mode, run, npcId) {
+  const here = presentFor(run);
+  const npc = npcs.get(npcId) ?? (run.encounter ? npcs.get(run.encounter.npcId) : null) ?? here[0] ?? [...npcs.values()][0];
+  const sample = [{ who: 'player', text: '(aquí irá lo que escriba el jugador)' }];
+  const withPlayer = (lines) => (lines?.some((line) => line.who === 'player') ? lines : sample);
+  const ahora = temporalContext({ encounters: 0, notes: [], history: [] }, run.world).ahora;
+  if (kind === 'character' || kind === 'text') {
+    const context = await contextFor(run, npc);
+    const relationship = relationshipOf(run, npc.id);
+    const lines = kind === 'text' ? (run.chats?.[npc.id] ?? []).slice(-24) : run.encounter?.lines ?? [];
+    return characterPlan(context(relationship, mode === 'open' ? [] : withPlayer(lines), { mode }));
+  }
+  if (kind === 'gm') {
+    if (mode === 'narration' || mode === 'action') return narrationPlan(mode, run, run, worldData, here.map((person) => ({ id: person.id, nombre: person.name, rol: person.role })));
+    if (mode === 'chats') return chatsPlan({ ahora, playerName: run.player.name, locations: worldData.locations.map(({ id, name }) => ({ id, nombre: name })), chats: [{ npcId: npc.id, name: npc.name, lines: withPlayer(run.chats?.[npc.id]).slice(-6), commitments: commitmentsFor(run, npc.id, { withIds: true }) }] });
+    const context = await contextFor(run, npc);
+    return evaluationPlan(context(relationshipOf(run, npc.id), withPlayer(run.encounter?.lines ?? run.lastEncounter?.lines), { commitments: context.gmCommitments, locations: context.locations }));
+  }
+  const contacts = [...npcs.values()].filter((person) => run.relationships?.[person.id]?.added);
+  return feedPlan({ ahora, playerName: run.player.name, authors: (contacts.length ? contacts : [npc]).map((person) => ({ npcId: person.id, nombre: person.name, resumen: person.summary, personalidad: person.personality, haciendoAhora: scheduleFor(person, run.world)?.activity ?? 'fuera de su horario habitual' })) });
+}
+
+async function promptRoutes(request, response, pathname) {
+  if (request.method === 'GET' && pathname === '/api/dev/prompts') return sendJson(response, 200, { kinds: kindNames.map(promptInfo) });
+  if (request.method === 'GET' && pathname === '/api/dev/prompts/log') return sendJson(response, 200, { entries: prompts.log?.() ?? [] });
+  const match = pathname.match(/^\/api\/dev\/prompts\/([a-z]+)(?:\/(import|preview))?$/);
+  if (!match || !kindNames.includes(match[1])) return sendJson(response, 404, { error: 'Prompt desconocido.' });
+  const [, kind, action] = match;
+  if (!action && request.method === 'PUT') {
+    if (typeof prompts.save !== 'function') throw new Error('Este almacenamiento no permite guardar prompts.');
+    await prompts.save(kind, await readBody(request, 2_000_000));
+    return sendJson(response, 200, promptInfo(kind));
+  }
+  if (!action && request.method === 'DELETE') { await prompts.reset?.(kind); return sendJson(response, 200, promptInfo(kind)); }
+  if (action === 'import' && request.method === 'POST') {
+    const body = await readBody(request, 6_000_000);
+    let json; try { json = JSON.parse(String(body.text ?? '')); } catch { throw new Error('El archivo no es un JSON válido.'); }
+    return sendJson(response, 200, importSillyTavern(kind, json, prompts.get(kind)));
+  }
+  if (action === 'preview' && request.method === 'POST') {
+    const body = await readBody(request, 2_000_000);
+    const mode = KINDS[kind].modes.some(({ id }) => id === body.mode) ? body.mode : KINDS[kind].modes[0].id;
+    const run = await store.loadRun(String(body.runId ?? ''));
+    const plan = await previewPlan(kind, mode, run, String(body.npcId ?? ''));
+    const messages = compose(kind, mode, normalizePreset(kind, body.preset ?? prompts.get(kind)), plan);
+    const chars = messages.reduce((total, message) => total + message.content.length, 0);
+    return sendJson(response, 200, { mode, messages, chars, approxTokens: Math.round(chars / 3.6) });
+  }
+  return sendJson(response, 405, { error: 'Método no permitido.' });
+}
+
 async function devRoutes(request, response, pathname) {
   if (request.headers['x-hom-dev'] !== '1') throw new AIError('Las herramientas de desarrollo están desactivadas.', 'DEV_DISABLED', 403);
   const locationIds = worldData.locations.map(({ id }) => id);
   const withPortraits = async (npc) => ({ ...npc, portraits: await listPortraits(assetDir, npc.id) });
+  if (pathname.startsWith('/api/dev/prompts')) return promptRoutes(request, response, pathname);
   if (request.method === 'GET' && pathname === '/api/dev/npcs') return sendJson(response, 200, await Promise.all([...npcs.values()].map(withPortraits)));
   if (request.method === 'POST' && pathname === '/api/dev/npcs/import') {
     const body = await readBody(request, 12_000_000);
@@ -317,7 +383,7 @@ function startBackground(run, config) {
   const worth = pending.filter((item) => AGREEMENT_HINT.test(item.lines.map((line) => line.text).join(' ')));
   const chatCall = worth.length && typeof ai.extractFromChats === 'function'
     ? ai.extractFromChats({
-      ahora: temporalContext({ encounters: 0, notes: [], history: [] }, run.world).ahora, locations: worldData.locations.map(({ id, name }) => ({ id, nombre: name })),
+      ahora: temporalContext({ encounters: 0, notes: [], history: [] }, run.world).ahora, playerName: run.player.name, locations: worldData.locations.map(({ id, name }) => ({ id, nombre: name })),
       chats: worth.map((item) => ({ npcId: item.npcId, name: npcs.get(item.npcId).name, lines: item.lines, commitments: commitmentsFor(run, item.npcId, { withIds: true }) }))
     }, config).catch(() => null)
     : Promise.resolve(null);
@@ -327,7 +393,7 @@ function startBackground(run, config) {
   const feedCall = feedDue
     ? ai.feedPosts({
       authors: contacts.map((npc) => ({ npcId: npc.id, nombre: npc.name, resumen: npc.summary, personalidad: npc.personality, haciendoAhora: scheduleFor(npc, run.world)?.activity ?? 'fuera de su horario habitual' })),
-      ahora: temporalContext({ encounters: 0, notes: [], history: [] }, run.world).ahora
+      ahora: temporalContext({ encounters: 0, notes: [], history: [] }, run.world).ahora, playerName: run.player.name
     }, config).catch(() => null)
     : Promise.resolve(null);
 
@@ -410,9 +476,38 @@ async function api(request, response, pathname) {
       return sendRun(201, run);
     });
   }
-  const match = pathname.match(/^\/api\/runs\/([0-9a-f-]{36})(?:\/(action|posts|talk|dev|contacts|chat))?$/i);
+  const match = pathname.match(/^\/api\/runs\/([0-9a-f-]{36})(?:\/(action|posts|talk|dev|contacts|chat|slot))?$/i);
   if (!match) return sendJson(response, 404, { error: 'Ruta no encontrada.' });
   const [, id, operation] = match;
+  if (request.method === 'DELETE' && !operation) {
+    return exclusive(id, async () => {
+      if (typeof store.deleteRun !== 'function') throw new Error('Este almacenamiento no permite borrar partidas.');
+      await store.loadRun(id);
+      await store.deleteRun(id);
+      return sendJson(response, 200, { deleted: id });
+    });
+  }
+  // Gestión de ranuras: renombrar y duplicar (útil para probar sin perder el punto de partida).
+  if (request.method === 'POST' && operation === 'slot') {
+    const body = await readBody(request);
+    return exclusive(id, async () => {
+      const run = await store.loadRun(id);
+      if (body.op === 'rename') {
+        run.title = String(body.title ?? '').trim().slice(0, 40);
+        await store.saveRun(run);
+        return sendJson(response, 200, { id, title: run.title });
+      }
+      if (body.op === 'duplicate') {
+        const copy = structuredClone(run);
+        const now = new Date().toISOString();
+        copy.id = crypto.randomUUID(); copy.createdAt = now; copy.updatedAt = now;
+        copy.title = `${run.title || run.player.name} (copia)`.slice(0, 40);
+        await store.saveRun(copy);
+        return sendJson(response, 201, { id: copy.id, title: copy.title });
+      }
+      throw new Error('Operación de partida desconocida.');
+    });
+  }
   if (request.method === 'GET' && !operation) return sendRun(200, await store.loadRun(id));
   if (request.method === 'POST' && operation === 'action') {
     const input = await readBody(request);
@@ -493,7 +588,7 @@ const server = http.createServer(async (request, response) => {
     const pathname = url.pathname;
     if (pathname.startsWith('/api/')) {
       if (request.headers['sec-fetch-site'] === 'cross-site' || (request.headers.origin && request.headers.origin !== `http://${host}`)) throw new AIError('Origen de solicitud no permitido.', 'INVALID_ORIGIN', 403);
-      if (['POST','DELETE'].includes(request.method) && !request.headers['content-type']?.startsWith('application/json')) throw new AIError('Se requiere una solicitud JSON.', 'INVALID_REQUEST', 415);
+      if (['POST','DELETE','PUT','PATCH'].includes(request.method) && !request.headers['content-type']?.startsWith('application/json')) throw new AIError('Se requiere una solicitud JSON.', 'INVALID_REQUEST', 415);
       await api(request, response, pathname);
     }
     else await staticFile(response, pathname);

@@ -241,3 +241,17 @@ body:has(#app .threshold) .threshold::before,body:has(#app .threshold) .threshol
 @keyframes glyph-arrive { 0% { opacity:0; filter:blur(9px); transform:translateY(9px) scale(1.08); } 55% { opacity:1; } 100% { opacity:1; filter:blur(0); transform:none; } }
 @keyframes glyph-float { 0%,100% { translate:0 0; rotate:0deg; } 50% { translate:0 calc(var(--amp) * -1); rotate:var(--rot); } }
 @keyframes interrupt-shake { 0% { transform:translateX(0); } 20% { transform:translateX(-5px); } 45% { transform:translateX(4px); } 70% { transform:translateX(-2px); } 100% { transform:none; } }
+
+/* Partidas guardadas */
+.saves-card { width:min(100%,560px); }
+.save-list { list-style:none; margin:1rem 0; padding:0; display:grid; gap:.75rem; }
+.save { display:grid; gap:.7rem; padding:.9rem 1rem; border:1px solid var(--line); border-radius:14px; background:#ffffff08; }
+.save.current { border-color:var(--accent); }
+.save-main { display:grid; gap:.2rem; min-width:0; }
+.save-main strong { font:400 1.2rem Georgia,serif; overflow-wrap:anywhere; }
+.save-main small { color:var(--muted); }
+.save-badge { font:600 .62rem Inter,system-ui,sans-serif; letter-spacing:.12em; text-transform:uppercase; color:var(--accent); border:1px solid var(--accent); border-radius:99px; padding:.1rem .5rem; margin-left:.4rem; vertical-align:middle; }
+.save-actions { display:flex; flex-wrap:wrap; gap:.5rem; }
+.save-actions button { flex:1 1 auto; min-height:44px; }
+.save-actions .danger { color:#ff9d9d; }
+.save-footer { display:grid; gap:.6rem; }

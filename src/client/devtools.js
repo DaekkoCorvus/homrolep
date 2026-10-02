@@ -1,6 +1,7 @@
 // Herramientas de desarrollo: comandos de chat, panel de partida y editor de fichas de NPC (importar/exportar).
-import { state, request, notify, escapeHtml, isDev, setDev, place } from './core.js';
+import { state, request, notify, escapeHtml, isDev, setDev, place, dreq, layer } from './core.js';
 import { setTextSpeed } from './game.js';
+import { openPromptEditor } from './prompteditor.js';
 
 const COMMANDS = [
   ['/dev', 'Activa o desactiva las herramientas de desarrollo'],
@@ -11,6 +12,7 @@ const COMMANDS = [
   ['/ir lugar', 'Te lleva a un lugar sin gastar tiempo (id o nombre)'],
   ['/npc [id]', 'Abre el editor de la ficha de un NPC'],
   ['/fichas', 'Abre el panel con el listado, importar y exportar'],
+  ['/prompts [personaje|texto|gm|social]', 'Abre el editor de prompts (módulos, orden, vista previa)'],
   ['/contacto id', 'Desbloquea el contacto de un NPC (como si lo hubiera compartido)'],
   ['/texto lento|normal|rapido', 'Velocidad con la que se escribe la respuesta del NPC'],
   ['/fx lite|full|auto', 'Calidad de efectos de la escena (lite congela las animaciones)']
@@ -20,7 +22,6 @@ const PORTRAIT_MAX_HEIGHT = 1200;
 const norm = (value) => String(value ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
 const lines = (value) => (Array.isArray(value) ? value.join('\n') : '');
 
-const dreq = (url, options = {}) => request(url, { ...options, dev: true });
 let hooks = { perform() {}, runDev() {}, reload() {}, setFx() {} }; // lo sustituye initDevtools al entrar en el juego
 export const initDevtools = (value) => { hooks = value; };
 
@@ -69,20 +70,12 @@ export async function runCommand(text) {
     if (argument) { const cards = await dreq('/api/dev/npcs'); const card = cards.find((item) => item.id === norm(argument) || norm(item.name).startsWith(norm(argument))); if (card) openEditor(card); else notify('No encontré ese NPC.'); }
     else openPanel();
   } else if (command === '/fichas') openPanel();
+  else if (command === '/prompts' || command === '/prompt') {
+    const kinds = { personaje: 'character', character: 'character', texto: 'text', text: 'text', gm: 'gm', social: 'social' };
+    openPromptEditor(kinds[norm(argument)] ?? 'character');
+  }
   else notify('Comando desconocido. Escribe /ayuda.');
   return true;
-}
-
-function layer(className, html) {
-  document.querySelector(`.${className}`)?.remove();
-  const node = document.createElement('div');
-  node.className = `dev-layer ${className}`;
-  node.innerHTML = html;
-  document.body.append(node);
-  requestAnimationFrame(() => node.classList.add('open'));
-  node.addEventListener('click', (event) => { if (event.target === node) node.remove(); });
-  node.querySelectorAll('[data-close]').forEach((button) => button.onclick = () => node.remove());
-  return node;
 }
 
 export async function openPanel() {
@@ -93,6 +86,8 @@ export async function openPanel() {
     <section><h3>Partida</h3><div class="dev-buttons">
       <button type="button" data-act="restart">Reiniciar cita</button><button type="button" data-act="regen">Regenerar respuesta</button>
       <button type="button" data-act="hour">+1 hora</button></div></section>
+    <section><h3>Prompts</h3><div class="dev-buttons"><button type="button" data-prompts="character">Personaje</button><button type="button" data-prompts="text">Texto</button><button type="button" data-prompts="gm">GM</button><button type="button" data-prompts="social">Social</button></div>
+      <p class="dev-hint">Edita los módulos que se envían al modelo, su orden y su vista previa.</p></section>
     <section><h3>Fichas de NPC</h3><div class="dev-list">${cards.map((card) => `<div class="dev-row"><span><strong>${escapeHtml(card.name)}</strong><small>${escapeHtml(card.id)} · ${escapeHtml(card.role || 'sin rol')}</small></span><button type="button" data-edit="${escapeHtml(card.id)}">Editar</button><button type="button" data-export="${escapeHtml(card.id)}">Exportar</button></div>`).join('')}</div>
       <div class="dev-buttons"><button type="button" data-new>Nuevo NPC</button><label class="file-button">Importar ficha<input type="file" accept=".json,.png,application/json,image/png" hidden data-import></label></div>
       <p class="dev-hint">Importa JSON propio, fichas «character card» v1/v2/v3 (JSON o PNG). También puedes dejar archivos en <code>data/canon/npcs/</code> y <code>assets/portraits/&lt;id&gt;/default.png</code> y reiniciar el servidor.</p></section>
@@ -103,6 +98,7 @@ export async function openPanel() {
   node.querySelectorAll('[data-edit]').forEach((button) => button.onclick = () => openEditor(cards.find((card) => card.id === button.dataset.edit)));
   node.querySelectorAll('[data-export]').forEach((button) => button.onclick = () => exportCard(cards.find((card) => card.id === button.dataset.export)));
   node.querySelector('[data-new]').onclick = () => openEditor(null);
+  node.querySelectorAll('[data-prompts]').forEach((button) => button.onclick = () => openPromptEditor(button.dataset.prompts));
   node.querySelector('[data-import]').onchange = (event) => importFile(event.target.files[0]);
 }
 

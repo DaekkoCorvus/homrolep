@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { resolveDue, validateAgreements, addCommitments, applyUpdates, settleCommitments, keepMeetings, meetingNpcIds, commitmentsFor } from '../src/server/game/commitments.js';
 import { createRun } from '../src/server/game/run.js';
-import { characterRules, GM_EVALUATION_RULES } from '../src/server/ai/prompts.js';
+import { characterRules, GM_FORMATS } from '../src/server/ai/prompts.js';
+import { compose, defaultPreset } from '../src/server/ai/composer.js';
 import { createAppServer } from '../src/server/index.js';
 
 const places = ['cafe', 'park', 'store'];
@@ -110,8 +111,9 @@ test('character and GM prompts are separate roles and the character prompt never
   assert.doesNotMatch(character, /Heroes of Misery|NPC|jugador/i, 'el personaje no ve el juego');
   assert.match(character, /entre 1 y 6 frases/);
   assert.doesNotMatch(character, /finge|fingir|haz como que no sabes/i, 'la información limitada la impone el motor, no se le pide actuar');
-  assert.match(GM_EVALUATION_RULES, /traductor hacia el motor/);
-  assert.match(GM_EVALUATION_RULES, /no interpretas a nadie/);
+  const gm = compose('gm', 'evaluation', defaultPreset('gm'), { data: {}, format: GM_FORMATS.evaluation }).map((message) => message.content).join('\n');
+  assert.match(gm, /traductor hacia el motor/);
+  assert.match(gm, /no interpretas a ningún personaje/);
 });
 
 test('API: closing registers confirmed agreements; chats and the feed are processed in one background batch when the player acts', async (t) => {
