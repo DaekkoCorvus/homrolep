@@ -8,8 +8,8 @@ const task = { label: 'Instrucción del turno', description: 'El texto de «Inst
 const format = { label: 'Formato de salida', description: 'JSON que el motor sabe leer. Obligatorio: puedes moverlo, no quitarlo ni editarlo.', special: true, locked: true };
 
 const DIALOGUE_AUTOS = {
-  card: { label: 'Ficha del personaje', description: 'Apariencia, personalidad, trasfondo, conocimientos, secretos y conexiones de la tarjeta del NPC.', keys: ['tu'], role: 'system' },
-  world: { label: 'Mundo y momento', description: 'Fecha y hora del juego y el lugar donde ocurre la escena.', keys: ['ahora', 'lugar'], role: 'user' },
+  card: { label: 'Ficha del personaje', description: 'Capa básica (nombre, rol, resumen, personalidad y voz), siempre; y la capa profunda (trasfondo, apariencia, conocimientos, secretos, conexiones) solo con las entradas que vienen al caso por lo que se está hablando. El personaje puede pedir más con la herramienta recall.', keys: ['tu', 'tuMemoria'], role: 'system' },
+  world: { label: 'Mundo y momento', description: 'Una línea de texto con la fecha y hora del juego y el lugar de la escena.', keys: ['escena'], role: 'user', text: true },
   persona: { label: 'Lo que sabe del jugador', description: 'Solo lo que el personaje puede saber: lo que ve, el nombre que le dieron y lo que le han contado. Nunca el nombre real si no se lo dijeron.', keys: ['loQueSabesDeLaOtraPersona'], role: 'user' },
   relationship: { label: 'Relación y recuerdos', description: 'Actitud actual, última conversación, impresiones privadas (notas del GM) y resúmenes previos.', keys: ['vuestraRelacion'], role: 'user' },
   commitments: { label: 'Pendientes', description: 'Citas, encargos y promesas vigentes con esta persona.', keys: ['pendientesConEstaPersona'], role: 'user' },
@@ -37,18 +37,18 @@ export const KINDS = {
   },
   gm: {
     label: 'GM', short: 'GM',
-    description: 'Interpreta conversaciones al cerrarlas, narra acciones que el motor ya aplicó, procesa chats pendientes y, en una acción libre, puede solicitar un encuentro con alguien presente mediante talkTo. El servidor valida sus datos y aplica los cambios permitidos.',
-    modes: [{ id: 'evaluation', label: 'Evalúa una conversación' }, { id: 'narration', label: 'Narra acción libre' }, { id: 'action', label: 'Narra otras acciones' }, { id: 'chats', label: 'Procesa chats pendientes' }],
+    description: 'Interpreta conversaciones al cerrarlas, narra acciones que el motor ya aplicó, y, en una acción libre usa las herramientas del motor (viajar, esperar, conversar, intentar algo sin mecánica…). El servidor valida cada llamada y aplica solo los cambios permitidos.',
+    modes: [{ id: 'evaluation', label: 'Evalúa una conversación' }, { id: 'free', label: 'Mundo libre (con herramientas)' }, { id: 'action', label: 'Narra otras acciones' }],
     macros: [['player', 'Nombre real del jugador'], ['user', 'Igual que player'], ['char', 'Personaje evaluado (si aplica)'], ['location', 'Lugar actual'], ['time', 'Fecha y hora del juego'], ['mode', 'Tipo de llamada']],
     autos: {
       player: { label: 'Jugador', description: 'Nombre, edad, género, origen, ocupación, dinero y reputación del jugador. El GM lo sabe todo.', keys: ['jugador'], role: 'user' },
+      ambient: { label: 'Cabecera ambiente', description: 'Texto compacto que calcula el motor: hora y día, lugar, quién está aquí, pendientes y mapa. Obligatorio en el mundo libre: sin él el modelo tendría que consultarlo todo.', keys: ['cabecera'], role: 'user', text: true, required: true },
       world: { label: 'Mundo y lugar', description: 'Hora, estado del mundo, lugar actual y anterior, y prólogo.', keys: ['ahora', 'mundo', 'lugar', 'lugarAnterior', 'prologo'], role: 'user' },
-      events: { label: 'Sucesos y acción', description: 'Sucesos recientes y la acción que acaba de hacer el jugador.', keys: ['sucesosRecientes', 'accion'], role: 'user' },
-      present: { label: 'Personas presentes', description: 'Quién está en el lugar (para abrir un encuentro).', keys: ['personasPresentes'], role: 'user' },
+      events: { label: 'Sucesos y acción', description: 'Sucesos recientes (en líneas cortas), la última narración y la acción que acaba de hacer el jugador.', keys: ['sucesosRecientes', 'ultimaNarracion', 'accion'], role: 'user' },
       character: { label: 'Personaje evaluado', description: 'Resumen y personalidad del personaje de la conversación.', keys: ['personaje'], role: 'user' },
       relationship: { label: 'Relación y recuerdos', description: 'Actitud previa, última conversación y recuerdos privados del personaje.', keys: ['relacion'], role: 'user' },
       pending: { label: 'Pendientes y lugares', description: 'Acuerdos vigentes (con id) y lugares del mapa.', keys: ['pendientes', 'lugares'], role: 'user' },
-      history: { label: 'Conversación o chats', description: 'La conversación a evaluar o los chats pendientes de procesar.', keys: ['conversacion', 'chats'], role: 'user' },
+      history: { label: 'Conversación', description: 'La conversación a evaluar.', keys: ['conversacion'], role: 'user' },
       task, format
     },
     tasks: GM_TASKS
@@ -59,7 +59,7 @@ export const KINDS = {
     modes: [{ id: 'post', label: 'Genera publicaciones del feed' }, { id: 'reply', label: 'Reacciona al jugador' }],
     macros: [['player', 'Nombre real del jugador'], ['time', 'Fecha y hora del juego'], ['mode', 'Tipo de llamada']],
     autos: {
-      world: { label: 'Momento y ciudad', description: 'Fecha y hora del juego, ciudad y lugares (color local para las publicaciones).', keys: ['ahora', 'dia', 'ciudad', 'lugares'], role: 'user' },
+      world: { label: 'Momento y ciudad', description: 'Fecha y hora del juego, ciudad, lugares y avisos del motor (hace cuánto se generó el feed, cómo les fue las publicaciones del jugador…).', keys: ['ahora', 'dia', 'ciudad', 'lugares', 'avisos'], role: 'user' },
       accounts: { label: 'Cuentas conocidas', description: 'Cuentas con la popularidad que fija el motor (p. ej. @RexNova) y los contactos del jugador con su personalidad y lo que hacen ahora. El modelo puede añadir cuentas nuevas.', keys: ['cuentas'], role: 'user' },
       player: { label: 'Jugador en la red', description: 'Su usuario y su popularidad (baja al empezar: crece con su reputación).', keys: ['jugador'], role: 'user' },
       feed: { label: 'Publicaciones recientes', description: 'Lo ya publicado, para no repetirse.', keys: ['recientes'], role: 'user' },
@@ -93,7 +93,7 @@ const ENGINE_TEXT = {
 const DEFAULT_ORDER = {
   character: ['main', 'language', 'engine', 'format', 'card', 'world', 'persona', 'relationship', 'commitments', 'contact', 'emotions', 'intent', 'history', 'task'],
   text: ['main', 'language', 'engine', 'format', 'card', 'world', 'persona', 'relationship', 'commitments', 'history', 'task'],
-  gm: ['main', 'language', 'task', 'format', 'player', 'world', 'events', 'present', 'character', 'relationship', 'pending', 'history'],
+  gm: ['main', 'language', 'task', 'format', 'ambient', 'player', 'world', 'events', 'character', 'relationship', 'pending', 'history'],
   social: ['main', 'language', 'task', 'format', 'world', 'accounts', 'player', 'feed', 'thread']
 };
 const GM_TASK_ROLE = 'system';
@@ -135,7 +135,7 @@ export function normalizePreset(kind, input) {
   }
   // El formato de salida y la instrucción del turno son obligatorios: si faltan vuelven a su sitio de fábrica (al final);
   // si estaban desactivados se reactivan. Sin ellos el motor no sabría qué pedir ni cómo leer la respuesta.
-  for (const key of ['task', 'format']) {
+  for (const key of ['task', 'format', ...Object.keys(spec.autos).filter((name) => spec.autos[name].required)]) {
     const required = modules.find((item) => item.auto === key);
     if (!required) modules.push(structuredClone(defaults.modules.find((item) => item.auto === key)));
     else { required.enabled = true; delete required.modes; }
@@ -157,6 +157,7 @@ export function expand(text, macros = {}) {
 
 const present = (value) => value !== undefined && value !== null && !(Array.isArray(value) && !value.length) && !(typeof value === 'string' && !value.trim());
 function renderAuto(auto, data = {}) {
+  if (auto.text) return auto.keys.map((key) => data[key]).filter((value) => typeof value === 'string' && value.trim()).join('\n');
   const picked = {};
   for (const key of auto.keys) if (present(data[key])) picked[key] = data[key];
   return Object.keys(picked).length ? JSON.stringify(picked) : '';

@@ -15,41 +15,65 @@ function landing() {
   app.querySelector('[data-settings]').onclick = () => openSettings(landing);
 }
 
+const CUSTOM_MODEL = '__custom__';
+
 async function openSettings(onDone = landing, message = '', onBack = onDone) {
   let settings;
   try { settings = await request('/api/ai/settings'); }
   catch (error) { notify(error.message); return; }
-  const selectedModel = GM_PROFILES.some(({id})=>id===settings.model) ? settings.model : GM_PROFILES[0].id;
-  const selectedProfile = GM_PROFILES.find(({id})=>id===settings.model);
-  const hasKey=settings.hasKey ?? settings.configured;
-  const connectionLabel=settings.configured?`Conexión comprobada · ${selectedProfile?.name || 'GM'}`:hasKey?'API key guardada · Elige y comprueba tu GM':'Aún no hay una conexión configurada.';
-  app.innerHTML = `<main class="landing"><section class="settings-card card scene-enter"><p class="eyebrow">La voz de tu mundo</p><h1>Ajustes de IA</h1><p>Conecta tu cuenta de <a href="https://nano-gpt.com" target="_blank" rel="noopener noreferrer">NanoGPT</a> y elige quién narrará tu partida.</p><p class="connection-status" id="connection-status">${connectionLabel}</p>${message?`<p class="field-note">${escapeHtml(message)}</p>`:''}<form class="form" id="ai-settings"><label>API key de NanoGPT<input name="apiKey" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="text" maxlength="4096" placeholder="${hasKey?'Guardada · deja vacío para conservarla':'Pega aquí tu API key'}" ${hasKey?'':'required'}></label><fieldset class="gm-options"><legend>Elige tu GM</legend>${GM_PROFILES.map((profile)=>`<label class="gm-option"><input type="radio" name="model" value="${profile.id}" ${selectedModel===profile.id?'checked':''} required><span class="gm-copy"><strong>${profile.name}</strong><small class="gm-tagline">${profile.tagline}</small><small>${profile.description}</small></span><span class="gm-check" aria-hidden="true">✧</span></label>`).join('')}</fieldset><p class="field-note">La prueba, las frases de la entidad y las narraciones pueden consumir saldo o cuota. Tu personaje, acciones e historia reciente se envían a NanoGPT. La API key se guarda en este dispositivo, fuera de las partidas.</p><p id="settings-message" role="status" aria-live="polite"></p><button class="primary" type="submit">Probar y guardar</button><button type="button" data-forget ${hasKey?'':'hidden'}>Olvidar API key</button><button type="button" data-saves>Partidas guardadas</button><button type="button" data-import-card>Importar ficha de personaje</button><button type="button" data-done>Volver</button></form></section></main>`;
+  const preset = (id) => GM_PROFILES.find((profile) => profile.id === id);
+  const modelName = (id) => preset(id)?.name || id || 'GM';
+  const hasKey = settings.hasKey ?? settings.configured;
+  const isCustom = Boolean(settings.model) && !preset(settings.model);
+  const selectedModel = isCustom ? CUSTOM_MODEL : preset(settings.model) ? settings.model : GM_PROFILES[0].id;
+  const connectionText = (current) => current.configured
+    ? `Modelo guardado · ${modelName(current.model)} · ${current.verifiedAt ? 'conexión comprobada' : 'sin comprobar (se prueba al jugar)'}`
+    : hasKey ? 'API key guardada · Elige un modelo' : 'Aún no hay una conexión configurada.';
+  app.innerHTML = `<main class="landing"><section class="settings-card card scene-enter"><p class="eyebrow">La voz de tu mundo</p><h1>Ajustes de IA</h1><p>Conecta tu cuenta de <a href="https://nano-gpt.com" target="_blank" rel="noopener noreferrer">NanoGPT</a> y elige quién narrará tu partida.</p><p class="connection-status" id="connection-status">${escapeHtml(connectionText(settings))}</p>${message?`<p class="field-note">${escapeHtml(message)}</p>`:''}<form class="form" id="ai-settings"><label>API key de NanoGPT<input name="apiKey" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="text" maxlength="4096" placeholder="${hasKey?'Guardada · deja vacío para conservarla':'Pega aquí tu API key'}" ${hasKey?'':'required'}></label><fieldset class="gm-options"><legend>Elige tu GM</legend>${GM_PROFILES.map((profile)=>`<label class="gm-option"><input type="radio" name="model" value="${profile.id}" ${selectedModel===profile.id?'checked':''} required><span class="gm-copy"><strong>${profile.name}</strong><small class="gm-tagline">${profile.tagline}</small><small>${profile.description}</small></span><span class="gm-check" aria-hidden="true">✧</span></label>`).join('')}<label class="gm-option"><input type="radio" name="model" value="${CUSTOM_MODEL}" ${selectedModel===CUSTOM_MODEL?'checked':''} required><span class="gm-copy"><strong>Otro modelo</strong><small class="gm-tagline">Para probar y comparar</small><small>Escribe el identificador de cualquier modelo de NanoGPT, por ejemplo <code>deepseek/deepseek-v4.1-flash</code>.</small></span><span class="gm-check" aria-hidden="true">✧</span></label><div class="custom-model" ${selectedModel===CUSTOM_MODEL?'':'hidden'}><input name="customModel" list="nano-models" value="${isCustom?escapeHtml(settings.model):''}" maxlength="200" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="proveedor/modelo" aria-label="Identificador del modelo"><datalist id="nano-models"></datalist><button type="button" data-list-models>Ver modelos de NanoGPT</button></div></fieldset><p class="field-note">Guardar es instantáneo y no llama al modelo, así que puedes cambiar de uno a otro para comparar respuestas. «Probar conexión» es opcional y puede consumir una pizca de saldo. Tu personaje, acciones e historia reciente se envían a NanoGPT. La API key se guarda en este dispositivo, fuera de las partidas.</p><p id="settings-message" role="status" aria-live="polite"></p><button class="primary" type="submit">Guardar</button><button type="button" data-verify>Probar conexión</button><button type="button" data-forget ${hasKey?'':'hidden'}>Olvidar API key</button><button type="button" data-saves>Partidas guardadas</button><button type="button" data-import-card>Importar ficha de personaje</button><button type="button" data-done>Volver</button></form></section></main>`;
   window.scrollTo(0, 0);
   const form = app.querySelector('#ai-settings');
   const feedback = app.querySelector('#settings-message');
   const keyInput = form.elements.apiKey;
+  const customBox = form.querySelector('.custom-model');
   function busy(value) { form.querySelectorAll('button, input').forEach((element) => element.disabled=value); }
   function status(text, error = false) { feedback.textContent=text; feedback.className=error?'error':'field-note'; }
+  const chosenModel = () => {
+    const picked = new FormData(form).get('model');
+    return picked === CUSTOM_MODEL ? String(form.elements.customModel.value).trim() : picked;
+  };
+  form.querySelectorAll('input[name=model]').forEach((radio) => radio.onchange = () => {
+    customBox.hidden = form.elements.model.value !== CUSTOM_MODEL;
+    if (!customBox.hidden) form.elements.customModel.focus();
+  });
   form.querySelector('[data-import-card]').onclick = pickAndImportCard;
   form.querySelector('[data-saves]').onclick = () => openSaves(() => openSettings(onDone, message, onBack));
-  form.querySelector('[data-done]').onclick = () => {
-    const supported = GM_PROFILES.some(({id})=>id===settings.model);
-    if (settings.configured && supported) onDone(); else onBack();
-  };
-  form.onsubmit = async (event) => {
-    event.preventDefault();
-    const input = Object.fromEntries(new FormData(form));
-    busy(true); status('Comprobando la conexión con NanoGPT…');
+  form.querySelector('[data-done]').onclick = () => { if (settings.configured) onDone(); else onBack(); };
+  form.querySelector('[data-list-models]').onclick = async () => {
+    busy(true); status('Cargando los modelos de NanoGPT…');
     try {
-      settings = await request('/api/ai/settings', { method:'POST', body:JSON.stringify(input) });
+      const { models } = await request('/api/ai/models', { method:'POST', body:JSON.stringify({ apiKey:keyInput.value }) });
+      form.querySelector('#nano-models').innerHTML = models.map(({ id }) => `<option value="${escapeHtml(id)}"></option>`).join('');
+      status(`${models.length} modelos disponibles: escribe para filtrar la lista.`);
+    } catch (error) { status(error.message, true); }
+    finally { busy(false); form.elements.customModel.focus(); }
+  };
+  // `verify` = además de guardar, comprueba la conexión con una llamada corta (opcional).
+  async function save(verify) {
+    const model = chosenModel();
+    if (!model) { status('Escribe el identificador del modelo.', true); return; }
+    busy(true); status(verify ? 'Comprobando la conexión con NanoGPT…' : 'Guardando…');
+    try {
+      settings = await request('/api/ai/settings', { method:'POST', body:JSON.stringify({ apiKey:keyInput.value, model, verify }) });
       keyInput.value=''; keyInput.required=false; keyInput.placeholder='Guardada · deja vacío para conservarla';
-      app.querySelector('#connection-status').textContent=`Conexión comprobada · ${GM_PROFILES.find(({id})=>id===settings.model)?.name || 'GM'}`;
+      app.querySelector('#connection-status').textContent=connectionText(settings);
       form.querySelector('[data-forget]').hidden=false;
-      status('Conexión correcta. Ya puedes continuar.');
+      status(verify ? 'Conexión correcta. Ya puedes continuar.' : `Guardado: ${modelName(settings.model)}. Ya puedes continuar.`);
       form.querySelector('[data-done]').textContent='Continuar';
     } catch (error) { status(error.message, true); }
     finally { busy(false); }
-  };
+  }
+  form.onsubmit = (event) => { event.preventDefault(); save(false); };
+  form.querySelector('[data-verify]').onclick = () => save(true);
   form.querySelector('[data-forget]').onclick = async () => {
     busy(true);
     try {
@@ -88,7 +112,7 @@ const alive = (token) => state.creation?.token === token;
 async function startCreation() {
   try {
     const settings = await request('/api/ai/settings');
-    if (!settings.configured || !GM_PROFILES.some(({id})=>id===settings.model)) return openSettings(() => startCreation(), 'Antes de crear tu personaje, conecta NanoGPT y elige uno de los GM disponibles.', confirmNewGame);
+    if (!settings.configured) return openSettings(() => startCreation(), 'Antes de crear tu personaje, conecta NanoGPT y elige un modelo.', confirmNewGame);
   } catch (error) { notify(error.message); return; }
   const token = (state.creation?.token || 0) + 1;
   state.creation = { token, data:{ name:'', age:'', gender:'', genderCustom:'', race:'human', appearance:'', origin:'' }, creationError:'' };

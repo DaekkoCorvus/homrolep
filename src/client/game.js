@@ -1,6 +1,7 @@
 import { state, app, request, notify, activeSignal, timeText, clockText, period, place, escapeHtml, isDev } from './core.js';
 import { initDevtools, runCommand, openPanel } from './devtools.js';
 import { sceneMarkup, applySky, SCENE_META } from './scenes.js';
+import { threadView as chatThreadView, bindChat } from './chat.js';
 import { feedView, notificationsView, setupView, profileView, meButton, bindFeed, enterFeed, markRead } from './northlife.js';
 
 const ui = { phoneOpen:false, phoneView:'home', busy:false, sceneKey:null, hooks:{} };
@@ -119,6 +120,7 @@ function wire() {
 
 export function updateGame({ announce=false }={}) {
   const root = app.querySelector('.game'); if (!root) return;
+  watchBackground();
   const { run } = state; const loc = place(run.player.locationId);
   const clock = root.querySelector('.clock-text'); clock.textContent = timeText(run.world);
   root.querySelector('.ps-time').textContent = clockText(run.world);
@@ -427,7 +429,7 @@ function northlifeApp() {
   if (!state.run.social?.profile?.created) return setupView(nlContext());
   const tabs = [['feed', 'Feed'], ['notifs', 'Notificaciones'], ['chats', 'Chats'], ['agenda', 'Agenda']];
   const badge = (id) => (id === 'agenda' && pending ? ` <i class="nl-badge">${pending}</i>` : id === 'notifs' && unread ? ` <i class="nl-badge">${unread}</i>` : '');
-  const body = ui.nlTab === 'chats' ? (ui.chatWith ? threadView() : chatsTab()) : ui.nlTab === 'agenda' ? agendaTab() : ui.nlTab === 'notifs' ? notificationsView() : ui.nlTab === 'profile' ? profileView(nlContext()) : feedView(nlContext());
+  const body = ui.nlTab === 'chats' ? (ui.chatWith ? chatThread() : chatsTab()) : ui.nlTab === 'agenda' ? agendaTab() : ui.nlTab === 'notifs' ? notificationsView() : ui.nlTab === 'profile' ? profileView(nlContext()) : feedView(nlContext());
   return `<nav class="nl-tabs">${tabs.map(([id, label]) => `<button type="button" data-nl="${id}" class="${ui.nlTab === id ? 'active' : ''}">${label}${badge(id)}</button>`).join('')}</nav>${body}`;
 }
 
@@ -450,13 +452,11 @@ function chatsTab() {
   return `<form id="contact-form"><input name="handle" placeholder="@usuario" autocapitalize="none" autocomplete="off" spellcheck="false" maxlength="30" required><button type="submit">Agregar contacto</button><p class="error" data-contact-error role="alert"></p></form>${list}`;
 }
 
-function threadView() {
+// El chat en ráfagas vive en chat.js (enviar mensajes, pasar el turno, «visto/escribiendo…» y respuestas directas).
+const chatContext = () => ({ ui, hourOf, initial, refresh: () => updateGame() });
+function chatThread() {
   const npc = (state.run.contacts ?? []).find((item) => item.id === ui.chatWith);
-  if (!npc) return '<p class="empty">Contacto no disponible.</p>';
-  const messages = (state.run.chats?.[npc.id] ?? []).map((message) => `<div class="bubble ${message.who === 'player' ? 'you' : 'them'}">${escapeHtml(message.text)}<time>${hourOf(message.time)}</time></div>`);
-  if (ui.chatPending) messages.push(`<div class="bubble you">${escapeHtml(ui.chatPending)}</div><div class="bubble them typing"><i></i><i></i><i></i></div>`);
-  return `<div class="thread-head"><span class="avatar">${initial(npc.name)}</span><strong>${escapeHtml(npc.name)}</strong></div><div class="thread">${messages.join('') || '<p class="empty">Aún no hay mensajes. Saluda.</p>'}</div>
-    <form id="chat-form"><textarea name="text" rows="1" maxlength="4000" placeholder="Escribe un mensaje…" required></textarea><button type="submit" class="send-chat" aria-label="${ui.chatBusy ? 'Detener' : 'Enviar'}">${icon(ui.chatBusy ? STOP_ICON : SEND_ICON)}</button></form><p class="error" data-chat-error role="alert"></p>`;
+  return npc ? chatThreadView(npc, chatContext()) : '<p class="empty">Contacto no disponible.</p>';
 }
 
 function agendaTab() {
@@ -477,23 +477,7 @@ function bindNorthlife(screen) {
   });
   bindFeed(screen, nlContext());
   screen.querySelectorAll('[data-chat]').forEach((button) => button.onclick = () => { ui.chatWith = button.dataset.chat; renderPhone(); });
-  const thread = screen.querySelector('.thread'); if (thread) thread.scrollTop = thread.scrollHeight;
-  const form = screen.querySelector('#chat-form'); if (!form) return;
-  form.querySelector('.send-chat').addEventListener('click', (event) => { if (ui.chatBusy) { event.preventDefault(); ui.chatAbort?.abort(); } });
-  form.onsubmit = async (event) => {
-    event.preventDefault();
-    if (ui.chatBusy) return;
-    const text = new FormData(form).get('text').toString().trim(); if (!text) return;
-    const npcId = ui.chatWith;
-    ui.chatBusy = true; ui.chatPending = text; ui.chatAbort = new AbortController(); activeSignal.current = ui.chatAbort.signal;
-    renderPhone();
-    try {
-      state.run = await request(`/api/runs/${state.run.id}/chat`, { method: 'POST', body: JSON.stringify({ npcId, text }) });
-    } catch (error) {
-      if (error.name !== 'AbortError') ui.chatError = error.message; else notify('Mensaje detenido.');
-      await reloadRun();
-    } finally { activeSignal.current = null; ui.chatBusy = false; ui.chatPending = null; ui.chatAbort = null; updateGame(); renderPhone(); const failure = app.querySelector('[data-chat-error]'); if (failure && ui.chatError) { failure.textContent = ui.chatError; ui.chatError = ''; } }
-  };
+  bindChat(screen, chatContext());
 }
 
 const npcName = (id) => state.run.sharedContacts?.find((npc) => npc.id === id)?.name ?? state.run.contacts?.find((npc) => npc.id === id)?.name ?? state.run.encounterNpc?.name ?? state.run.presence?.find((npc) => npc.id === id)?.name ?? id;
@@ -542,6 +526,34 @@ function setSendMode(busy) {
 }
 
 function stopGeneration() { ui.controller?.abort(); }
+
+// Trabajo de fondo del servidor (la reflexión del GM al cerrar una conversación, el feed de NorthLife): la partida ya está guardada y se puede
+// seguir jugando; mientras haya algo pendiente se consulta de vez en cuando y la pantalla solo se refresca si llegó algo nuevo.
+let backgroundTimer = null;
+const backgroundSignature = (run) => JSON.stringify([run.pending, (run.commitments ?? []).length, run.social?.posts?.length, run.social?.unread, (run.social?.posts ?? []).reduce((total, post) => total + (post.replies?.length ?? 0), 0)]);
+function watchBackground() {
+  clearTimeout(backgroundTimer);
+  const pending = state.run?.pending;
+  if (!pending?.evaluation && !pending?.feed && !pending?.reactions?.length) return;
+  backgroundTimer = setTimeout(async () => {
+    if (!app.querySelector('.game')) return;
+    if (!ui.busy) {
+      try {
+        const fresh = await request(`/api/runs/${state.run.id}`);
+        if (!ui.busy) {
+          const changed = backgroundSignature(fresh) !== backgroundSignature(state.run);
+          const newPlans = (fresh.commitments ?? []).length > (state.run.commitments ?? []).length;
+          const newNews = (fresh.social?.unread ?? 0) > (state.run.social?.unread ?? 0);
+          state.run = fresh;
+          if (changed) updateGame();
+          if (newPlans) notify('Anotado en tu Agenda de NorthLife.');
+          else if (newNews) { notify('NorthLife: tienes novedades.'); try { navigator.vibrate?.(30); } catch { /* sin vibración */ } }
+        }
+      } catch { /* se reintenta en el siguiente ciclo */ }
+    }
+    watchBackground();
+  }, 5000);
+}
 
 async function reloadRun() {
   try { state.run = await request(`/api/runs/${state.run.id}`); } catch { /* se queda con el estado actual */ }

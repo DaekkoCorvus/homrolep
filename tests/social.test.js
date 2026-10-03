@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import path from 'node:path';
 import { loadNpcs, presentNpcs, validateEvaluation, applyEvaluation, affinityOf, emptyRelationship, validateFacts, contactAllowed, MAX_SHIFT_PER_ENCOUNTER, temporalContext, timedNotes, findNpcByHandle } from '../src/server/game/npcs.js';
-import { createRun, startEncounter, addExchange, endEncounter, applyAction, addContact, grantContact, leaveEncounter } from '../src/server/game/run.js';
+import { applyAction } from '../src/server/ai/tools/game.js';
+import { createRun, startEncounter, addExchange, endEncounter, addContact, grantContact, leaveEncounter } from '../src/server/game/run.js';
 import { createNanoGPT } from '../src/server/ai/provider.js';
 import { createAppServer } from '../src/server/index.js';
 
@@ -134,7 +135,10 @@ test('provider parses NPC replies and evaluations and rejects malformed output',
   const context = { npc: luna, player: { ...profile, name: 'Mara' }, world: at(1, 8), location: { name: "Luna's Coffee", description: 'x' }, relationship: emptyRelationship(), attitude: 'neutral', transcript: [], temporal: { ahora: 'día 1 (lunes), 08:00', ultimaConversacion: null }, memories: [], history: [] };
   const ok = await createNanoGPT(reply('```json\n{"say":"Buenos días.","gesture":"levanta la vista"}\n```')).npcReply({ ...context, opening: true }, config);
   assert.deepEqual(ok, { say: 'Buenos días.', gesture: 'levanta la vista', intent: '' });
-  await assert.rejects(createNanoGPT(reply('no es json')).npcReply(context, config), { code: 'AI_RESPONSE' });
+  assert.equal((await createNanoGPT(reply('Hola, ¿qué te pongo?')).npcReply(context, config)).say, 'Hola, ¿qué te pongo?', 'el personaje responde con texto: ya no hace falta JSON');
+  const acted = await createNanoGPT(reply('*seca una taza* {feliz} Buenas.')).npcReply(context, config);
+  assert.deepEqual([acted.gesture, acted.say], ['seca una taza', '{feliz} Buenas.'], 'la acción entre asteriscos al principio es el gesto');
+  await assert.rejects(createNanoGPT(reply('   ')).npcReply(context, config), { code: 'AI_RESPONSE' });
   await assert.rejects(createNanoGPT(reply('{"say":"  "}')).npcReply(context, config), { code: 'AI_RESPONSE' });
   const raw = await createNanoGPT(reply('{"notes":[],"contactOffer":false,"farewell":"Adiós"}')).evaluateEncounter(context, config);
   assert.equal(raw.farewell, 'Adiós');

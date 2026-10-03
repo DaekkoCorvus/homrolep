@@ -6,6 +6,7 @@
 import { randomUUID } from 'node:crypto';
 import { minutesOfWorld, scheduleFor } from './npcs.js';
 import { advanceTime } from './clock.js';
+import { socialNotices } from '../ai/context/notices.js';
 
 export const MAX_TEXT = 280;
 export const GENERATION_GAP = 600;           // minutos de juego entre generaciones espontáneas (≈ 1–2 al día)
@@ -489,13 +490,13 @@ export function socialInput(run, mode, { npcs, seeds = [], places = [], ahora, e
 
   const contacts = contactNpcs.map((npc) => ({
     usuario: npc.contact.handle, nombre: npc.name, popularidad: directory.get(handleKey(npc.contact.handle))?.popularity ?? 25, contactoDelJugador: true,
-    resumen: npc.summary, personalidad: npc.personality, haciendoAhora: scheduleFor(npc, run.world)?.activity ?? 'fuera de su horario habitual'
+    resumen: npc.summary, personalidad: { rasgos: npc.personality?.traits, habla: npc.personality?.speech }, haciendoAhora: scheduleFor(npc, run.world)?.activity ?? 'fuera de su horario habitual'
   }));
   const excerpt = (post) => ({ usuario: post.handle, hora: post.time, texto: post.text.slice(0, PROMPT_LIMITS.excerpt) });
   const visible = social.posts.filter((post) => post.minutes <= now).slice(0, PROMPT_LIMITS.posts - 4).map(excerpt);
   const upcoming = social.posts.filter((post) => post.minutes > now).slice(-4).map(excerpt);
   return {
-    mode, ahora, dia: run.world.day, ciudad: 'Porta Magna', lugares: places, cuentas: [...contacts, ...seedAccounts.map(describe), ...forced.map(describe), ...sampled.map(describe)],
+    mode, ahora, dia: run.world.day, ciudad: 'Porta Magna', lugares: places, avisos: socialNotices(run, npcs), cuentas: [...contacts, ...seedAccounts.map(describe), ...forced.map(describe), ...sampled.map(describe)],
     recientes: [...visible, ...upcoming],
     jugador: { usuario: playerHandle(run.player), nombre: run.player.name, descripcion: social.profile.bio || undefined, popularidad: playerPopularity(run.player) }, ...extra
   };

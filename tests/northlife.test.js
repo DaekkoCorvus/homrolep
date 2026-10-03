@@ -123,9 +123,9 @@ test('spontaneous generation is due at most about twice per game day', () => {
   assert.equal(feedDue({ ...done, world: { ...done.world, hour: 9 + GENERATION_GAP / 60, minute: 0 } }), true);
 });
 
-test('API: the feed fills itself in the background, the player\'s posts get a reaction in the same request and a failure changes nothing', async (t) => {
+test('API: the feed fills itself in the background, posts are saved at once and the network reacts afterwards, and a failed reaction is retried then dropped', async (t) => {
   const runs = new Map(); const calls = { posts: 0, reply: [] };
-  let failReply = false;
+  let failReply = false; let hold = null; let replyAttempts = 0;
   const ai = {
     npcReply: async () => ({ say: 'Hola' }), narrate: async () => 'Pasa el tiempo.', prologue: async () => ({ text: 'Llegas.', locationId: 'station' }),
     socialPosts: async (input) => {
@@ -136,7 +136,9 @@ test('API: the feed fills itself in the background, the player\'s posts get a re
       return [{ usuario: '@RexNova', hora: '08:00', texto: 'Hoy NorthLife cumple otro récord.', likes: 20000 }, { usuario: '@vecina', nombre: 'Vecina', hora: '11:30', texto: 'Alguien sabe por qué suena la sirena?' }];
     },
     socialReply: async (input) => {
+      replyAttempts++;
       if (failReply) throw new Error('IA caída');
+      if (hold) await hold.promise;
       calls.reply.push(input);
       assert.equal(input.mode, 'reply');
       return { respuestas: [{ usuario: '@amable', nombre: 'Amable', hora: '09:20', texto: 'Bienvenida', a: input.jugador.usuario }], likes: 3 };
@@ -156,36 +158,55 @@ test('API: the feed fills itself in the background, the player\'s posts get a re
   const account = await call(`/api/runs/${id}/social`, { op: 'profile', handle: 'Mara_V', bio: 'Primera semana en la ciudad' });
   assert.equal(account.status, 200); assert.equal(account.body.social.profile.handle, '@Mara_V'); assert.equal(account.body.social.profile.created, true);
 
-  const acted = await call(`/api/runs/${id}/action`, { type: 'wait', minutes: 30 });
+  // el feed se genera en segundo plano: la acción responde sin esperarlo y las publicaciones llegan después
+  const settled = async () => { await server.idle(); return call(`/api/runs/${id}`); };
+  assert.equal((await call(`/api/runs/${id}/action`, { type: 'wait', minutes: 30 })).status, 200);
+  const acted = await settled();
   assert.equal(acted.status, 200); assert.equal(calls.posts, 1);
   assert.deepEqual(acted.body.social.posts.map((post) => post.handle), ['@RexNova'], 'la de las 11:30 aún no se ve');
   assert.equal(acted.body.social.posts[0].verified, true);
   assert.ok(acted.body.social.posts[0].likes > 1000 && acted.body.social.posts[0].likes <= maxLikes(99));
   await call(`/api/runs/${id}/action`, { type: 'wait', minutes: 30 });
   assert.equal(calls.posts, 1, 'no se vuelve a generar hasta pasadas unas 10 horas');
-  const late = await call(`/api/runs/${id}/action`, { type: 'wait', minutes: 120 });
+  await call(`/api/runs/${id}/action`, { type: 'wait', minutes: 120 });
+  const late = await settled();
   assert.deepEqual(late.body.social.posts.map((post) => post.handle), ['@vecina', '@RexNova'], 'a su hora la publicación aparece sola');
 
-  // el jugador publica: la red reacciona en la misma petición
+  // el jugador publica: la publicación se guarda al instante y la reacción de la red llega después
+  let release; hold = { promise: new Promise((resolve) => { release = resolve; }) };
   const published = await call(`/api/runs/${id}/posts`, { text: 'Primer día en la ciudad' });
-  assert.equal(published.status, 200); assert.equal(calls.reply.length, 1);
-  assert.equal(calls.posts, 2, 'publicar renueva el feed si hace más de 2 horas de juego que no se generaba');
+  assert.equal(published.status, 200);
+  const mine = published.body.social.posts.find((post) => post.own);
+  assert.equal(mine.text, 'Primer día en la ciudad');
+  assert.equal(mine.replies.length, 0, 'la respuesta no estaba lista: el jugador no esperó al modelo');
+  assert.deepEqual(published.body.pending.reactions, [mine.id], 'el cliente sabe qué publicación espera reacción');
+  assert.equal(published.body.pendingReactions, undefined, 'lo pendiente es interno');
+  assert.equal((await call(`/api/runs/${id}/action`, { type: 'wait', minutes: 5 })).status, 200, 'el jugador puede seguir jugando mientras tanto');
+  release(); hold = null;
+  const reacted = await settled();
+  assert.equal(calls.reply.length, 1);
+  assert.equal(calls.posts, 2, 'publicar renueva el feed (en segundo plano) si hace más de 2 horas de juego que no se generaba');
   assert.ok(calls.reply[0].respuestasEsperadas.min >= 1, 'el jugador siempre recibe al menos una respuesta');
   assert.match(calls.reply[0].accionDelJugador.hora, /^\d{2}:\d{2}$/);
   assert.equal(calls.reply[0].accionDelJugador.tipo, 'publicacion');
-  assert.equal(published.body.social.posts.find((post) => post.own).text, 'Primer día en la ciudad');
-  assert.equal(published.body.social.unread, 1, 'la primera respuesta llega en los minutos que tarda en publicarse');
-  assert.equal(published.body.social.posts.find((post) => post.own).replies.length, 1);
-  const mine = published.body.social.posts.find((post) => post.own);
+  assert.deepEqual(reacted.body.pending.reactions, []);
+  assert.equal(reacted.body.social.posts.find((post) => post.own).replies.length, 1);
+  assert.equal(reacted.body.social.unread, 1, 'la primera respuesta llega en los minutos que tarda en publicarse');
 
-  // si la IA falla, no se publica nada
-  const before = JSON.stringify(runs.get(id));
-  failReply = true;
-  assert.equal((await call(`/api/runs/${id}/posts`, { text: 'Esto no debería publicarse' })).status, 400);
-  assert.equal(JSON.stringify(runs.get(id)), before, 'una IA caída no avanza ni cambia la partida');
+  // si la IA falla, la publicación sigue ahí: se reintenta al consultar la partida y, tras 3 intentos, se descarta sin romper nada
+  failReply = true; replyAttempts = 0;
+  const second = await call(`/api/runs/${id}/posts`, { text: 'Segunda publicación' });
+  assert.equal(second.status, 200);
+  for (let poll = 0; poll < 6; poll++) { await server.idle(); await call(`/api/runs/${id}`); }
+  await server.idle();
+  assert.equal(replyAttempts, 3);
+  const dropped = (await call(`/api/runs/${id}`)).body;
+  assert.deepEqual(dropped.pending.reactions, []);
+  assert.equal(dropped.social.posts.find((post) => post.text === 'Segunda publicación').replies.length, 0, 'la publicación se queda sin reacciones');
   failReply = false;
 
-  const waited = await call(`/api/runs/${id}/action`, { type: 'wait', minutes: 60 });
+  await call(`/api/runs/${id}/action`, { type: 'wait', minutes: 60 });
+  const waited = await settled();
   assert.equal(waited.body.social.unread, 1);
   assert.equal(waited.body.social.notifications[0].handle, '@amable');
   assert.equal(waited.body.social.posts.find((post) => post.id === mine.id).replies.length, 1);
@@ -194,7 +215,7 @@ test('API: the feed fills itself in the background, the player\'s posts get a re
   const liked = await call(`/api/runs/${id}/social`, { op: 'like', postId: mine.id });
   assert.equal(liked.body.social.posts.find((post) => post.id === mine.id).liked, true);
   const reply = await call(`/api/runs/${id}/social`, { op: 'reply', postId: mine.id, text: 'Gracias!', replyTo: waited.body.social.posts.find((post) => post.id === mine.id).replies[0].id });
-  assert.equal(reply.status, 200); assert.equal(calls.reply.length, 2);
+  assert.equal(reply.status, 200); await server.idle(); assert.equal(calls.reply.length, 2);
   assert.equal(calls.reply[1].accionDelJugador.tipo, 'respuesta');
   assert.equal(calls.reply[1].accionDelJugador.aQuien, '@amable');
   assert.equal((await call(`/api/runs/${id}/social`, { op: 'nada' })).status, 400);

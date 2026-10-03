@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRun, setPrologue, applyAction } from '../src/server/game/run.js';
+import { createRun, setPrologue } from '../src/server/game/run.js';
+import { applyAction } from '../src/server/ai/tools/game.js';
 import { publishPlayerPost, saveProfile } from '../src/server/game/social.js';
 
 const world = { locations: [
