@@ -50,11 +50,15 @@ function head(entry, now) {
   return `<header class="xp-head"><strong>${escapeHtml(entry.name)}</strong>${entry.verified ? CHECK : ''}<span class="xp-handle">${escapeHtml(entry.handle)}</span><span class="xp-dot">·</span><time>${escapeHtml(ago(entry.minutes, now))}</time></header>`;
 }
 
+// El servidor guarda lo que publicas al instante y la red reacciona después: mientras tanto la publicación muestra que alguien está escribiendo.
+const reacting = (postId) => Boolean(state.run.pending?.reactions?.includes(postId));
+const typingLine = (postId) => (reacting(postId) ? '<p class="xp-typing" role="status"><span class="xp-dots" aria-hidden="true"><i></i><i></i><i></i></span> La red está reaccionando…</p>' : '');
+
 function postCard(post, now, { full = false, kicker = '' } = {}) {
   return `<article class="xp${full ? ' xp-full' : ''}${post.own ? ' xp-own' : ''}" data-post="${post.id}">${avatar(post)}<div class="xp-body">${kicker ? `<p class="xp-kicker">${svg(PATHS.repost)} ${kicker}</p>` : ''}${head(post, now)}<p class="xp-text">${rich(post.text)}</p>
     <footer class="xp-actions"><button type="button" data-open="${post.id}" aria-label="Comentarios">${svg(PATHS.reply)}<span>${compact(post.replies.length)}</span></button>${post.own
     ? `<span class="xp-act" aria-label="Reposts">${svg(PATHS.repost)}<span>${compact(post.reposts)}</span></span>`
-    : `<button type="button" data-repost="${post.id}" class="${post.reposted ? 'shared' : ''}" aria-pressed="${Boolean(post.reposted)}" aria-label="Compartir">${svg(PATHS.repost)}<span>${compact(post.reposts)}</span></button>`}<button type="button" data-like="${post.id}" class="${post.liked ? 'liked' : ''}" aria-pressed="${post.liked}" aria-label="Me gusta">${svg(PATHS.heart, post.liked ? 'currentColor' : 'none')}<span>${compact(post.likes)}</span></button></footer></div></article>`;
+    : `<button type="button" data-repost="${post.id}" class="${post.reposted ? 'shared' : ''}" aria-pressed="${Boolean(post.reposted)}" aria-label="Compartir">${svg(PATHS.repost)}<span>${compact(post.reposts)}</span></button>`}<button type="button" data-like="${post.id}" class="${post.liked ? 'liked' : ''}" aria-pressed="${post.liked}" aria-label="Me gusta">${svg(PATHS.heart, post.liked ? 'currentColor' : 'none')}<span>${compact(post.likes)}</span></button></footer>${typingLine(post.id)}</div></article>`;
 }
 
 function replyCard(reply, post, now, { toThread = false } = {}) {
@@ -66,7 +70,7 @@ function composer(ctx, { id, placeholder, rows = 3, label = 'Publicar' }) {
   const { ui } = ctx;
   return `<form id="${id}" class="xp-compose">${ui.replyTo && id === 'reply-form' ? `<p class="xp-replying">Respondiendo a <span class="xp-link">${escapeHtml(ui.replyTo.handle)}</span> <button type="button" data-clear-reply aria-label="Quitar">×</button></p>` : ''}
     <textarea name="text" rows="${rows}" maxlength="280" placeholder="${placeholder}" ${ui.socialBusy ? 'disabled' : ''} required></textarea>
-    <div class="xp-compose-foot"><small data-count>0/280</small><span class="xp-pending">${ui.socialBusy ? 'Publicando… la red está reaccionando' : ''}</span><button type="submit" class="xp-send" aria-label="${ui.socialBusy ? 'Detener' : label}">${ui.socialBusy ? ctx.stopIcon : label}</button></div>
+    <div class="xp-compose-foot"><small data-count>0/280</small><span class="xp-pending">${ui.socialBusy ? 'Publicando…' : ''}</span><button type="submit" class="xp-send" aria-label="${ui.socialBusy ? 'Detener' : label}">${ui.socialBusy ? ctx.stopIcon : label}</button></div>
     <p class="error" data-social-error role="alert">${escapeHtml(ui.socialError ?? '')}</p></form>`;
 }
 

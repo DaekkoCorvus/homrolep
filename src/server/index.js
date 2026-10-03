@@ -21,6 +21,7 @@ import { noticesSince } from './ai/context/notices.js';
 import { feedDue, applyGeneratedPosts, applyReactions, wipeFeed, publishPlayerPost, publishPlayerReply, toggleLike, toggleRepost, saveProfile, profileMedia, markNotificationsRead, socialView, socialInput, threadFor, migrateSocial, expectedReplies, playerPopularity, keyOfMinutes, withAvatars, REFRESH_GAP } from './game/social.js';
 import { saveRun, loadRun, listRuns, deleteRun } from './saves/store.js';
 import { randomUUID } from 'node:crypto';
+import { ensureChatIds, typingMs, readMs, MAX_UNANSWERED } from './game/chatpace.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const publicDir = path.join(root, 'public');
@@ -37,7 +38,7 @@ const port = Number(process.env.PORT) || 3000;
 // HOM_DEBUG=1 (lo activa scripts/dev-local.mjs): registra en consola las peticiones /api y los errores del servidor.
 const debug = process.env.HOM_DEBUG === '1';
 
-const clientFiles = new Set(['/index.html', '/app.js', '/core.js', '/game.js', '/devtools.js', '/prompteditor.js', '/aitrace.js', '/northlife.js', '/scenes.js', '/styles.css', '/game.css']);
+const clientFiles = new Set(['/index.html', '/app.js', '/core.js', '/game.js', '/devtools.js', '/prompteditor.js', '/aitrace.js', '/northlife.js', '/chat.js', '/scenes.js', '/styles.css', '/game.css']);
 const mimeTypes = { '.png':'image/png', '.webp':'image/webp', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.json':'application/json; charset=utf-8', '.svg':'image/svg+xml' };
 
 function sendJson(response, status, body) {
@@ -87,18 +88,18 @@ async function publicRun(run, dev = false) {
   const toPublic = async (npc) => ({ ...publicNpc(npc), portraits: await listPortraits(assetDir, npc.id) });
   const relationships = Object.fromEntries(Object.entries(run.relationships ?? {}).map(([id, item]) => [id, dev ? debugView(relationshipOf(run, id)) : { met: item.met, contact: item.contact, added: item.added === true, encounters: item.encounters }]));
   const encounterNpc = run.encounter ? await toPublic(npcs.get(run.encounter.npcId)) : null;
-  const { intents, pendingEvaluation, ...visible } = run; // intenciones sin mecánica: solo para el desarrollador; la evaluación pendiente es interna
+  const { intents, pendingEvaluation, pendingReactions, ...visible } = run; // intenciones sin mecánica: solo para el desarrollador; lo pendiente es interno
   return {
-    ...visible, ...(dev ? { intents: intents ?? [] } : {}), pending: { evaluation: Boolean(pendingEvaluation), feed: generatingFeed.has(run.id) }, relationships, encounterNpc, social: socialView(run, { dev, seeds: socialCatalog.current().seeds, avatars: socialCatalog.current().avatars }),
+    ...visible, ...(dev ? { intents: intents ?? [] } : {}), pending: { evaluation: Boolean(pendingEvaluation), feed: generatingFeed.has(run.id), reactions: (pendingReactions ?? []).map((item) => item.postId) }, relationships, encounterNpc, social: socialView(run, { dev, seeds: socialCatalog.current().seeds, avatars: socialCatalog.current().avatars }),
     commitments: (run.commitments ?? []).map((item) => ({ ...item, npcName: npcs.get(item.npcId)?.name ?? item.npcId })),
     presence: await Promise.all(presentFor(run).map(toPublic)),
     sharedContacts: [...npcs.values()].filter((npc) => run.relationships?.[npc.id]?.contact).map((npc) => ({ id: npc.id, name: npc.name, handle: npc.contact.handle, added: run.relationships[npc.id].added === true })),
-    contacts: await Promise.all([...npcs.values()].filter((npc) => run.relationships?.[npc.id]?.added).map(toPublic))
+    contacts: await Promise.all([...npcs.values()].filter((npc) => run.relationships?.[npc.id]?.added).map(async (npc) => ({ ...(await toPublic(npc)), chat: { readMs: readMs(npc, relationshipOf(run, npc.id), run.world) } })))
   };
 }
 
 // Datos para el prompt social (cuentas, contactos, publicaciones recientes) y opciones de validación del motor.
-const loadGame = async (id) => withAvatars(await store.loadRun(id), socialCatalog.current().avatars, socialCatalog.current().seeds);
+const loadGame = async (id) => withAvatars(ensureChatIds(await store.loadRun(id)), socialCatalog.current().avatars, socialCatalog.current().seeds);
 const socialOptions = () => ({ npcs, seeds: socialCatalog.current().seeds, avatars: socialCatalog.current().avatars });
 const socialContext = (run, mode, extra = {}) => socialInput(run, mode, { npcs, seeds: socialCatalog.current().seeds, places: worldData.locations.map(({ name }) => name), ahora: temporalContext({ encounters: 0, notes: [], history: [] }, run.world).ahora, extra });
 
@@ -222,8 +223,8 @@ async function runEvaluation(runId) {
 
 // NorthLife: una o dos veces al día de juego se genera el feed (varias publicaciones con hora, likes y respuestas). Ya no frena la acción del
 // jugador: corre en segundo plano y las publicaciones aparecen cuando llegan.
-function scheduleFeed(run) {
-  if (typeof ai.socialPosts !== 'function' || generatingFeed.has(run.id) || !feedDue(run)) return;
+function scheduleFeed(run, gap) {
+  if (typeof ai.socialPosts !== 'function' || generatingFeed.has(run.id) || !feedDue(run, gap)) return;
   generatingFeed.add(run.id);
   const input = socialContext(run, 'post');
   enqueue(run.id, 'feed', async () => {
@@ -507,38 +508,104 @@ async function performAction(before, input, config) {
 }
 
 // --- Chat de NorthLife ------------------------------------------------------------------------------
-async function chatWith(run, body, config) {
+// Chat en ráfagas: el jugador manda los mensajes que quiera (`send`: se guardan al instante, sin modelo) y con el botón de turno (`turn`) el personaje
+// responde con uno o varios mensajes en UNA sola llamada. Un mensaje puede responder a otro concreto (`replyTo`). El motor fija el ritmo de lo que verá
+// el cliente (cuánto «escribe» cada mensaje); el modelo solo puede pedir ir más despacio o más rápido.
+const chatLine = (message) => ({ who: message.who, text: message.text, ...(message.replyTo ? { replyTo: message.replyTo } : {}) });
+
+function chatTarget(run, body) {
   const npc = npcs.get(String(body.npcId));
   const relationship = npc ? relationshipOf(run, npc.id) : null;
   if (!npc || !relationship.added) throw new Error('Solo puedes escribir a quienes tienes en tus contactos.');
   if (run.encounter) throw new Error('Estás en plena conversación. Despídete antes de escribir.');
+  return { npc, relationship };
+}
+
+// Guarda un mensaje del jugador sin llamar al modelo.
+function chatSend(run, body) {
+  const { npc } = chatTarget(run, body);
   const text = String(body.text ?? '').trim().slice(0, MAX_PLAYER_TEXT);
   if (!text) throw new Error('Escribe un mensaje.');
   const history = run.chats?.[npc.id] ?? [];
-  const sent = { who: 'player', text, time: timeKey(run.world) };
-  const context = await contextFor(run, npc);
-  const reply = await ai.npcReply(context(relationship, [...history, sent].slice(-24), { mode: 'chat' }), config);
-  let next = structuredClone(run);
-  next.world = advanceTime(next.world, 1);
-  const answered = { who: 'npc', text: stripMarks(reply.say), time: timeKey(next.world) };
-  next.chats = { ...next.chats, [npc.id]: [...history, sent, answered].slice(-80) };
+  let waiting = 0; for (let index = history.length - 1; index >= 0 && history[index].who === 'player'; index--) waiting += 1;
+  if (waiting >= MAX_UNANSWERED) throw new Error('Ya mandaste muchos mensajes seguidos. Pasa el turno para que respondan.');
+  let replyTo = null;
+  if (body.replyTo) {
+    const quoted = history.find((message) => message.id === String(body.replyTo));
+    if (!quoted) throw new Error('Ese mensaje ya no está disponible para responderlo.');
+    replyTo = { id: quoted.id, who: quoted.who, text: quoted.text.slice(0, 140) };
+  }
+  const next = structuredClone(run);
+  next.chats = { ...next.chats, [npc.id]: [...history, { id: randomUUID(), who: 'player', text, time: timeKey(run.world), ...(replyTo ? { replyTo } : {}) }].slice(-80) };
   next.updatedAt = new Date().toISOString();
-  return applyReply(next, npc, reply, [...history, sent], config);
+  return next;
 }
 
-// Reacción de la red a lo que el jugador acaba de publicar o responder (con `expected` respuestas mínimas y máximas). Si hace
-// más de un par de horas de juego que no se genera el feed, se renueva en la misma petición y en paralelo: no suma espera.
-// Si el proveedor no implementa el prompt social, la publicación se queda sola. Si la IA falla, no se guarda nada.
-async function react(run, post, action, config, since, expected) {
+// Pasa el turno: el personaje lee lo que el jugador mandó desde su último mensaje y responde.
+async function chatTurn(run, body, config) {
+  const { npc, relationship } = chatTarget(run, body);
+  const history = run.chats?.[npc.id] ?? [];
+  if (history.at(-1)?.who !== 'player') throw new Error('Escribe un mensaje antes de pasar el turno.');
+  const context = await contextFor(run, npc);
+  const reply = await ai.npcReply(context(relationship, history.slice(-24).map(chatLine), { mode: 'chat' }), config);
+  let next = structuredClone(run);
+  next.world = advanceTime(next.world, 1);
+  const burst = reply.messages?.length ? reply.messages : [{ text: stripMarks(reply.say), pace: null }];
+  const at = timeKey(next.world);
+  const answers = burst.map((message) => ({ id: randomUUID(), who: 'npc', text: message.text, time: at, typingMs: typingMs(message.text, message.pace) }));
+  next.chats = { ...next.chats, [npc.id]: [...history, ...answers].slice(-80) };
+  next.updatedAt = new Date().toISOString();
+  return applyReply(next, npc, reply, history.map(chatLine), config);
+}
+
+// La publicación o respuesta del jugador se guarda AL INSTANTE; la reacción de la red (respuestas, likes, reposts) la genera el modelo en segundo
+// plano y llega después, con la misma validación de siempre. Queda pendiente en la partida (así sobrevive a un reinicio) y se reintenta al consultarla
+// si falla (3 intentos; luego la publicación se queda sin reacciones). Si el proveedor no implementa el prompt social, la publicación se queda sola.
+const MAX_REACTION_ATTEMPTS = 3;
+const reacting = new Set();
+function queueReaction(run, post, action, since, expected) {
   if (typeof ai.socialReply !== 'function') return run;
-  const now = minutesOfWorld(run.world);
-  const refresh = typeof ai.socialPosts === 'function' && feedDue(run, REFRESH_GAP);
-  const [raw, feed] = await Promise.all([
-    ai.socialReply(socialContext(run, 'reply', { publicacion: threadFor(post, now), accionDelJugador: { ...action, hora: keyOfMinutes(since).slice(-5) }, respuestasEsperadas: expected }), config),
-    refresh ? ai.socialPosts(socialContext(run, 'post'), config).catch(() => null) : null
-  ]);
-  const base = Array.isArray(feed) ? applyGeneratedPosts(run, feed, socialOptions()) : run;
-  return applyReactions(base, post.id, raw, socialOptions(), since);
+  run.pendingReactions = [...(run.pendingReactions ?? []), { id: randomUUID(), postId: post.id, action, since, expected, attempts: 0 }].slice(-6);
+  return run;
+}
+
+function scheduleReactions(run) {
+  for (const item of run.pendingReactions ?? []) {
+    if (reacting.has(item.id)) continue;
+    reacting.add(item.id);
+    enqueue(run.id, 'reacción', async () => { try { await runReaction(run.id, item.id); } finally { reacting.delete(item.id); } });
+  }
+}
+
+async function runReaction(runId, itemId) {
+  const run = await loadGame(runId);
+  const item = run.pendingReactions?.find((entry) => entry.id === itemId);
+  if (!item) return;
+  // Carga la partida actual, quita lo pendiente y aplica el cambio; si otra operación ya lo resolvió (o borraron la publicación), no hace nada.
+  const settle = (change) => whenFree(runId, async () => {
+    const current = await loadGame(runId);
+    const entry = current.pendingReactions?.find((candidate) => candidate.id === itemId);
+    if (!entry) return;
+    let next = structuredClone(current);
+    next.pendingReactions = next.pendingReactions.filter((candidate) => candidate.id !== itemId);
+    next = change(next, entry) ?? next;
+    if (!next.pendingReactions.length) delete next.pendingReactions;
+    next.updatedAt = new Date().toISOString();
+    await store.saveRun(settleCommitments(next));
+  });
+  const post = run.social?.posts?.find((candidate) => candidate.id === item.postId);
+  if (!post) return settle(() => null);
+  try {
+    const config = await settings.require();
+    const raw = await ai.socialReply(socialContext(run, 'reply', { publicacion: threadFor(post, minutesOfWorld(run.world)), accionDelJugador: { ...item.action, hora: keyOfMinutes(item.since).slice(-5) }, respuestasEsperadas: item.expected }), config);
+    await settle((next) => applyReactions(next, item.postId, raw, socialOptions(), item.since));
+  } catch (error) {
+    await settle((next, entry) => {
+      if (entry.attempts + 1 < MAX_REACTION_ATTEMPTS) next.pendingReactions.push({ ...entry, attempts: entry.attempts + 1 });
+      return next;
+    }).catch(() => {});
+    throw error;
+  }
 }
 
 async function api(request, response, pathname) {
@@ -550,7 +617,7 @@ async function api(request, response, pathname) {
   // Al guardar se evalúan las promesas vencidas: el reloj pudo avanzar durante la operación.
   const save = async (run) => { controller.signal.throwIfAborted(); await store.saveRun(settleCommitments(run)); };
   // Consultar la partida también reanuda una evaluación pendiente (tras reiniciar el servidor o tras un fallo).
-  const sendRun = async (status, run) => { scheduleEvaluation(run); return sendJson(response, status, await publicRun(run, request.headers['x-hom-dev'] === '1')); };
+  const sendRun = async (status, run) => { scheduleEvaluation(run); scheduleReactions(run); return sendJson(response, status, await publicRun(run, request.headers['x-hom-dev'] === '1')); };
   if (request.method === 'GET' && pathname === '/api/ai/settings') return sendJson(response, 200, await settings.status());
   if (request.method === 'POST' && pathname === '/api/ai/models') {
     const key = await settings.key(await readBody(request));
@@ -668,10 +735,12 @@ async function api(request, response, pathname) {
   }
   if (request.method === 'POST' && operation === 'chat') {
     const body = await readBody(request);
-    await jobs.get(id); // el personaje primero recuerda la conversación anterior
+    if (body.op !== 'send') await jobs.get(id); // el personaje primero recuerda la conversación anterior
     return exclusive(id, async () => {
       const config = await requireConfig();
-      const run = await chatWith(await loadGame(id), body, config);
+      const game = await loadGame(id);
+      // `send`: guarda un mensaje (sin modelo) · `turn`: el personaje responde · sin `op`: las dos cosas en una petición
+      const run = body.op === 'send' ? chatSend(game, body) : body.op === 'turn' ? await chatTurn(game, body, config) : await chatTurn(chatSend(game, body), body, config);
       await save(run);
       return sendRun(200, run);
     });
@@ -709,10 +778,11 @@ async function api(request, response, pathname) {
   if (request.method === 'POST' && operation === 'posts') {
     const body = await readBody(request);
     return exclusive(id, async () => {
-      const config = await requireConfig();
+      await requireConfig(); // las acciones exigen una conexión configurada, aunque la reacción se genere después
       const { run: published, post } = publishPlayerPost(await loadGame(id), body.text);
-      const run = await react(published, post, { tipo: 'publicacion', texto: post.text }, config, post.minutes, expectedReplies(playerPopularity(published.player)));
+      const run = queueReaction(published, post, { tipo: 'publicacion', texto: post.text }, post.minutes, expectedReplies(playerPopularity(published.player)));
       await save(run);
+      scheduleFeed(run, REFRESH_GAP); // si hace más de 2 h que no se genera, el feed se renueva también (en segundo plano)
       return sendRun(200, run);
     });
   }
@@ -724,10 +794,11 @@ async function api(request, response, pathname) {
       if (body.op === 'like') { const run = toggleLike(await loadGame(id), String(body.postId ?? ''), body.replyId ? String(body.replyId) : null); await save(run); return sendRun(200, run); }
       if (body.op === 'read') { const run = markNotificationsRead(await loadGame(id)); await save(run); return sendRun(200, run); }
       if (body.op === 'reply') {
-        const config = await requireConfig();
+        await requireConfig();
         const { run: published, post, reply, target } = publishPlayerReply(await loadGame(id), String(body.postId ?? ''), body.text, body.replyTo ? String(body.replyTo) : null);
-        const run = await react(published, post, { tipo: 'respuesta', texto: reply.text, aQuien: (target ?? post).handle }, config, reply.minutes, { min: 1, max: 3 });
+        const run = queueReaction(published, post, { tipo: 'respuesta', texto: reply.text, aQuien: (target ?? post).handle }, reply.minutes, { min: 1, max: 3 });
         await save(run);
+        scheduleFeed(run, REFRESH_GAP);
         return sendRun(200, run);
       }
       throw new Error('Operación social desconocida.');

@@ -36,7 +36,8 @@ test('slow models are never cut off, and stopping aborts the upstream call witho
   mode = 'hang';
   const controller = new AbortController();
   const pending = talk({ op: 'start', npcId: 'luna_serp' }, controller.signal).catch((error) => error);
-  await new Promise((resolve) => setTimeout(resolve, 150));
+  while (calls < 1) await new Promise((resolve) => setTimeout(resolve, 10)); // espera a que la llamada upstream haya empezado (no un tiempo fijo: con carga era frágil)
+  await new Promise((resolve) => setTimeout(resolve, 30));
   controller.abort();
   assert.equal((await pending).name, 'AbortError');
   await new Promise((resolve) => setTimeout(resolve, 100));

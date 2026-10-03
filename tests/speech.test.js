@@ -59,7 +59,7 @@ test('the character receives emotions and contact status (never the player\'s pr
 
   const opened = await call(`/api/runs/${id}/talk`, { op: 'start', npcId: 'luna_serp' });
   const context = seen.at(-1);
-  assert.deepEqual(context.emotions, ['zztest'], 'el motor ofrece las emociones que existen como imagen');
+  assert.ok(context.emotions.includes('zztest') && !context.emotions.includes('default'), 'el motor ofrece las emociones que existen como imagen (las reales de Luna y la de prueba)');
   assert.equal(context.events, undefined, 'el personaje no recibe lo que el jugador hace por el mundo');
   assert.equal(JSON.stringify(context).includes('prisa por la lluvia'), false, 'ni sus acciones privadas');
   assert.equal(context.contact.yaCompartido, false);

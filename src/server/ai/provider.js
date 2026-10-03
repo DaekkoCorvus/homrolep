@@ -2,6 +2,7 @@ import { compose } from './composer.js';
 import { characterPlan, evaluationPlan, narrationPlan, socialPlan } from './plans.js';
 import { characterRegistry, characterToolNames } from './tools/character.js';
 import { deepEntries } from './context/card.js';
+import { splitBurst } from '../game/chatpace.js';
 import { factoryPrompts } from './promptStore.js';
 import { AIError } from './errors.js';
 import { createToolChat } from './tools/loop.js';
@@ -232,8 +233,10 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
       if (!say) throw new AIError('La conversación se cortó. Puedes reintentar sin perder nada.', 'AI_RESPONSE');
       const { claims } = state;
       const contact = claims.contact ?? legacy?.contact;
+      // En chat cada línea es un mensaje; `say` conserva el texto completo por compatibilidad.
+      const burst = chat ? splitBurst(say) : [];
       return {
-        say, gesture:clean(lead ? lead[1] : legacy?.gesture, 160), intent:clean(claims.intent ?? legacy?.intent, 240),
+        say, ...(burst.length ? { messages:burst } : {}), gesture:clean(lead ? lead[1] : legacy?.gesture, 160), intent:clean(claims.intent ?? legacy?.intent, 240),
         ...(contact ? { contact } : {}), ...(claims.agreements?.length ? { agreements:claims.agreements } : {}), ...(claims.facts?.length ? { facts:claims.facts } : {}), ...(claims.end ? { end:claims.end } : {})
       };
     },
