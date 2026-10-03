@@ -119,6 +119,7 @@ function wire() {
 
 export function updateGame({ announce=false }={}) {
   const root = app.querySelector('.game'); if (!root) return;
+  watchBackground();
   const { run } = state; const loc = place(run.player.locationId);
   const clock = root.querySelector('.clock-text'); clock.textContent = timeText(run.world);
   root.querySelector('.ps-time').textContent = clockText(run.world);
@@ -542,6 +543,32 @@ function setSendMode(busy) {
 }
 
 function stopGeneration() { ui.controller?.abort(); }
+
+// Trabajo de fondo del servidor (la reflexión del GM al cerrar una conversación, el feed de NorthLife): la partida ya está guardada y se puede
+// seguir jugando; mientras haya algo pendiente se consulta de vez en cuando y la pantalla solo se refresca si llegó algo nuevo.
+let backgroundTimer = null;
+const backgroundSignature = (run) => JSON.stringify([run.pending, (run.commitments ?? []).length, run.social?.posts?.length, run.social?.unread]);
+function watchBackground() {
+  clearTimeout(backgroundTimer);
+  const pending = state.run?.pending;
+  if (!pending?.evaluation && !pending?.feed) return;
+  backgroundTimer = setTimeout(async () => {
+    if (!app.querySelector('.game')) return;
+    if (!ui.busy) {
+      try {
+        const fresh = await request(`/api/runs/${state.run.id}`);
+        if (!ui.busy) {
+          const changed = backgroundSignature(fresh) !== backgroundSignature(state.run);
+          const newPlans = (fresh.commitments ?? []).length > (state.run.commitments ?? []).length;
+          state.run = fresh;
+          if (changed) updateGame();
+          if (newPlans) notify('Anotado en tu Agenda de NorthLife.');
+        }
+      } catch { /* se reintenta en el siguiente ciclo */ }
+    }
+    watchBackground();
+  }, 5000);
+}
 
 async function reloadRun() {
   try { state.run = await request(`/api/runs/${state.run.id}`); } catch { /* se queda con el estado actual */ }

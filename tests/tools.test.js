@@ -4,6 +4,7 @@ import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { createRegistry, defineTool, validateArgs, reject } from '../src/server/ai/tools/registry.js';
 import { gameRegistry, applyAction } from '../src/server/ai/tools/game.js';
+import { characterRegistry } from '../src/server/ai/tools/character.js';
 import { createToolChat } from '../src/server/ai/tools/loop.js';
 import { createNanoGPT, AIError } from '../src/server/ai/provider.js';
 import { createRun, startEncounter } from '../src/server/game/run.js';
@@ -116,21 +117,22 @@ test('start_conversation only works with someone present and delegates the openi
   await assert.rejects(gameRegistry.execute('start_conversation', { npcId: 'luna_serp' }, failing), { code: 'AI_UNAVAILABLE' });
 });
 
-test('share_contact needs a live conversation and every condition of the character card to be declared as met', async () => {
+test('the engine side of share_contact needs a live conversation and every condition of the character card to be declared as met', async () => {
   const run = newRun(); run.player.locationId = 'cafe';
-  const noTalk = await gameRegistry.execute('share_contact', { conditionsMet: [true, true] }, ctxOf(run), { role: 'character' });
+  const noTalk = await gameRegistry.execute('share_contact', { conditionsMet: [true, true] }, ctxOf(run), { role: 'engine' });
   assert.equal(noTalk.code, 'no_conversation');
   const talking = startEncounter(run, luna, { say: 'Hola.' });
-  assert.equal((await gameRegistry.execute('share_contact', { conditionsMet: [true, false] }, ctxOf(talking), { role: 'character' })).code, 'not_allowed');
-  assert.equal((await gameRegistry.execute('share_contact', {}, ctxOf(talking), { role: 'character' })).code, 'not_allowed', 'sin declarar condiciones no se comparte');
+  assert.equal((await gameRegistry.execute('share_contact', { conditionsMet: [true, false] }, ctxOf(talking), { role: 'engine' })).code, 'not_allowed');
+  assert.equal((await gameRegistry.execute('share_contact', {}, ctxOf(talking), { role: 'engine' })).code, 'not_allowed', 'sin declarar condiciones no se comparte');
   assert.equal((await gameRegistry.execute('share_contact', { conditionsMet: [true, true] }, ctxOf(talking), { role: 'gm' })).code, 'unknown_tool', 'el GM no comparte contactos por el personaje');
-  const shared = await gameRegistry.execute('share_contact', { conditionsMet: [true, true] }, ctxOf(talking), { role: 'character' });
+  const shared = await gameRegistry.execute('share_contact', { conditionsMet: [true, true] }, ctxOf(talking), { role: 'engine' });
+  assert.equal((await gameRegistry.execute('share_contact', { conditionsMet: [true, true] }, ctxOf(talking), { role: 'character' })).code, 'unknown_tool', 'ningún modelo ve la parte del motor');
   assert.equal(shared.ok, true);
   assert.equal(shared.result.handle, '@LunaSerp');
   assert.equal(shared.run.relationships.luna_serp.contact, true);
   assert.deepEqual(shared.run.encounter.lines.at(-1).kind, 'contact');
   assert.ok(shared.run.eventLog.some((event) => event.type === 'contact_shared'));
-  assert.equal((await gameRegistry.execute('share_contact', { conditionsMet: [true, true] }, ctxOf(shared.run), { role: 'character' })).code, 'not_allowed', 'no se comparte dos veces');
+  assert.equal((await gameRegistry.execute('share_contact', { conditionsMet: [true, true] }, ctxOf(shared.run), { role: 'engine' })).code, 'not_allowed', 'no se comparte dos veces');
   assert.equal(talking.relationships.luna_serp.contact, false, 'la partida de entrada no se toca');
 });
 
@@ -209,30 +211,29 @@ test('the loop has a step cap: the last request cannot call tools and the model 
   assert.equal(insistent.run.world.hour, 8);
 });
 
-test('at most four calls are executed per step', async () => {
+test('at most six calls are executed per step', async () => {
   let n = 0;
-  const complete = async () => (n++ === 0 ? reply({ content: '', tool_calls: Array.from({ length: 6 }, (_, index) => toolCall('wait', { minutes: 5 }, `c${index}`)) }) : reply({ content: 'Listo.' }));
+  const complete = async () => (n++ === 0 ? reply({ content: '', tool_calls: Array.from({ length: 8 }, (_, index) => toolCall('wait', { minutes: 5 }, `c${index}`)) }) : reply({ content: 'Listo.' }));
   const state = gmState();
   const result = await createToolChat(complete)({ model: 'm' }, messages, { registry: gameRegistry, state, role: 'gm' });
-  assert.equal(result.calls.filter((call) => call.ok).length, 4);
-  assert.deepEqual(result.calls.slice(4).map((call) => call.code), ['too_many_calls', 'too_many_calls']);
-  assert.equal(state.run.world.minute, 20);
+  assert.equal(result.calls.filter((call) => call.ok).length, 6);
+  assert.deepEqual(result.calls.slice(6).map((call) => call.code), ['too_many_calls', 'too_many_calls']);
+  assert.equal(state.run.world.minute, 30);
 });
 
 test('fire-and-forget tools (share_contact) come with the dialogue and need no second round trip', async () => {
-  const run = newRun(); run.player.locationId = 'cafe';
-  const state = ctxOf(startEncounter(run, luna, { say: 'Hola.' }));
+  const state = { claims: {} };
   let requests = 0;
   const complete = async () => { requests += 1; return reply({ content: 'Claro, anota: @LunaSerp.', tool_calls: [toolCall('share_contact', { conditionsMet: [true, true] })] }); };
-  const result = await createToolChat(complete)({ model: 'm' }, messages, { registry: gameRegistry, state, role: 'character' });
+  const result = await createToolChat(complete)({ model: 'm' }, messages, { registry: characterRegistry, state, role: 'character' });
   assert.equal(requests, 1);
   assert.equal(result.text, 'Claro, anota: @LunaSerp.');
-  assert.equal(state.run.relationships.luna_serp.contact, true);
+  assert.deepEqual(state.claims.contact, { give: true, conditionsMet: [true, true] }, 'el personaje solo declara; el motor valida después');
   // sin texto no hay nada que mostrar: se devuelve el resultado al modelo para que escriba el diálogo
-  const quiet = ctxOf(startEncounter(run, luna, { say: 'Hola.' }));
+  const quiet = { claims: {} };
   let n = 0;
   const silent = async () => (n++ === 0 ? reply({ content: null, tool_calls: [toolCall('share_contact', { conditionsMet: [true, true] })] }) : reply({ content: 'Aquí tienes.' }));
-  assert.equal((await createToolChat(silent)({ model: 'm' }, messages, { registry: gameRegistry, state: quiet, role: 'character' })).text, 'Aquí tienes.');
+  assert.equal((await createToolChat(silent)({ model: 'm' }, messages, { registry: characterRegistry, state: quiet, role: 'character' })).text, 'Aquí tienes.');
 });
 
 test('JSON fallback codec: {say, calls} runs the same tools and asks for the final text with the engine results', async () => {
@@ -270,11 +271,11 @@ test('JSON fallback codec: a model that ignores the protocol still narrates, and
   assert.equal(run.steps, 2);
   assert.equal(run.calls.length, 1, 'el segundo (último) paso no ejecuta llamadas');
   assert.equal(bounded.run.world.minute, 30);
-  const fire = ctxOf(startEncounter({ ...newRun(), player: { ...newRun().player, locationId: 'cafe' } }, luna, { say: 'Hola.' }));
+  const fire = { claims: {} };
   let requests = 0;
   const share = createToolChat(async () => { requests += 1; return reply({ content: '{"say":"Mi usuario es @LunaSerp.","calls":[{"tool":"share_contact","args":{"conditionsMet":[true,true]}}]}' }); });
-  const done = await share({ model: 'm' }, messages, { registry: gameRegistry, state: fire, role: 'character', mode: 'json' });
-  assert.deepEqual([requests, done.text, fire.run.relationships.luna_serp.contact], [1, 'Mi usuario es @LunaSerp.', true]);
+  const done = await share({ model: 'm' }, messages, { registry: characterRegistry, state: fire, role: 'character', mode: 'json' });
+  assert.deepEqual([requests, done.text, fire.claims.contact?.give], [1, 'Mi usuario es @LunaSerp.', true]);
 });
 
 test('auto mode tries native tools first and remembers per model when the provider refuses them', async () => {

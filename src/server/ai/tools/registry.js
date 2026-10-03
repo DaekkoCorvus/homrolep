@@ -62,13 +62,14 @@ export function createRegistry(definitions) {
     if (tools.has(tool.name)) throw new Error(`Herramienta duplicada: ${tool.name}`);
     tools.set(tool.name, tool);
   }
-  const visible = (role) => [...tools.values()].filter((tool) => tool.roles.includes(role));
+  // `allow` (opcional) recorta aún más lo que ve un rol en una llamada concreta (p. ej. el personaje no puede compartir contacto dos veces).
+  const visible = (role, allow) => [...tools.values()].filter((tool) => tool.roles.includes(role) && (!allow || allow.includes(tool.name)));
 
   // Valida y ejecuta. Un handler que lanza se convierte en un rechazo (`handler_error`), salvo cancelaciones y fallos de la IA
   // (código AI_*): esos siguen su camino para que la partida no avance ni se pise.
-  function call(name, args, ctx, { role } = {}) {
+  function call(name, args, ctx, { role, allow } = {}) {
     const tool = tools.get(name);
-    if (!tool || (role && !tool.roles.includes(role))) return reject(`La herramienta «${name}» no existe.`, { code: 'unknown_tool' });
+    if (!tool || (role && !tool.roles.includes(role)) || (allow && !allow.includes(name))) return reject(`La herramienta «${name}» no existe.`, { code: 'unknown_tool' });
     const problem = validateArgs(tool.params, args ?? {});
     if (problem) return reject(`Argumentos no válidos: ${problem}.`, { code: 'bad_arguments' });
     const done = (outcome) => (outcome && typeof outcome.ok === 'boolean' ? outcome : reject('La herramienta no devolvió un resultado válido.', { code: 'handler_error' }));
@@ -94,10 +95,10 @@ export function createRegistry(definitions) {
     },
 
     // Formato `tools` de chat/completions (compatible con OpenAI) de las herramientas que ve un rol.
-    specs: (role) => visible(role).map(({ name, description, params }) => ({ type: 'function', function: { name, description, parameters: params } })),
+    specs: (role, allow) => visible(role, allow).map(({ name, description, params }) => ({ type: 'function', function: { name, description, parameters: params } })),
 
     // Descripción en texto para el codec de reserva (modelos sin `tools`): una línea por herramienta con sus parámetros.
-    describe: (role) => visible(role).map(({ name, description, params, kind }) => {
+    describe: (role, allow) => visible(role, allow).map(({ name, description, params, kind }) => {
       const signature = Object.entries(params.properties ?? {}).map(([key, schema]) => `${key}${(params.required ?? []).includes(key) ? '' : '?'}: ${schema.enum ? schema.enum.join('|') : schema.type}`).join(', ');
       return `- ${name}(${signature}) [${kind === 'query' ? 'consulta' : 'acción'}]: ${description}`;
     }).join('\n')

@@ -175,11 +175,11 @@ export const gameTools = [
     }
   },
   {
-    // La decide el personaje en plena conversación, pero el motor solo la acepta si la impresión y TODAS las condiciones de su ficha lo permiten.
+    // El personaje la declara con su propia herramienta (tools/character.js); esta es la parte del MOTOR: solo comparte si la impresión y TODAS las
+    // condiciones de su ficha lo permiten. No la ve ningún modelo (rol interno `engine`).
     name: 'share_contact',
     description: 'El personaje comparte su usuario de contacto con el jugador. Declara en `conditionsMet`, en orden, si cada condición de su ficha se cumple.',
-    roles: ['character'],
-    fire: true,
+    roles: ['engine'],
     params: { type: 'object', properties: { conditionsMet: { type: 'array', items: { type: 'boolean' }, maxItems: 32 } }, additionalProperties: false },
     handler({ run, npcs }, { conditionsMet = [] }) {
       const npc = run.encounter ? npcs.get(run.encounter.npcId) : null;

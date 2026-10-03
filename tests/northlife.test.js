@@ -156,14 +156,18 @@ test('API: the feed fills itself in the background, the player\'s posts get a re
   const account = await call(`/api/runs/${id}/social`, { op: 'profile', handle: 'Mara_V', bio: 'Primera semana en la ciudad' });
   assert.equal(account.status, 200); assert.equal(account.body.social.profile.handle, '@Mara_V'); assert.equal(account.body.social.profile.created, true);
 
-  const acted = await call(`/api/runs/${id}/action`, { type: 'wait', minutes: 30 });
+  // el feed se genera en segundo plano: la acción responde sin esperarlo y las publicaciones llegan después
+  const settled = async () => { await server.idle(); return call(`/api/runs/${id}`); };
+  assert.equal((await call(`/api/runs/${id}/action`, { type: 'wait', minutes: 30 })).status, 200);
+  const acted = await settled();
   assert.equal(acted.status, 200); assert.equal(calls.posts, 1);
   assert.deepEqual(acted.body.social.posts.map((post) => post.handle), ['@RexNova'], 'la de las 11:30 aún no se ve');
   assert.equal(acted.body.social.posts[0].verified, true);
   assert.ok(acted.body.social.posts[0].likes > 1000 && acted.body.social.posts[0].likes <= maxLikes(99));
   await call(`/api/runs/${id}/action`, { type: 'wait', minutes: 30 });
   assert.equal(calls.posts, 1, 'no se vuelve a generar hasta pasadas unas 10 horas');
-  const late = await call(`/api/runs/${id}/action`, { type: 'wait', minutes: 120 });
+  await call(`/api/runs/${id}/action`, { type: 'wait', minutes: 120 });
+  const late = await settled();
   assert.deepEqual(late.body.social.posts.map((post) => post.handle), ['@vecina', '@RexNova'], 'a su hora la publicación aparece sola');
 
   // el jugador publica: la red reacciona en la misma petición
@@ -185,7 +189,8 @@ test('API: the feed fills itself in the background, the player\'s posts get a re
   assert.equal(JSON.stringify(runs.get(id)), before, 'una IA caída no avanza ni cambia la partida');
   failReply = false;
 
-  const waited = await call(`/api/runs/${id}/action`, { type: 'wait', minutes: 60 });
+  await call(`/api/runs/${id}/action`, { type: 'wait', minutes: 60 });
+  const waited = await settled();
   assert.equal(waited.body.social.unread, 1);
   assert.equal(waited.body.social.notifications[0].handle, '@amable');
   assert.equal(waited.body.social.posts.find((post) => post.id === mine.id).replies.length, 1);

@@ -79,18 +79,6 @@ export function worldPlan(run, worldData, header) {
   };
 }
 
-// GM procesando chats pendientes (todos los personajes en una sola llamada).
-export function chatsPlan({ chats, locations = [], ahora, playerName = '' }) {
-  return {
-    kind: 'gm', mode: 'chats', format: GM_FORMATS.chats,
-    macros: { player: playerName, user: playerName, time: ahora },
-    data: {
-      ahora, lugares: locations,
-      chats: chats.map((item) => ({ npcId: item.npcId, personaje: item.name, pendientes: item.commitments, mensajes: item.lines.map((line) => ({ quien: line.who === 'player' ? 'jugador' : item.name, texto: line.text })) }))
-    }
-  };
-}
-
 // SOCIAL (NorthLife): genera publicaciones del feed (mode 'post') o reacciona a lo que hizo el jugador (mode 'reply').
 // `input` lo prepara game/social.js → socialInput().
 export function socialPlan(input) {

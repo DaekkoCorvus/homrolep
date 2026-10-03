@@ -106,7 +106,7 @@ test('query tools answer from the engine and never change the game', async () =>
   assert.equal((await ask('recent_events', { count: 1 })).result.events.length, 1);
   assert.equal((await ask('recent_events', { count: 99 })).result.events.length, run.eventLog.length, 'máximo 20, o los que haya');
   assert.deepEqual(Object.keys((await ask('player_status')).result).sort(), ['money', 'name', 'occupation', 'place', 'reputation']);
-  assert.deepEqual(gameRegistry.names('character'), ['share_contact'], 'el personaje no ve las herramientas del GM');
+  assert.deepEqual(gameRegistry.names('character'), [], 'el personaje no ve las herramientas del GM');
 });
 
 // --- De extremo a extremo: acción libre → herramientas → partida guardada -------------------------------------------------------------

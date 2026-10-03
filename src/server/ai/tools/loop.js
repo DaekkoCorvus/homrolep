@@ -8,7 +8,7 @@
 import { AIError } from '../errors.js';
 
 export const MAX_STEPS = 3;
-const MAX_CALLS_PER_STEP = 4;
+const MAX_CALLS_PER_STEP = 6;
 
 const stripFence = (text) => String(text ?? '').replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
 function parseObject(text) {
@@ -48,12 +48,12 @@ export function createToolChat(complete) {
   }
 
   // Ejecuta una lista de llamadas en orden sobre `state` (la partida avanza llamada a llamada). Devuelve lo que se anota y lo que ve el modelo.
-  async function runCalls(requested, { registry, state, role, trace }) {
+  async function runCalls(requested, { registry, state, role, allow, trace }) {
     const done = [];
     for (const [index, item] of requested.entries()) {
       const outcome = index >= MAX_CALLS_PER_STEP
         ? { ok: false, reason: `Demasiadas llamadas a la vez (máximo ${MAX_CALLS_PER_STEP} por paso).`, code: 'too_many_calls' }
-        : item.error ? { ok: false, reason: item.error, code: 'bad_arguments' } : await registry.execute(item.name, item.args, state, { role });
+        : item.error ? { ok: false, reason: item.error, code: 'bad_arguments' } : await registry.execute(item.name, item.args, state, { role, allow });
       if (outcome.ok && outcome.run) state.run = outcome.run;
       trace.push({ tool: item.name, args: item.args ?? null, ok: outcome.ok, ...(outcome.ok ? { result: outcome.result ?? null } : { reason: outcome.reason, code: outcome.code ?? null }) });
       done.push({ item, outcome, tool: registry.get(item.name) });
@@ -66,9 +66,9 @@ export function createToolChat(complete) {
   const unsupported = Symbol('native-unsupported');
 
   async function native(opts, totals, trace) {
-    const { config, registry, role, maxSteps, budget, params } = opts;
+    const { config, registry, role, allow, maxSteps, budget, params } = opts;
     const conversation = [...opts.messages];
-    const tools = registry.specs(role);
+    const tools = registry.specs(role, allow);
     for (let step = 1; step <= maxSteps; step++) {
       const last = step === maxSteps;
       let message;
@@ -100,9 +100,9 @@ export function createToolChat(complete) {
   }
 
   async function jsonCodec(opts, totals, trace) {
-    const { config, registry, role, maxSteps, budget, params } = opts;
+    const { config, registry, role, allow, maxSteps, budget, params } = opts;
     const conversation = opts.messages.map((message) => ({ ...message }));
-    const protocol = (last) => JSON_PROTOCOL(registry.describe(role), last);
+    const protocol = (last) => JSON_PROTOCOL(registry.describe(role, allow), last);
     for (let step = 1; step <= maxSteps; step++) {
       const last = step === maxSteps;
       // El protocolo se une al primer mensaje de sistema (algunos proveedores no admiten un `system` suelto en medio).
@@ -129,12 +129,12 @@ export function createToolChat(complete) {
   //   state:  { run, … } contexto que reciben los handlers; `state.run` avanza con cada acción. Si algo falla, quien llama no guarda `state.run`.
   //   mode:   'auto' (por defecto) | 'native' | 'json'.
   // Devuelve { text, run, calls, mode, steps, requests, ms, usage }.
-  return async function chatWithTools(config, messages, { registry, state, role, mode = 'auto', maxSteps = MAX_STEPS, maxTokens = 1600, params = {} } = {}) {
+  return async function chatWithTools(config, messages, { registry, state, role, allow, mode = 'auto', maxSteps = MAX_STEPS, maxTokens = 1600, params = {} } = {}) {
     if (!registry || !state) throw new Error('chatWithTools necesita registry y state.');
     const totals = { ms: 0, requests: 0, usage: {} };
     const trace = [];
     const clean = { ...(Number.isFinite(params?.temperature) ? { temperature: params.temperature } : {}), ...(Number.isFinite(params?.top_p) ? { top_p: params.top_p } : {}) };
-    const opts = { config, messages, registry, state, role, trace, maxSteps: Math.max(1, Math.min(MAX_STEPS, maxSteps)), budget: Math.min(32000, maxTokens * 6 + 4000), params: clean };
+    const opts = { config, messages, registry, state, role, allow, trace, maxSteps: Math.max(1, Math.min(MAX_STEPS, maxSteps)), budget: Math.min(32000, maxTokens * 6 + 4000), params: clean };
     let used = mode === 'auto' ? capabilities.get(config.model) ?? 'native' : mode;
     let outcome;
     if (used === 'native') {

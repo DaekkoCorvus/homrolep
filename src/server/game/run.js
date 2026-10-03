@@ -108,21 +108,22 @@ export function addExchange(run, playerText, reply) {
   return next;
 }
 
-export function endEncounter(run, npc, { relationship, farewell, contactGranted }) {
+// `silent`: el personaje ya se despidió con su última respuesta (terminó la conversación él mismo), así que no se añade otra línea.
+export function endEncounter(run, npc, { relationship, farewell, contactGranted, silent = false }) {
   if (!run.encounter) throw new Error('No estás hablando con nadie.');
   if (run.encounter.closed) throw new Error('Ya te despediste.');
   const next = structuredClone(run);
   next.world = advanceTime(next.world, 1);
   const spoken = typeof farewell === 'string' ? { say: farewell } : (farewell ?? {});
   const goodbye = { ...spoken, say: spoken.say || `${npc.name} asiente mientras te despides.` };
-  const text = closingText(npc, { farewell: goodbye.say, contactGranted });
+  const text = closingText(npc, { farewell: silent ? run.encounter.lines.findLast((line) => line.who === 'npc')?.text : goodbye.say, contactGranted });
   next.relationships[npc.id] = { ...relationship, encounters: relationship.encounters + 1, lastEnd: timeKey(next.world), ...(contactGranted ? { contact: true, contactAt: timeKey(next.world) } : {}) };
   if (contactGranted) next.eventLog.push({ time: timeKey(next.world), type: 'contact_shared', data: { npcId: npc.id, handle: npc.contact.handle } });
   next.eventLog.push({ time: timeKey(next.world), type: 'conversation_ended', data: { npcId: npc.id, contact: contactGranted, response: text } });
   next.narrative = { text, time: timeKey(next.world) };
   next.lastEncounter = structuredClone(run.encounter);
   // La despedida y, si procede, la tarjeta de contacto se muestran dentro de la conversación; el jugador sale con «Volver».
-  next.encounter = { ...run.encounter, closed: true, lines: [...run.encounter.lines, npcLine(goodbye), ...(contactGranted ? [contactCard(npc)] : [])] };
+  next.encounter = { ...run.encounter, closed: true, lines: [...run.encounter.lines, ...(silent ? [] : [npcLine(goodbye)]), ...(contactGranted ? [contactCard(npc)] : [])] };
   next.updatedAt = new Date().toISOString();
   return next;
 }

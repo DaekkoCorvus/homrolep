@@ -15,10 +15,11 @@ import { runProbe } from './ai/probe.js';
 import { createPromptStore } from './ai/promptStore.js';
 import { createSocialCatalog } from './game/socialCatalog.js';
 import { KINDS, kindNames, defaultPreset, normalizePreset, compose, importSillyTavern } from './ai/composer.js';
-import { characterPlan, evaluationPlan, narrationPlan, worldPlan, chatsPlan, socialPlan } from './ai/plans.js';
+import { characterPlan, evaluationPlan, narrationPlan, worldPlan, socialPlan } from './ai/plans.js';
 import { ambientHeader } from './ai/ambient.js';
 import { feedDue, applyGeneratedPosts, applyReactions, wipeFeed, publishPlayerPost, publishPlayerReply, toggleLike, toggleRepost, saveProfile, profileMedia, markNotificationsRead, socialView, socialInput, threadFor, migrateSocial, expectedReplies, playerPopularity, keyOfMinutes, withAvatars, REFRESH_GAP } from './game/social.js';
 import { saveRun, loadRun, listRuns, deleteRun } from './saves/store.js';
+import { randomUUID } from 'node:crypto';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const publicDir = path.join(root, 'public');
@@ -53,11 +54,31 @@ async function readBody(request, limit = 32_000) {
 }
 
 export function createAppServer({ socialCatalog = defaultSocialCatalog, prompts = createPromptStore(), ai = createNanoGPT(fetch, { prompts }), settings = createSettingsStore(), store = { saveRun, loadRun, listRuns, deleteRun } } = {}) {
+// Una partida solo admite una operación a la vez. Las del jugador se rechazan si hay otra en curso; el trabajo de fondo (evaluar una
+// conversación, generar el feed) hace su llamada al modelo SIN tener la partida y solo espera su turno para aplicar el resultado
+// (cargar, aplicar, guardar: milisegundos), así que nunca pisa lo que el jugador hizo mientras tanto ni lo bloquea.
 const active = new Set();
+const background = new Set(); // partidas cuyo bloqueo tiene ahora el trabajo de fondo
+const waiters = new Map();
+const waitIdle = (key) => new Promise((resolve) => { const queue = waiters.get(key) ?? []; queue.push(resolve); waiters.set(key, queue); });
+const release = (key) => { active.delete(key); const queue = waiters.get(key); while (queue?.length) queue.shift()(); };
 async function exclusive(key, operation) {
+  while (background.has(key)) await waitIdle(key);
   if (active.has(key)) throw new AIError('Ya hay una petición en curso. Espera a que termine.', 'REQUEST_BUSY', 409);
   active.add(key);
-  try { return await operation(); } finally { active.delete(key); }
+  try { return await operation(); } finally { release(key); }
+}
+async function whenFree(key, operation) {
+  while (active.has(key)) await waitIdle(key);
+  active.add(key); background.add(key);
+  try { return await operation(); } finally { background.delete(key); release(key); }
+}
+const jobs = new Map(); // partida → cola de tareas de fondo (una a la vez)
+const evaluating = new Set(); const generatingFeed = new Set();
+function enqueue(runId, label, task) {
+  const next = (jobs.get(runId) ?? Promise.resolve()).then(task).catch((error) => { if (debug) console.error(`[fondo] ${label} ${runId}: ${error.code || ''} ${error.message}`); }).finally(() => { if (jobs.get(runId) === next) jobs.delete(runId); });
+  jobs.set(runId, next);
+  return next;
 }
 
 // Lo que el cliente ve de una Run: las impresiones ocultas de los NPC solo salen en modo desarrollador.
@@ -65,9 +86,9 @@ async function publicRun(run, dev = false) {
   const toPublic = async (npc) => ({ ...publicNpc(npc), portraits: await listPortraits(assetDir, npc.id) });
   const relationships = Object.fromEntries(Object.entries(run.relationships ?? {}).map(([id, item]) => [id, dev ? debugView(relationshipOf(run, id)) : { met: item.met, contact: item.contact, added: item.added === true, encounters: item.encounters }]));
   const encounterNpc = run.encounter ? await toPublic(npcs.get(run.encounter.npcId)) : null;
-  const { intents, ...visible } = run; // intenciones sin mecánica: solo para el desarrollador
+  const { intents, pendingEvaluation, ...visible } = run; // intenciones sin mecánica: solo para el desarrollador; la evaluación pendiente es interna
   return {
-    ...visible, ...(dev ? { intents: intents ?? [] } : {}), relationships, encounterNpc, social: socialView(run, { dev, seeds: socialCatalog.current().seeds, avatars: socialCatalog.current().avatars }),
+    ...visible, ...(dev ? { intents: intents ?? [] } : {}), pending: { evaluation: Boolean(pendingEvaluation), feed: generatingFeed.has(run.id) }, relationships, encounterNpc, social: socialView(run, { dev, seeds: socialCatalog.current().seeds, avatars: socialCatalog.current().avatars }),
     commitments: (run.commitments ?? []).map((item) => ({ ...item, npcName: npcs.get(item.npcId)?.name ?? item.npcId })),
     presence: await Promise.all(presentFor(run).map(toPublic)),
     sharedContacts: [...npcs.values()].filter((npc) => run.relationships?.[npc.id]?.contact).map((npc) => ({ id: npc.id, name: npc.name, handle: npc.contact.handle, added: run.relationships[npc.id].added === true })),
@@ -129,15 +150,102 @@ function recordOutcome(next, npcId, outcome) {
   return next;
 }
 
+// Lo que el personaje declaró con sus herramientas (contacto, acuerdos, datos) se valida contra lo que se dijo de verdad: un acuerdo exige la
+// cita literal del jugador, un dato exige su cita, el contacto exige las condiciones de la ficha. Lo que no tiene respaldo se descarta.
+const factsClaim = (items) => ({
+  playerName: items.find((item) => item.kind === 'name') ? { value: items.find((item) => item.kind === 'name').value, evidence: items.find((item) => item.kind === 'name').quote } : undefined,
+  learned: items.filter((item) => item.kind === 'fact').map((item) => ({ fact: item.value, evidence: item.quote }))
+});
+async function applyReply(run, npc, reply, lines, config) {
+  let next = await applyContactClaim(run, reply.contact, config);
+  if (reply.agreements?.length) {
+    const agreements = validateAgreements(reply.agreements, lines.slice(-6), next.world, worldData.locations.map(({ id }) => id), { npcAccepts: true });
+    if (agreements.length) { next = structuredClone(next); addCommitments(next, npc.id, agreements); }
+  }
+  if (reply.facts?.length) {
+    const facts = validateFacts(factsClaim(reply.facts), lines);
+    if (facts.playerName || facts.learned.length) {
+      next = structuredClone(next);
+      next.relationships[npc.id] = applyEvaluation(relationshipOf(next, npc.id), { notes: [], summary: '', ...facts }, timeKey(next.world)).relationship;
+    }
+  }
+  return next;
+}
+
+// Al cerrar una conversación el jugador solo espera la despedida. La reflexión del GM (impresiones, resumen, acuerdos y datos que el personaje
+// no anotó) queda pendiente en la partida y corre en segundo plano; se aplica antes de que ese personaje vuelva a hablar.
+const withPendingEvaluation = (next, npc, before, encounter) => {
+  next.pendingEvaluation = { id: randomUUID(), npcId: npc.id, lines: structuredClone(encounter.lines), startedAt: encounter.startedAt, world: structuredClone(next.world), before: structuredClone(before), attempts: 0 };
+  return next;
+};
+const MAX_EVALUATION_ATTEMPTS = 3;
+
+function scheduleEvaluation(run) {
+  if (!run.pendingEvaluation || evaluating.has(run.id)) return;
+  evaluating.add(run.id);
+  enqueue(run.id, 'evaluación', async () => { try { await runEvaluation(run.id); } finally { evaluating.delete(run.id); } });
+}
+
+async function runEvaluation(runId) {
+  const run = await loadGame(runId);
+  const pending = run.pendingEvaluation;
+  const npc = pending ? npcs.get(pending.npcId) : null;
+  if (!pending || !npc) return;
+  const settle = (change) => whenFree(runId, async () => {
+    const current = await loadGame(runId);
+    if (current.pendingEvaluation?.id !== pending.id) return; // otra operación (p. ej. regenerar el cierre) ya lo resolvió
+    const next = structuredClone(current);
+    await change(next);
+    next.updatedAt = new Date().toISOString();
+    await store.saveRun(settleCommitments(next));
+  });
+  try {
+    const config = await settings.require();
+    const context = await contextFor({ ...run, world: pending.world }, npc);
+    const raw = await ai.evaluateEncounter(context(pending.before, pending.lines, { commitments: context.gmCommitments, locations: context.locations }), config);
+    await settle((next) => {
+      const { relationship } = applyEvaluation(relationshipOf(next, npc.id), validateEvaluation(raw, pending.lines), pending.startedAt);
+      next.relationships[npc.id] = relationship;
+      recordOutcome(next, npc.id, { agreements: validateAgreements(raw?.agreements, pending.lines, pending.world, worldData.locations.map(({ id }) => id)), updates: raw?.updates, lines: pending.lines });
+      delete next.pendingEvaluation;
+    });
+  } catch (error) {
+    // Un fallo (o una cancelación) no pierde la partida: se reintenta la próxima vez que el cliente la consulte, hasta MAX intentos.
+    await settle((next) => {
+      next.pendingEvaluation.attempts += 1;
+      if (next.pendingEvaluation.attempts >= MAX_EVALUATION_ATTEMPTS) { delete next.pendingEvaluation; next.eventLog.push({ time: timeKey(next.world), type: 'evaluation_failed', data: { npcId: npc.id } }); }
+    }).catch(() => {});
+    throw error;
+  }
+}
+
+// NorthLife: una o dos veces al día de juego se genera el feed (varias publicaciones con hora, likes y respuestas). Ya no frena la acción del
+// jugador: corre en segundo plano y las publicaciones aparecen cuando llegan.
+function scheduleFeed(run) {
+  if (typeof ai.socialPosts !== 'function' || generatingFeed.has(run.id) || !feedDue(run)) return;
+  generatingFeed.add(run.id);
+  const input = socialContext(run, 'post');
+  enqueue(run.id, 'feed', async () => {
+    try {
+      const posts = await ai.socialPosts(input, await settings.require());
+      if (!Array.isArray(posts)) return;
+      await whenFree(run.id, async () => { await store.saveRun(settleCommitments(applyGeneratedPosts(await loadGame(run.id), posts, socialOptions()))); });
+    } finally { generatingFeed.delete(run.id); }
+  });
+}
+
+const withoutPending = (run) => { delete run.pendingEvaluation; return run; };
+
 async function devOperation(run, body, config) {
   if (body.op === 'restart') {
     const { run: base, npcId } = rewindEncounter(run);
+    delete base.pendingEvaluation;
     if (body.reopen === false) return base;
     const npc = npcs.get(npcId);
     const context = await contextFor(base, npc);
     const relationship = relationshipOf(base, npc.id);
     const opening = context.speak(await ai.npcReply(context(relationship, [], { mode: 'open' }), config));
-    return applyContactClaim(startEncounter(base, npc, opening), opening.contact, config);
+    return applyReply(startEncounter(base, npc, opening), npc, opening, [], config);
   }
   if (body.op === 'regen') {
     if (run.encounter?.closed && run.lastEncounter) {
@@ -147,7 +255,7 @@ async function devOperation(run, body, config) {
       const midGrant = source.lines.some((line) => line.kind === 'contact');
       const original = { ...source.origin.relationship, ...(midGrant ? { contact: true } : {}) };
       const result = await evaluateAndClose(run, npc, original, source.lines, source.startedAt, config, context);
-      return reapplyEnding(run, npc, result);
+      return withoutPending(reapplyEnding(run, npc, result));
     }
     if (run.encounter) {
       const npc = npcs.get(run.encounter.npcId);
@@ -158,7 +266,7 @@ async function devOperation(run, body, config) {
       const relationship = { ...relationshipOf(run, npc.id), ...(undoesContact ? { contact: false } : {}) };
       const transcript = lines.slice(0, index);
       const reply = context.speak(await ai.npcReply(context(relationship, transcript, { mode: transcript.length === 0 ? 'open' : 'reply', currentExpression: stickyFrom(lines.slice(0, index), npc) }), config), lines.slice(0, index));
-      return applyContactClaim(replaceLastNpcLine(run, reply), reply.contact, config);
+      return applyReply(replaceLastNpcLine(run, reply), npc, reply, transcript, config);
     }
     const last = run.eventLog.at(-1);
     if (last?.type === 'conversation_ended' && run.lastEncounter) {
@@ -168,7 +276,7 @@ async function devOperation(run, body, config) {
       const midGrant = source.lines.some((line) => line.kind === 'contact');
       const original = { ...source.origin.relationship, ...(midGrant ? { contact: true } : {}) };
       const result = await evaluateAndClose(run, npc, original, source.lines, source.startedAt, config, context);
-      return reapplyEnding(run, npc, result);
+      return withoutPending(reapplyEnding(run, npc, result));
     }
     if (last?.data?.response && !String(last.type).startsWith('conversation')) {
       const before = { ...run, eventLog: run.eventLog.slice(0, -1), player: { ...run.player, locationId: last.from ?? run.player.locationId } };
@@ -229,7 +337,6 @@ async function previewPlan(kind, mode, run, npcId) {
   if (kind === 'gm') {
     if (mode === 'free') return worldPlan(run, worldData, ambientHeader({ run, worldData, present: here, npcs }));
     if (mode === 'action') return narrationPlan(mode, run, run, worldData);
-    if (mode === 'chats') return chatsPlan({ ahora, playerName: run.player.name, locations: worldData.locations.map(({ id, name }) => ({ id, nombre: name })), chats: [{ npcId: npc.id, name: npc.name, lines: withPlayer(run.chats?.[npc.id]).slice(-6), commitments: commitmentsFor(run, npc.id, { withIds: true }) }] });
     const context = await contextFor(run, npc);
     return evaluationPlan(context(relationshipOf(run, npc.id), withPlayer(run.encounter?.lines ?? run.lastEncounter?.lines), { commitments: context.gmCommitments, locations: context.locations }));
   }
@@ -327,7 +434,7 @@ const toolContext = (run, config) => ({ run, worldData, npcs, present: presentFo
 // El personaje declara `contact` en su respuesta; eso equivale a llamar a `share_contact`, y el motor decide con las mismas reglas.
 async function applyContactClaim(run, claim, config) {
   if (claim?.give !== true) return run;
-  const outcome = await gameRegistry.execute('share_contact', { conditionsMet: claim.conditionsMet }, toolContext(run, config), { role: 'character' });
+  const outcome = await gameRegistry.execute('share_contact', { conditionsMet: claim.conditionsMet }, toolContext(run, config), { role: 'engine' });
   return outcome.ok ? outcome.run : run;
 }
 
@@ -335,7 +442,7 @@ async function openConversation(run, npc, config) {
   const context = await contextFor(run, npc);
   const relationship = relationshipOf(run, npc.id);
   const opening = context.speak(await ai.npcReply(context(relationship, [], { mode: 'open' }), config));
-  const next = await applyContactClaim(startEncounter(run, npc, opening), opening.contact, config);
+  const next = await applyReply(startEncounter(run, npc, opening), npc, opening, [], config);
   return keepMeetings(next, npc.id);
 }
 
@@ -355,13 +462,19 @@ async function talk(run, body, config) {
     if (!text) throw new Error('Escribe qué le dices.');
     const transcript = [...encounter.lines, { who: 'player', text }];
     const reply = context.speak(await ai.npcReply(context(relationship, transcript, { mode: 'reply' }), config));
-    return applyContactClaim(addExchange(run, text, reply), reply.contact, config);
+    let next = await applyReply(addExchange(run, text, reply), npc, reply, transcript, config);
+    // El personaje decidió terminar la conversación: su respuesta es la despedida y la reflexión del GM queda pendiente.
+    if (reply.end) next = withPendingEvaluation(endEncounter(next, npc, { relationship: relationshipOf(next, npc.id), farewell: null, contactGranted: false, silent: true }), npc, relationshipOf(next, npc.id), next.encounter);
+    return next;
   }
   if (body.op === 'end') {
     if (encounter.closed) throw new Error('Ya te despediste.');
     if (!encounter.lines.some((line) => line.who === 'player')) return endEncounter(run, npc, { relationship, farewell: '', contactGranted: false });
-    const outcome = await evaluateAndClose(run, npc, relationship, encounter.lines, encounter.startedAt, config, context);
-    return recordOutcome(endEncounter(run, npc, outcome), npc.id, outcome);
+    const farewellRaw = await ai.npcReply(context(relationship, encounter.lines, { mode: 'closing' }), config);
+    const farewell = context.speak(farewellRaw, encounter.lines);
+    const closed = endEncounter(run, npc, { relationship, farewell, contactGranted: contactAllowed(npc, relationship, farewell.contact) });
+    const noted = await applyReply(closed, npc, { ...farewellRaw, contact: undefined }, encounter.lines, config);
+    return withPendingEvaluation(noted, npc, relationship, encounter);
   }
   throw new Error('Operación de conversación desconocida.');
 }
@@ -370,7 +483,6 @@ async function talk(run, body, config) {
 // presente, `attempt` para lo que aún no tiene mecánica…). Cada herramienta pasa por el mismo handler que los botones; si algo falla, no se guarda nada.
 async function performAction(before, input, config) {
   let run = applyAction(before, input, worldData);
-  const background = startBackground(run, config);
   const event = run.eventLog.at(-1);
   if (input.type === 'freeform' && typeof ai.act === 'function') {
     const state = toolContext(run, config);
@@ -383,17 +495,15 @@ async function performAction(before, input, config) {
     logged.data = { ...logged.data, response: result.text };
     run.narrative = { text: result.text, time: logged.time };
     if (run.encounter && !before.encounter) run.encounter.lines.unshift({ who: 'narrator', text: result.text });
-    return (await background)(run);
+    return run;
   }
   const narrative = await ai.narrate(before, run, worldData, config);
   event.data = { ...event.data, response: narrative };
   run.narrative = { text: narrative, time: event.time };
-  return (await background)(run);
+  return run;
 }
 
 // --- Chat de NorthLife ------------------------------------------------------------------------------
-const AGREEMENT_HINT = /ma[ñn]ana|hoy|luego|esta noche|\d{1,2}\s*(:|h\b|hrs|pm|am)|a las|nos vemos|quedamos|cita|te traigo|te llevo|prometo|promet|vengo|ven\b|trae\b|vuelvo|me llamo|mi nombre|soy\b/i;
-
 async function chatWith(run, body, config) {
   const npc = npcs.get(String(body.npcId));
   const relationship = npc ? relationshipOf(run, npc.id) : null;
@@ -405,51 +515,12 @@ async function chatWith(run, body, config) {
   const sent = { who: 'player', text, time: timeKey(run.world) };
   const context = await contextFor(run, npc);
   const reply = await ai.npcReply(context(relationship, [...history, sent].slice(-24), { mode: 'chat' }), config);
-  const next = structuredClone(run);
+  let next = structuredClone(run);
   next.world = advanceTime(next.world, 1);
   const answered = { who: 'npc', text: stripMarks(reply.say), time: timeKey(next.world) };
   next.chats = { ...next.chats, [npc.id]: [...history, sent, answered].slice(-80) };
   next.updatedAt = new Date().toISOString();
-  return next;
-}
-
-// --- Actualización de fondo del GM ------------------------------------------------------------------------
-// Chats con datos relevantes y publicaciones de NorthLife NO hacen llamadas por su cuenta: se procesan por lotes,
-// en paralelo con la narración, cuando el jugador actúa (moverse, esperar, acción libre…). Un solo viaje para todo.
-function startBackground(run, config) {
-  const idsOf = () => worldData.locations.map(({ id }) => id);
-  const pending = Object.entries(run.chats ?? {}).map(([npcId, messages]) => ({ npcId, total: messages.length, lines: messages.slice(run.chatSeen?.[npcId] ?? 0) })).filter((item) => item.lines.length && npcs.has(item.npcId));
-  const worth = pending.filter((item) => AGREEMENT_HINT.test(item.lines.map((line) => line.text).join(' ')));
-  const chatCall = worth.length && typeof ai.extractFromChats === 'function'
-    ? ai.extractFromChats({
-      ahora: temporalContext({ encounters: 0, notes: [], history: [] }, run.world).ahora, playerName: run.player.name, locations: worldData.locations.map(({ id, name }) => ({ id, nombre: name })),
-      chats: worth.map((item) => ({ npcId: item.npcId, name: npcs.get(item.npcId).name, lines: item.lines, commitments: commitmentsFor(run, item.npcId, { withIds: true }) }))
-    }, config).catch(() => null)
-    : Promise.resolve(null);
-
-  // NorthLife: una o dos veces al día de juego, el prompt social genera varias publicaciones (con hora, likes y respuestas).
-  const socialCall = typeof ai.socialPosts === 'function' && feedDue(run)
-    ? ai.socialPosts(socialContext(run, 'post'), config).catch(() => null)
-    : Promise.resolve(null);
-
-  // Devuelve la función que vuelca los resultados en la partida final.
-  return Promise.all([chatCall, socialCall]).then(([results, posts]) => (next) => {
-    for (const item of pending) {
-      const result = results?.find?.((entry) => entry?.npcId === item.npcId);
-      if (worth.includes(item) && !Array.isArray(results)) continue; // la llamada falló: se reintenta en la próxima acción
-      if (result) {
-        const lastTime = item.lines.at(-1)?.time ?? '';
-        const when = /^DAY_(\d+)_(\d{2}):(\d{2})$/.exec(lastTime);
-        const worldAt = when ? { day: Number(when[1]), hour: Number(when[2]), minute: Number(when[3]) } : next.world;
-        const relationship = relationshipOf(next, item.npcId);
-        const { relationship: updated } = applyEvaluation(relationship, { notes: [], summary: '', ...validateFacts(result, item.lines) }, lastTime);
-        next.relationships = { ...next.relationships, [item.npcId]: updated };
-        recordOutcome(next, item.npcId, { agreements: validateAgreements(result.agreements, item.lines, worldAt, idsOf()), updates: result.updates, lines: item.lines });
-      }
-      next.chatSeen = { ...next.chatSeen, [item.npcId]: item.total };
-    }
-    return Array.isArray(posts) ? applyGeneratedPosts(next, posts, socialOptions()) : next;
-  });
+  return applyReply(next, npc, reply, [...history, sent], config);
 }
 
 // Reacción de la red a lo que el jugador acaba de publicar o responder (con `expected` respuestas mínimas y máximas). Si hace
@@ -475,7 +546,8 @@ async function api(request, response, pathname) {
   const requireConfig = async () => ({ ...(await settings.require()), signal: controller.signal });
   // Al guardar se evalúan las promesas vencidas: el reloj pudo avanzar durante la operación.
   const save = async (run) => { controller.signal.throwIfAborted(); await store.saveRun(settleCommitments(run)); };
-  const sendRun = async (status, run) => sendJson(response, status, await publicRun(run, request.headers['x-hom-dev'] === '1'));
+  // Consultar la partida también reanuda una evaluación pendiente (tras reiniciar el servidor o tras un fallo).
+  const sendRun = async (status, run) => { scheduleEvaluation(run); return sendJson(response, status, await publicRun(run, request.headers['x-hom-dev'] === '1')); };
   if (request.method === 'GET' && pathname === '/api/ai/settings') return sendJson(response, 200, await settings.status());
   if (request.method === 'POST' && pathname === '/api/ai/models') {
     const key = await settings.key(await readBody(request));
@@ -587,11 +659,13 @@ async function api(request, response, pathname) {
       const config = await requireConfig();
       const run = await performAction(await loadGame(id), input, config);
       await save(run);
+      scheduleFeed(run);
       return sendRun(200, run);
     });
   }
   if (request.method === 'POST' && operation === 'chat') {
     const body = await readBody(request);
+    await jobs.get(id); // el personaje primero recuerda la conversación anterior
     return exclusive(id, async () => {
       const config = await requireConfig();
       const run = await chatWith(await loadGame(id), body, config);
@@ -620,6 +694,7 @@ async function api(request, response, pathname) {
   }
   if (request.method === 'POST' && operation === 'talk') {
     const body = await readBody(request);
+    if (body.op === 'start') await jobs.get(id); // el personaje primero recuerda la conversación anterior
     return exclusive(id, async () => {
       const config = await requireConfig();
       const run = await talk(await loadGame(id), body, config);
@@ -694,6 +769,7 @@ const server = http.createServer(async (request, response) => {
     if (!response.headersSent) sendJson(response, status, { error:message, code:error.code || 'INVALID_REQUEST' });
   }
 });
+server.idle = async () => { while (jobs.size) await Promise.all([...jobs.values()]); };
 return server;
 }
 

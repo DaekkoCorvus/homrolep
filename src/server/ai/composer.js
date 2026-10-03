@@ -37,8 +37,8 @@ export const KINDS = {
   },
   gm: {
     label: 'GM', short: 'GM',
-    description: 'Interpreta conversaciones al cerrarlas, narra acciones que el motor ya aplicó, procesa chats pendientes y, en una acción libre usa las herramientas del motor (viajar, esperar, conversar, intentar algo sin mecánica…). El servidor valida cada llamada y aplica solo los cambios permitidos.',
-    modes: [{ id: 'evaluation', label: 'Evalúa una conversación' }, { id: 'free', label: 'Mundo libre (con herramientas)' }, { id: 'action', label: 'Narra otras acciones' }, { id: 'chats', label: 'Procesa chats pendientes' }],
+    description: 'Interpreta conversaciones al cerrarlas, narra acciones que el motor ya aplicó, y, en una acción libre usa las herramientas del motor (viajar, esperar, conversar, intentar algo sin mecánica…). El servidor valida cada llamada y aplica solo los cambios permitidos.',
+    modes: [{ id: 'evaluation', label: 'Evalúa una conversación' }, { id: 'free', label: 'Mundo libre (con herramientas)' }, { id: 'action', label: 'Narra otras acciones' }],
     macros: [['player', 'Nombre real del jugador'], ['user', 'Igual que player'], ['char', 'Personaje evaluado (si aplica)'], ['location', 'Lugar actual'], ['time', 'Fecha y hora del juego'], ['mode', 'Tipo de llamada']],
     autos: {
       player: { label: 'Jugador', description: 'Nombre, edad, género, origen, ocupación, dinero y reputación del jugador. El GM lo sabe todo.', keys: ['jugador'], role: 'user' },
@@ -48,7 +48,7 @@ export const KINDS = {
       character: { label: 'Personaje evaluado', description: 'Resumen y personalidad del personaje de la conversación.', keys: ['personaje'], role: 'user' },
       relationship: { label: 'Relación y recuerdos', description: 'Actitud previa, última conversación y recuerdos privados del personaje.', keys: ['relacion'], role: 'user' },
       pending: { label: 'Pendientes y lugares', description: 'Acuerdos vigentes (con id) y lugares del mapa.', keys: ['pendientes', 'lugares'], role: 'user' },
-      history: { label: 'Conversación o chats', description: 'La conversación a evaluar o los chats pendientes de procesar.', keys: ['conversacion', 'chats'], role: 'user' },
+      history: { label: 'Conversación', description: 'La conversación a evaluar.', keys: ['conversacion'], role: 'user' },
       task, format
     },
     tasks: GM_TASKS

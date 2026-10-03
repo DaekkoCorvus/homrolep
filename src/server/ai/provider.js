@@ -1,5 +1,6 @@
 import { compose } from './composer.js';
-import { characterPlan, evaluationPlan, narrationPlan, chatsPlan, socialPlan } from './plans.js';
+import { characterPlan, evaluationPlan, narrationPlan, socialPlan } from './plans.js';
+import { characterRegistry, characterToolNames } from './tools/character.js';
 import { factoryPrompts } from './promptStore.js';
 import { AIError } from './errors.js';
 import { createToolChat } from './tools/loop.js';
@@ -15,6 +16,14 @@ const parseJson = (text, message) => {
   try { return JSON.parse(text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); }
   catch { throw new AIError(message, 'AI_RESPONSE'); }
 };
+// Respuesta con el formato JSON anterior ({"say":…,"gesture":…,"contact":{…}}): se sigue aceptando por si un preset o modelo lo conserva.
+function readLegacyReply(text) {
+  if (!/^\s*(?:```(?:json)?\s*)?\{/.test(text)) return null;
+  let data; try { data = JSON.parse(text.replace(/^\s*```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '')); } catch { return null; }
+  if (!data || typeof data.say !== 'string') return null;
+  const contact = data.contact && typeof data.contact === 'object' ? { give:data.contact.give === true, conditionsMet:Array.isArray(data.contact.conditionsMet) ? data.contact.conditionsMet.map((value) => value === true) : [] } : null;
+  return { say:data.say, gesture:data.gesture, intent:data.intent, ...(contact ? { contact } : {}) };
+}
 const clean = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
 
 export { AIError };
@@ -207,23 +216,30 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
     },
 
     // ---- PERSONAJE: interpreta a alguien. Solo recibe lo que ese personaje sabe. -------------------------------------------------
+    // El personaje responde con TEXTO (marcas {emoción} y, si quiere, una acción *entre asteriscos* al principio) y, en la misma respuesta,
+    // declara efectos con herramientas (acuerdos, datos, contacto, nota privada, fin de la conversación). Aquí solo se recogen; el motor los valida.
+    // Devuelve { say, gesture, intent, contact?, agreements?, facts?, end? }. Un modelo que aún conteste con el JSON antiguo se sigue entendiendo.
     async npcReply(context, config) {
-      const result = parseJson(await this.ask(characterPlan(context), config, 1200), 'La conversación se cortó. Puedes reintentar sin perder nada.');
-      const say = clean(result?.say, 1500);
+      const chat = context.mode === 'chat';
+      const state = { claims:{} };
+      const allow = characterToolNames({ mode:context.mode, canShare:context.contact?.yaCompartido !== true });
+      const result = await this.act(characterPlan(context), { registry:characterRegistry, state, role:chat ? 'text' : 'character', allow }, config, 1200);
+      const legacy = readLegacyReply(result.text);
+      const raw = legacy ? legacy.say : result.text;
+      const lead = !chat && !legacy ? /^\s*\*([^*\n]{1,160})\*\s*/.exec(raw) : null;
+      const say = clean(lead ? raw.slice(lead[0].length) : raw, 1500);
       if (!say) throw new AIError('La conversación se cortó. Puedes reintentar sin perder nada.', 'AI_RESPONSE');
-      const claim = result?.contact && typeof result.contact === 'object' ? { give:result.contact.give === true, conditionsMet:Array.isArray(result.contact.conditionsMet) ? result.contact.conditionsMet.map((value) => value === true) : [] } : null;
-      return { say, gesture:clean(result?.gesture, 160), intent:clean(result?.intent, 240), ...(claim ? { contact:claim } : {}) };
+      const { claims } = state;
+      const contact = claims.contact ?? legacy?.contact;
+      return {
+        say, gesture:clean(lead ? lead[1] : legacy?.gesture, 160), intent:clean(claims.intent ?? legacy?.intent, 240),
+        ...(contact ? { contact } : {}), ...(claims.agreements?.length ? { agreements:claims.agreements } : {}), ...(claims.facts?.length ? { facts:claims.facts } : {}), ...(claims.end ? { end:claims.end } : {})
+      };
     },
 
     // ---- GM: traduce lo ocurrido a datos para el motor. No interpreta a nadie. ----------------------------------------------------
     async evaluateEncounter(context, config) {
       return parseJson(await this.ask(evaluationPlan(context), config, 1800), 'No se pudo cerrar la conversación. Puedes reintentar sin perder nada.');
-    },
-
-    // Chats pendientes (de uno o varios personajes) en UNA sola llamada, aprovechada cuando el jugador actúa.
-    async extractFromChats(input, config) {
-      const result = parseJson(await this.ask(chatsPlan(input), config, 1800), 'No se pudieron interpretar los chats.');
-      return Array.isArray(result?.results) ? result.results : [];
     },
 
     // ---- SOCIAL (NorthLife): el modelo propone; game/social.js valida y decide cuándo se ve. -----------------------------------------
@@ -244,10 +260,10 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
     // Mundo libre: el GM interpreta lo que escribió el jugador y actúa con las herramientas del motor (viajar, esperar, conversar,
     // `attempt` para lo que aún no tiene mecánica…). `state.run` avanza con cada herramienta; devuelve la narración final.
     // Si lanza, quien llama no debe guardar `state.run`.
-    async act(plan, { registry, state }, config, maxTokens = 3000) {
+    async act(plan, { registry, state, role = 'gm', allow }, config, maxTokens = 3000) {
       const preset = prompts.get(plan.kind);
       const messages = compose(plan.kind, plan.mode, preset, plan);
-      const result = await chatWithTools(config, messages, { registry, state, role:'gm', maxTokens, params:preset.params, label:{ kind:plan.kind, mode:plan.mode } });
+      const result = await chatWithTools(config, messages, { registry, state, role, allow, maxTokens, params:preset.params, label:{ kind:plan.kind, mode:plan.mode } });
       return { text:clean(result.text, 6000), run:result.run, calls:result.calls };
     }
   };
