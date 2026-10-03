@@ -1,6 +1,8 @@
 import { compose } from './composer.js';
 import { characterPlan, evaluationPlan, narrationPlan, chatsPlan, socialPlan } from './plans.js';
 import { factoryPrompts } from './promptStore.js';
+import { AIError } from './errors.js';
+import { createToolChat } from './tools/loop.js';
 export const NANOGPT_BASE_URL = 'https://api.nano-gpt.com/api/v1';
 
 
@@ -10,13 +12,7 @@ const parseJson = (text, message) => {
 };
 const clean = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
 
-export class AIError extends Error {
-  constructor(message, code = 'AI_UNAVAILABLE', status = 502) {
-    super(message);
-    this.code = code;
-    this.status = status;
-  }
-}
+export { AIError };
 
 // Motivo textual que devolvió el proveedor (p. ej. «el modelo no admite tools»), recortado y sin la API key.
 async function providerDetail(response, key) {
@@ -104,8 +100,24 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
     return { json, ms:Date.now() - started, usage:usageOf(json.usage) };
   }
 
+  // Conversación con herramientas del motor (tools nativas o codec JSON de reserva, con tope de pasos). Registra la llamada para la traza.
+  // La partida resultante queda en `state.run`; quien llama decide si guardarla (si lanza, no debe guardar nada).
+  const toolChat = createToolChat(complete);
+  async function chatWithTools(config, messages, options = {}) {
+    const entry = { kind:'tools', mode:options.role ?? 'gm', at:new Date().toISOString(), messages };
+    const started = Date.now();
+    try {
+      const result = await toolChat(config, messages, options);
+      prompts.record?.({ ...entry, response:result.text, meta:{ model:config.model, ms:result.ms, usage:result.usage, attempts:result.requests, transport:result.mode, steps:result.steps, calls:result.calls } });
+      return result;
+    } catch (error) {
+      prompts.record?.({ ...entry, error:error.message, meta:{ model:config.model, ms:Date.now() - started, errorCode:error.code ?? null } });
+      throw error;
+    }
+  }
+
   return {
-    chat, chatDetailed, complete,
+    chat, chatDetailed, complete, chatWithTools,
     async models(apiKey) {
       const result = await call('models', apiKey);
       if (!Array.isArray(result.data)) throw new AIError('NanoGPT no devolvió un catálogo de modelos válido.', 'AI_RESPONSE');

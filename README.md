@@ -89,6 +89,16 @@ npm run probe -- modelo1 modelo2                # compara hasta 4 modelos
 npm run probe -- --json --tests tools,multi …   # salida JSON / solo algunas pruebas
 ```
 
+### Herramientas del motor (Fase 1 del rediseño)
+
+Los verbos del juego viven en un **registro de herramientas** (`src/server/ai/tools/`), descrito en [AI_ENGINE_REDESIGN.md](AI_ENGINE_REDESIGN.md):
+
+- `registry.js`: contrato de cada herramienta (nombre, parámetros en JSON Schema, roles, `query`/`action`) y ejecutor que valida los argumentos antes de llamar al handler. Un rechazo (`{ ok: false, reason, hint }`) es información para el modelo, no un error.
+- `game.js`: handlers deterministas de `travel`, `wait`, `sleep`, `work`, `start_conversation` y `share_contact`. Los botones de la interfaz (`applyAction`, abrir una conversación) y el modelo pasan por los mismos handlers, así que el juego sigue funcionando sin IA y no pueden divergir.
+- `loop.js` (expuesto como `ai.chatWithTools`): bucle de hasta 3 pasos; el último va sin herramientas para que el modelo narre. Transporte nativo (`tools`/`tool_calls`) o codec JSON de reserva (`{"say", "calls"}`) para modelos sin `tools`; en modo `auto` se prueba el nativo y se recuerda por modelo si el proveedor lo rechaza. Cada llamada queda en la traza (`tools:<rol>`).
+
+Todavía **ninguna acción del juego llama a `chatWithTools`**: la Fase 1 deja la infraestructura probada (con transporte falso) y el juego no cambia. La Fase 2 conecta el mundo libre.
+
 La creación pregunta edad, género, apariencia e historia personal opcional; el nombre se pide justo antes de cruzar. La apariencia se guarda como referencia para futuras interacciones con NPC, pero no aparece en la ficha ni se envía al GM durante el prólogo o narraciones generales. La raza humana se asigna automáticamente por ser la única disponible. El prólogo comienza en la estación de Porta Magna. Ocupación y aspiración quedan sin definir al inicio y se desarrollarán durante el juego. El atajo de trabajo solo funciona en partidas que ya tengan la ocupación `worker`.
 
 ## Arquitectura

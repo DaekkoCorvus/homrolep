@@ -2,12 +2,14 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createRun, setPrologue, applyAction, startEncounter, addExchange, endEncounter, rewindEncounter, replaceLastNpcLine, reapplyEnding, setWorldTime, addContact, grantContact, leaveEncounter, MAX_PLAYER_TEXT } from './game/run.js';
+import { createRun, setPrologue, startEncounter, addExchange, endEncounter, rewindEncounter, replaceLastNpcLine, reapplyEnding, setWorldTime, addContact, grantContact, leaveEncounter, MAX_PLAYER_TEXT } from './game/run.js';
 import { advanceTime, timeKey } from './game/clock.js';
 import { validateAgreements, addCommitments, applyUpdates, settleCommitments, keepMeetings, meetingNpcIds, commitmentsFor } from './game/commitments.js';
 import { validateNpcCard, fromForeignCard, parsePngCard, savePortrait, listPortraits, saveNpcCard, imageKind, removePortrait, renamePortrait, normalizeEmotion } from './game/cards.js';
 import { loadNpcs, presentNpcs, publicNpc, relationshipOf, affinityOf, attitudeOf, validateEvaluation, validateFacts, scheduleFor, minutesOfWorld, applyEvaluation, debugView, temporalContext, timedNotes, timedHistory, contactAllowed, findNpcByHandle, parseSpeech, stripMarks, contactInfo, stickyFrom } from './game/npcs.js';
 import { createNanoGPT, AIError } from './ai/provider.js';
+import { gameRegistry, applyAction } from './ai/tools/game.js';
+import { unwrap } from './ai/tools/registry.js';
 import { createSettingsStore, isModelId } from './ai/settings.js';
 import { runProbe } from './ai/probe.js';
 import { createPromptStore } from './ai/promptStore.js';
@@ -133,7 +135,7 @@ async function devOperation(run, body, config) {
     const context = await contextFor(base, npc);
     const relationship = relationshipOf(base, npc.id);
     const opening = context.speak(await ai.npcReply(context(relationship, [], { mode: 'open' }), config));
-    return startEncounter(base, npc, opening, contactAllowed(npc, relationship, opening.contact) ? npc : null);
+    return applyContactClaim(startEncounter(base, npc, opening), opening.contact, config);
   }
   if (body.op === 'regen') {
     if (run.encounter?.closed && run.lastEncounter) {
@@ -154,7 +156,7 @@ async function devOperation(run, body, config) {
       const relationship = { ...relationshipOf(run, npc.id), ...(undoesContact ? { contact: false } : {}) };
       const transcript = lines.slice(0, index);
       const reply = context.speak(await ai.npcReply(context(relationship, transcript, { mode: transcript.length === 0 ? 'open' : 'reply', currentExpression: stickyFrom(lines.slice(0, index), npc) }), config), lines.slice(0, index));
-      return replaceLastNpcLine(run, reply, contactAllowed(npc, relationship, reply.contact) ? npc : null);
+      return applyContactClaim(replaceLastNpcLine(run, reply), reply.contact, config);
     }
     const last = run.eventLog.at(-1);
     if (last?.type === 'conversation_ended' && run.lastEncounter) {
@@ -316,20 +318,27 @@ async function devRoutes(request, response, pathname) {
   return sendJson(response, 404, { error: 'Ruta de desarrollo no encontrada.' });
 }
 
+// Contexto de las herramientas del motor: la partida, el mundo y lo que hace falta para conversar. Los botones y el modelo comparten handlers.
+const toolContext = (run, config) => ({ run, worldData, npcs, present: presentFor, openConversation: (current, npc) => openConversation(current, npc, config) });
+
+// El personaje declara `contact` en su respuesta; eso equivale a llamar a `share_contact`, y el motor decide con las mismas reglas.
+async function applyContactClaim(run, claim, config) {
+  if (claim?.give !== true) return run;
+  const outcome = await gameRegistry.execute('share_contact', { conditionsMet: claim.conditionsMet }, toolContext(run, config), { role: 'character' });
+  return outcome.ok ? outcome.run : run;
+}
+
 async function openConversation(run, npc, config) {
   const context = await contextFor(run, npc);
   const relationship = relationshipOf(run, npc.id);
   const opening = context.speak(await ai.npcReply(context(relationship, [], { mode: 'open' }), config));
-  const next = startEncounter(run, npc, opening, contactAllowed(npc, relationship, opening.contact) ? npc : null);
+  const next = await applyContactClaim(startEncounter(run, npc, opening), opening.contact, config);
   return keepMeetings(next, npc.id);
 }
 
 async function talk(run, body, config) {
   if (body.op === 'start') {
-    const npc = npcs.get(String(body.npcId));
-    if (run.encounter) throw Object.assign(new Error('Ya estás en una conversación.'), { status: 409 });
-    if (!npc || !presentFor(run).includes(npc)) throw new Error('Esa persona no está aquí ahora.');
-    return openConversation(run, npc, config);
+    return unwrap(await gameRegistry.execute('start_conversation', { npcId: String(body.npcId) }, toolContext(run, config)), run);
   }
   const encounter = run.encounter;
   if (!encounter) throw new Error('No estás hablando con nadie.');
@@ -343,7 +352,7 @@ async function talk(run, body, config) {
     if (!text) throw new Error('Escribe qué le dices.');
     const transcript = [...encounter.lines, { who: 'player', text }];
     const reply = context.speak(await ai.npcReply(context(relationship, transcript, { mode: 'reply' }), config));
-    return addExchange(run, text, reply, contactAllowed(npc, relationship, reply.contact) ? npc : null);
+    return applyContactClaim(addExchange(run, text, reply), reply.contact, config);
   }
   if (body.op === 'end') {
     if (encounter.closed) throw new Error('Ya te despediste.');

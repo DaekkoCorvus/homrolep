@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import path from 'node:path';
 import { loadNpcs, presentNpcs, validateEvaluation, applyEvaluation, affinityOf, emptyRelationship, validateFacts, contactAllowed, MAX_SHIFT_PER_ENCOUNTER, temporalContext, timedNotes, findNpcByHandle } from '../src/server/game/npcs.js';
-import { createRun, startEncounter, addExchange, endEncounter, applyAction, addContact, grantContact, leaveEncounter } from '../src/server/game/run.js';
+import { applyAction } from '../src/server/ai/tools/game.js';
+import { createRun, startEncounter, addExchange, endEncounter, addContact, grantContact, leaveEncounter } from '../src/server/game/run.js';
 import { createNanoGPT } from '../src/server/ai/provider.js';
 import { createAppServer } from '../src/server/index.js';
 

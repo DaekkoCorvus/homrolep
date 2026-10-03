@@ -47,44 +47,6 @@ export function setPrologue(run, proposal, worldData) {
   return next;
 }
 
-export function applyAction(run, action, worldData) {
-  if (run.encounter) throw Object.assign(new Error('Estás en plena conversación. Despídete antes de hacer otra cosa.'), { code: 'ENCOUNTER_ACTIVE' });
-  const next = structuredClone(run);
-  const type = String(action.type ?? 'freeform');
-  let minutes = 10;
-  let event;
-
-  if (type === 'travel') {
-    const destination = worldData.locations.find((place) => place.id === action.locationId);
-    if (!destination) throw new Error('Ubicación desconocida.');
-    if (destination.id === next.player.locationId) throw new Error('Ya estás en esa ubicación.');
-    const from = next.player.locationId;
-    minutes = destination.travelMinutes;
-    next.player.locationId = destination.id;
-    event = { type: 'location_changed', from, to: destination.id };
-  } else if (type === 'wait') {
-    minutes = Math.min(8 * 60, Math.max(5, Number(action.minutes) || 30));
-    event = { type: 'time_waited', data: { minutes } };
-  } else if (type === 'sleep') {
-    minutes = 8 * 60;
-    event = { type: 'slept', data: { minutes } };
-  } else if (type === 'work') {
-    if (next.player.occupation !== 'worker') throw new Error('Aún no tienes un trabajo. Puedes descubrirlo durante la historia.');
-    minutes = 6 * 60;
-    next.player.money += 60;
-    event = { type: 'worked', data: { earned: 60 } };
-  } else {
-    const text = String(action.text ?? '').trim().slice(0, MAX_PLAYER_TEXT);
-    if (!text) throw new Error('Escribe una acción.');
-    event = { type: 'player_action', data: { text } };
-  }
-
-  next.world = advanceTime(next.world, minutes);
-  next.updatedAt = new Date().toISOString();
-  next.eventLog.push({ time: timeKey(next.world), ...event });
-  return next;
-}
-
 // Línea hablada por un NPC: texto limpio, gesto opcional y tramos con la emoción activa en cada momento.
 export const npcLine = (reply) => ({
   who: 'npc', text: reply.say, ...(reply.gesture ? { gesture: reply.gesture } : {}), ...(reply.segments?.length ? { segments: reply.segments } : {})
@@ -95,7 +57,7 @@ const EXCHANGE_MINUTES = 3;
 export const MAX_ENCOUNTER_LINES = 200;
 export const MAX_PLAYER_TEXT = 4000;
 
-export function startEncounter(run, npc, opening, contactNpc = null) {
+export function startEncounter(run, npc, opening) {
   if (run.encounter) throw new Error('Ya estás en una conversación.');
   const next = structuredClone(run);
   const prior = { met: false, knownName: null, knows: [], contact: false, encounters: 0, notes: [], history: [], ...(run.relationships?.[npc.id] ?? {}) };
@@ -109,13 +71,12 @@ export function startEncounter(run, npc, opening, contactNpc = null) {
   const relationship = { met: false, knownName: null, knows: [], contact: false, added: false, encounters: 0, lastEnd: null, notes: [], history: [], ...(next.relationships?.[npc.id] ?? {}) };
   next.relationships = { ...next.relationships, [npc.id]: { ...relationship, met: true } };
   next.eventLog.push({ time: timeKey(next.world), type: 'conversation_started', data: { npcId: npc.id } });
-  if (contactNpc) shareContact(next, contactNpc);
   next.updatedAt = new Date().toISOString();
   return next;
 }
 
 // El NPC comparte su usuario de contacto: queda constancia en el registro y, si hay conversación, una tarjeta visible.
-function shareContact(run, npc) {
+export function shareContact(run, npc) {
   run.relationships[npc.id] = { ...run.relationships[npc.id], contact: true, contactAt: timeKey(run.world) };
   run.eventLog.push({ time: timeKey(run.world), type: 'contact_shared', data: { npcId: npc.id, handle: npc.contact.handle } });
   if (run.encounter) run.encounter.lines.push(contactCard(npc));
@@ -133,7 +94,7 @@ export function addContact(run, npc) {
   return next;
 }
 
-export function addExchange(run, playerText, reply, contactNpc = null) {
+export function addExchange(run, playerText, reply) {
   if (!run.encounter) throw new Error('No estás hablando con nadie.');
   const text = String(playerText ?? '').trim().slice(0, MAX_PLAYER_TEXT);
   if (!text) throw new Error('Escribe qué le dices.');
@@ -143,7 +104,6 @@ export function addExchange(run, playerText, reply, contactNpc = null) {
   next.encounter.lines.push({ who: 'player', text }, npcLine(reply));
   if (reply.intent !== undefined) next.encounter.intent = reply.intent || undefined;
   next.world = advanceTime(next.world, EXCHANGE_MINUTES);
-  if (contactNpc) shareContact(next, contactNpc);
   next.updatedAt = new Date().toISOString();
   return next;
 }
@@ -195,7 +155,7 @@ export function rewindEncounter(run) {
   return { run: next, npcId: source.npcId };
 }
 
-export function replaceLastNpcLine(run, reply, contactNpc = null) {
+export function replaceLastNpcLine(run, reply) {
   const lines = run.encounter?.lines;
   const index = lines ? lines.findLastIndex((line) => line.who === 'npc') : -1;
   if (index < 0) throw new Error('No hay una respuesta del NPC que regenerar.');
@@ -208,7 +168,6 @@ export function replaceLastNpcLine(run, reply, contactNpc = null) {
   }
   next.encounter.lines[index] = npcLine(reply);
   if (reply.intent !== undefined) next.encounter.intent = reply.intent || undefined;
-  if (contactNpc) shareContact(next, contactNpc);
   next.updatedAt = new Date().toISOString();
   return next;
 }
