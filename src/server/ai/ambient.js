@@ -8,7 +8,7 @@ const pad = (value) => String(value).padStart(2, '0');
 const MAX_PENDING = 5;
 
 // `present`: personas en el lugar ahora. `npcs`: todas las fichas (nombres de los pendientes).
-export function ambientHeader({ run, worldData, present = [], npcs = new Map() }) {
+export function ambientHeader({ run, worldData, present = [], npcs = new Map(), notices = [] }) {
   const { world, player } = run;
   const here = worldData.locations.find(({ id }) => id === player.locationId);
   const hours = here?.hours ? `, abierto de ${pad(here.hours.open)}:00 a ${pad(here.hours.close)}:00` : '';
@@ -23,6 +23,7 @@ export function ambientHeader({ run, worldData, present = [], npcs = new Map() }
     `Presentes: ${people}.`,
     `Jugador: ${player.name}, ${player.money} de dinero, ${player.occupation ? `trabaja como ${player.occupation}` : 'sin trabajo'}.`,
     pending.length ? `Pendientes: ${pending.join('; ')}.` : 'Pendientes: ninguno.',
+    ...(notices.length ? ['Desde tu última intervención:', ...notices.map((line) => `- ${line}`)] : []),
     `Mapa (id: minutos de viaje): ${worldData.locations.filter(({ id }) => id !== player.locationId).map(({ id, travelMinutes }) => `${id}: ${travelMinutes}`).join(', ')}.`
   ];
   return lines.join('\n');

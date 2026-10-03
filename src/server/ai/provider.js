@@ -1,6 +1,7 @@
 import { compose } from './composer.js';
 import { characterPlan, evaluationPlan, narrationPlan, socialPlan } from './plans.js';
 import { characterRegistry, characterToolNames } from './tools/character.js';
+import { deepEntries } from './context/card.js';
 import { factoryPrompts } from './promptStore.js';
 import { AIError } from './errors.js';
 import { createToolChat } from './tools/loop.js';
@@ -221,7 +222,7 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
     // Devuelve { say, gesture, intent, contact?, agreements?, facts?, end? }. Un modelo que aún conteste con el JSON antiguo se sigue entendiendo.
     async npcReply(context, config) {
       const chat = context.mode === 'chat';
-      const state = { claims:{} };
+      const state = { claims:{}, deep:deepEntries(context.npc) };
       const allow = characterToolNames({ mode:context.mode, canShare:context.contact?.yaCompartido !== true });
       const result = await this.act(characterPlan(context), { registry:characterRegistry, state, role:chat ? 'text' : 'character', allow }, config, 1200);
       const legacy = readLegacyReply(result.text);
@@ -254,8 +255,8 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
       return result && typeof result === 'object' ? result : {};
     },
 
-    async narrate(before, after, worldData, config) {
-      return await this.ask(narrationPlan('action', before, after, worldData), config);
+    async narrate(before, after, worldData, config, npcs) {
+      return await this.ask(narrationPlan('action', before, after, worldData, npcs), config);
     },
     // Mundo libre: el GM interpreta lo que escribió el jugador y actúa con las herramientas del motor (viajar, esperar, conversar,
     // `attempt` para lo que aún no tiene mecánica…). `state.run` avanza con cada herramienta; devuelve la narración final.

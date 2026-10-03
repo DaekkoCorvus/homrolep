@@ -8,8 +8,8 @@ const task = { label: 'Instrucción del turno', description: 'El texto de «Inst
 const format = { label: 'Formato de salida', description: 'JSON que el motor sabe leer. Obligatorio: puedes moverlo, no quitarlo ni editarlo.', special: true, locked: true };
 
 const DIALOGUE_AUTOS = {
-  card: { label: 'Ficha del personaje', description: 'Apariencia, personalidad, trasfondo, conocimientos, secretos y conexiones de la tarjeta del NPC.', keys: ['tu'], role: 'system' },
-  world: { label: 'Mundo y momento', description: 'Fecha y hora del juego y el lugar donde ocurre la escena.', keys: ['ahora', 'lugar'], role: 'user' },
+  card: { label: 'Ficha del personaje', description: 'Capa básica (nombre, rol, resumen, personalidad y voz), siempre; y la capa profunda (trasfondo, apariencia, conocimientos, secretos, conexiones) solo con las entradas que vienen al caso por lo que se está hablando. El personaje puede pedir más con la herramienta recall.', keys: ['tu', 'tuMemoria'], role: 'system' },
+  world: { label: 'Mundo y momento', description: 'Una línea de texto con la fecha y hora del juego y el lugar de la escena.', keys: ['escena'], role: 'user', text: true },
   persona: { label: 'Lo que sabe del jugador', description: 'Solo lo que el personaje puede saber: lo que ve, el nombre que le dieron y lo que le han contado. Nunca el nombre real si no se lo dijeron.', keys: ['loQueSabesDeLaOtraPersona'], role: 'user' },
   relationship: { label: 'Relación y recuerdos', description: 'Actitud actual, última conversación, impresiones privadas (notas del GM) y resúmenes previos.', keys: ['vuestraRelacion'], role: 'user' },
   commitments: { label: 'Pendientes', description: 'Citas, encargos y promesas vigentes con esta persona.', keys: ['pendientesConEstaPersona'], role: 'user' },
@@ -44,7 +44,7 @@ export const KINDS = {
       player: { label: 'Jugador', description: 'Nombre, edad, género, origen, ocupación, dinero y reputación del jugador. El GM lo sabe todo.', keys: ['jugador'], role: 'user' },
       ambient: { label: 'Cabecera ambiente', description: 'Texto compacto que calcula el motor: hora y día, lugar, quién está aquí, pendientes y mapa. Obligatorio en el mundo libre: sin él el modelo tendría que consultarlo todo.', keys: ['cabecera'], role: 'user', text: true, required: true },
       world: { label: 'Mundo y lugar', description: 'Hora, estado del mundo, lugar actual y anterior, y prólogo.', keys: ['ahora', 'mundo', 'lugar', 'lugarAnterior', 'prologo'], role: 'user' },
-      events: { label: 'Sucesos y acción', description: 'Sucesos recientes y la acción que acaba de hacer el jugador.', keys: ['sucesosRecientes', 'accion'], role: 'user' },
+      events: { label: 'Sucesos y acción', description: 'Sucesos recientes (en líneas cortas), la última narración y la acción que acaba de hacer el jugador.', keys: ['sucesosRecientes', 'ultimaNarracion', 'accion'], role: 'user' },
       character: { label: 'Personaje evaluado', description: 'Resumen y personalidad del personaje de la conversación.', keys: ['personaje'], role: 'user' },
       relationship: { label: 'Relación y recuerdos', description: 'Actitud previa, última conversación y recuerdos privados del personaje.', keys: ['relacion'], role: 'user' },
       pending: { label: 'Pendientes y lugares', description: 'Acuerdos vigentes (con id) y lugares del mapa.', keys: ['pendientes', 'lugares'], role: 'user' },
@@ -59,7 +59,7 @@ export const KINDS = {
     modes: [{ id: 'post', label: 'Genera publicaciones del feed' }, { id: 'reply', label: 'Reacciona al jugador' }],
     macros: [['player', 'Nombre real del jugador'], ['time', 'Fecha y hora del juego'], ['mode', 'Tipo de llamada']],
     autos: {
-      world: { label: 'Momento y ciudad', description: 'Fecha y hora del juego, ciudad y lugares (color local para las publicaciones).', keys: ['ahora', 'dia', 'ciudad', 'lugares'], role: 'user' },
+      world: { label: 'Momento y ciudad', description: 'Fecha y hora del juego, ciudad, lugares y avisos del motor (hace cuánto se generó el feed, cómo les fue las publicaciones del jugador…).', keys: ['ahora', 'dia', 'ciudad', 'lugares', 'avisos'], role: 'user' },
       accounts: { label: 'Cuentas conocidas', description: 'Cuentas con la popularidad que fija el motor (p. ej. @RexNova) y los contactos del jugador con su personalidad y lo que hacen ahora. El modelo puede añadir cuentas nuevas.', keys: ['cuentas'], role: 'user' },
       player: { label: 'Jugador en la red', description: 'Su usuario y su popularidad (baja al empezar: crece con su reputación).', keys: ['jugador'], role: 'user' },
       feed: { label: 'Publicaciones recientes', description: 'Lo ya publicado, para no repetirse.', keys: ['recientes'], role: 'user' },

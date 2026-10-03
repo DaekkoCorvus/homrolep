@@ -122,6 +122,16 @@ El personaje (en persona y en chat) ya no rellena un formulario JSON: **responde
 
 Pendiente de la Fase 1b: publicar y responder en NorthLife todavía espera la reacción de la red en la misma petición.
 
+### Broker de contexto (Fase 4 del rediseño)
+
+Qué se envía en cada llamada lo decide el motor, no se vuelca todo (`src/server/ai/context/`):
+
+- **Ficha en dos capas** (`card.js`). Siempre va la capa básica (nombre, rol, resumen, personalidad y voz). Trasfondo, apariencia, conocimientos, secretos, conexiones y gustos de ropa se trocean en entradas cortas y **solo entran las que vienen al caso**, elegidas por palabras clave de lo que se está hablando (raíces de 5 letras: tolera plurales, acentos y conjugaciones; hasta 4 entradas y ~1.100 caracteres por turno). Un trasfondo de 150.000 caracteres cuesta lo mismo por turno que uno vacío. Si el motor no adelantó algo, el personaje puede pedirlo con la herramienta `recall` (cuesta una vuelta extra solo cuando la usa). Es también la base del lorebook.
+- **Ventana de conversación** (`history.js`): al personaje se le reenvían las últimas 16 intervenciones en persona (12 en chat) con una nota de cuántas se omiten; lo importante ya quedó en recuerdos, datos y pendientes (Fase 3). La reflexión del GM sí recibe la transcripción completa porque necesita las citas literales.
+- **Escena en una línea de texto** («Ahora: día 1 (lunes), 09:00. Lugar: …») en vez de JSON con claves largas.
+- **Avisos motor → modelo** (`notices.js`): el GM del mundo libre recibe, en su cabecera, «Desde tu última intervención» con líneas cortas de lo ocurrido desde su última llamada (viajes, conversaciones, acuerdos cumplidos o incumplidos, tiempo que pasó…) y la última narración para continuar la historia; ya no se envía el registro de sucesos en bruto con las narraciones enteras. La narración de los botones usa la misma lista corta con nombres. NorthLife recibe `avisos` (hace cuánto se generó la última tanda, cómo les fue a las publicaciones del jugador, a quién agregó) y de sus contactos solo rasgos y forma de hablar.
+- **Instrucciones y herramientas más cortas**: las reglas del motor del personaje se fusionaron, el formato de salida ya no repite lo que dice cada herramienta, y el GM pierde `recent_events` y `player_status` (la cabecera y los avisos ya lo dicen). En una ficha corta, cada llamada baja entre un 20 % y un 27 % (p. ej. turno de personaje ~3.500 → ~2.800 tokens contando las herramientas; mundo libre ~2.900 → ~2.250). La ganancia crece con fichas largas y conversaciones largas.
+
 Viajar, esperar, dormir y trabajar con los botones siguen narrándose con el modo `action`, sin herramientas.
 
 La creación pregunta edad, género, apariencia e historia personal opcional; el nombre se pide justo antes de cruzar. La apariencia se guarda como referencia para futuras interacciones con NPC, pero no aparece en la ficha ni se envía al GM durante el prólogo o narraciones generales. La raza humana se asigna automáticamente por ser la única disponible. El prólogo comienza en la estación de Porta Magna. Ocupación y aspiración quedan sin definir al inicio y se desarrollarán durante el juego. El atajo de trabajo solo funciona en partidas que ya tengan la ocupación `worker`.

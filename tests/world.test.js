@@ -103,9 +103,7 @@ test('query tools answer from the engine and never change the game', async () =>
   assert.equal((await ask('place_info')).result.id, 'cafe', 'sin parámetro, el lugar actual');
   assert.equal((await ask('place_info', { place: 'atlantis' })).code, 'unknown_place');
   assert.equal((await ask('place_info', { place: 'cafe' })).result.people[0].id, 'luna_serp');
-  assert.equal((await ask('recent_events', { count: 1 })).result.events.length, 1);
-  assert.equal((await ask('recent_events', { count: 99 })).result.events.length, run.eventLog.length, 'máximo 20, o los que haya');
-  assert.deepEqual(Object.keys((await ask('player_status')).result).sort(), ['money', 'name', 'occupation', 'place', 'reputation']);
+  assert.deepEqual(gameRegistry.names('gm').filter((name) => ['recent_events', 'player_status'].includes(name)), [], 'la cabecera y los avisos ya lo dicen: no se pagan como herramientas');
   assert.deepEqual(gameRegistry.names('character'), [], 'el personaje no ve las herramientas del GM');
 });
 

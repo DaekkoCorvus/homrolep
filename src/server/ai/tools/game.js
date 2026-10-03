@@ -41,15 +41,15 @@ export const gameTools = [
   // --- Consultas: devuelven datos, no cambian la partida ---------------------------------------------------------------------------
   {
     name: 'who_is_here',
-    description: 'Consulta quién está en el lugar actual del jugador ahora mismo. Solo esas personas pueden participar en la escena.',
+    description: 'Quién está aquí ahora. Solo ellos pueden participar en la escena.',
     kind: 'query', roles: ['gm'],
     handler: ({ run, npcs, present }) => ({ ok: true, result: { place: run.player.locationId, people: present(run).map((npc) => personView(run, npcs, npc)) } })
   },
   {
     name: 'place_info',
-    description: 'Consulta un lugar del mapa: descripción, horario, cuánto se tarda en llegar y quién suele estar ahora.',
+    description: 'Datos de un lugar: descripción, horario, viaje y quién está.',
     kind: 'query', roles: ['gm'],
-    params: { type: 'object', properties: { place: { type: 'string', description: 'id del lugar (por defecto, el actual)' } }, additionalProperties: false },
+    params: { type: 'object', properties: { place: { type: 'string', description: 'id; por defecto el actual' } }, additionalProperties: false },
     handler({ run, worldData, npcs }, { place }) {
       const location = worldData.locations.find((item) => item.id === (place ?? run.player.locationId));
       if (!location) return reject('Ubicación desconocida.', { code: 'unknown_place', hint: `Lugares válidos: ${worldData.locations.map(({ id }) => id).join(', ')}.` });
@@ -57,26 +57,13 @@ export const gameTools = [
       return { ok: true, result: { id: location.id, name: location.name, district: location.district, description: location.description, hours: location.hours ?? 'siempre accesible', travelMinutes: location.travelMinutes, people: here } };
     }
   },
-  {
-    name: 'recent_events',
-    description: 'Consulta los últimos sucesos registrados por el motor (viajes, conversaciones, acuerdos…).',
-    kind: 'query', roles: ['gm'],
-    params: { type: 'object', properties: { count: { type: 'integer', description: 'cuántos (1 a 20, por defecto 8)' } }, additionalProperties: false },
-    handler: ({ run }, { count }) => ({ ok: true, result: { events: run.eventLog.slice(-Math.min(20, Math.max(1, count || 8))) } })
-  },
-  {
-    name: 'player_status',
-    description: 'Consulta el estado del jugador: dinero, ocupación, reputación y dónde está.',
-    kind: 'query', roles: ['gm'],
-    handler: ({ run }) => ({ ok: true, result: { name: run.player.name, money: run.player.money, occupation: run.player.occupation, reputation: run.player.reputation, place: run.player.locationId } })
-  },
 
   // --- Acciones del mundo libre ---------------------------------------------------------------------------------------------------
   {
     name: 'spend_time',
-    description: `El jugador dedica un rato a algo corriente sin otro efecto en el juego. Actividades: ${Object.entries(ACTIVITIES).map(([id, item]) => `${id} (${item.label})`).join('; ')}. El motor decide cuántos minutos cuesta; minutes_hint solo orienta.`,
+    description: 'El jugador dedica un rato a algo corriente, sin otro efecto en el juego. El motor decide los minutos; minutes_hint solo orienta.',
     roles: ['gm'],
-    params: { type: 'object', properties: { activity: { type: 'string', enum: Object.keys(ACTIVITIES) }, minutes_hint: { type: 'integer', description: 'minutos que sugieres' } }, required: ['activity'], additionalProperties: false },
+    params: { type: 'object', properties: { activity: { type: 'string', enum: Object.keys(ACTIVITIES), description: Object.entries(ACTIVITIES).map(([id, item]) => `${id}: ${item.label}`).join('; ') }, minutes_hint: { type: 'integer' } }, required: ['activity'], additionalProperties: false },
     handler({ run }, { activity, minutes_hint }) {
       const blocked = busy(run); if (blocked) return blocked;
       const spec = ACTIVITIES[activity];
@@ -89,9 +76,9 @@ export const gameTools = [
     // Salida para todo lo que el juego aún no implementa (comprar, usar objetos, pelear…): el modelo narra solo el INTENTO, sin conceder
     // resultados, y el motor anota la intención. Esa lista es el mapa de qué mecánicas construir después, medida con juego real.
     name: 'attempt',
-    description: 'Úsala cuando el jugador intenta algo que ninguna otra herramienta resuelve (comprar, usar un objeto, buscar, convencer, robar, pelear…). El juego aún no tiene esa mecánica: no cambia dinero, objetos ni relaciones. Narra solo el intento y su ambiente, sin conceder ni negar resultados.',
+    description: 'Para lo que ninguna otra herramienta resuelve (comprar, usar un objeto, buscar, convencer, robar, pelear…). No hay mecánica: nada cambia. Narra solo el intento, sin conceder ni negar resultados.',
     roles: ['gm'],
-    params: { type: 'object', properties: { kind: { type: 'string', enum: ATTEMPT_KINDS }, details: { type: 'string', maxLength: 240, description: 'qué intenta, en una frase' } }, required: ['kind'], additionalProperties: false },
+    params: { type: 'object', properties: { kind: { type: 'string', enum: ATTEMPT_KINDS }, details: { type: 'string', maxLength: 240, description: 'una frase' } }, required: ['kind'], additionalProperties: false },
     handler({ run }, { kind, details = '' }) {
       const next = structuredClone(run);
       next.intents = [...(run.intents ?? []), { time: timeKey(run.world), placeId: run.player.locationId, kind, details: String(details).trim().slice(0, 240), action: run.eventLog.findLast((event) => event.type === 'player_action')?.data?.text?.slice(0, 200) }].slice(-MAX_INTENTS);
@@ -102,9 +89,9 @@ export const gameTools = [
 
   {
     name: 'travel',
-    description: 'Mueve al jugador a otro lugar. El motor calcula cuánto tarda y rechaza lugares desconocidos o en los que ya está.',
+    description: 'Mueve al jugador a otro lugar; el motor calcula el tiempo.',
     roles: ['gm', 'player'],
-    params: { type: 'object', properties: { place: { type: 'string', description: 'id del lugar de destino' } }, required: ['place'], additionalProperties: false },
+    params: { type: 'object', properties: { place: { type: 'string', description: 'id del destino' } }, required: ['place'], additionalProperties: false },
     handler({ run, worldData }, { place }) {
       const blocked = busy(run); if (blocked) return blocked;
       const destination = worldData.locations.find((location) => location.id === place);
@@ -117,9 +104,9 @@ export const gameTools = [
   },
   {
     name: 'wait',
-    description: 'El jugador espera sin hacer nada en concreto. Entre 5 minutos y 8 horas; el motor ajusta la cantidad si se sale del rango.',
+    description: 'El jugador espera sin hacer nada (5 min a 8 h).',
     roles: ['gm', 'player'],
-    params: { type: 'object', properties: { minutes: { type: 'integer', description: 'minutos de espera (por defecto 30)' } }, additionalProperties: false },
+    params: { type: 'object', properties: { minutes: { type: 'integer', description: 'por defecto 30' } }, additionalProperties: false },
     handler({ run }, { minutes: asked }) {
       const blocked = busy(run); if (blocked) return blocked;
       const minutes = Math.min(8 * 60, Math.max(5, Number(asked) || 30));
@@ -129,7 +116,7 @@ export const gameTools = [
   },
   {
     name: 'sleep',
-    description: 'El jugador duerme unas 8 horas y avanza el reloj en consecuencia.',
+    description: 'El jugador duerme unas 8 horas.',
     roles: ['gm', 'player'],
     handler({ run }) {
       const blocked = busy(run); if (blocked) return blocked;
@@ -139,7 +126,7 @@ export const gameTools = [
   },
   {
     name: 'work',
-    description: 'El jugador trabaja una jornada de 6 horas y cobra. Solo si ya tiene un trabajo; el motor calcula el pago.',
+    description: 'El jugador trabaja una jornada de 6 h y cobra, si ya tiene trabajo.',
     roles: ['gm', 'player'],
     handler({ run }) {
       const blocked = busy(run); if (blocked) return blocked;
@@ -164,9 +151,9 @@ export const gameTools = [
   },
   {
     name: 'start_conversation',
-    description: 'Empieza una conversación en persona con alguien que está en el mismo lugar ahora mismo. El personaje responde en esa conversación.',
+    description: 'Empieza una conversación en persona con alguien presente; su respuesta la genera otra llamada.',
     roles: ['gm', 'player'],
-    params: { type: 'object', properties: { npcId: { type: 'string', description: 'id de uno de los presentes' } }, required: ['npcId'], additionalProperties: false },
+    params: { type: 'object', properties: { npcId: { type: 'string', description: 'id de un presente' } }, required: ['npcId'], additionalProperties: false },
     async handler({ run, npcs, present, openConversation }, { npcId }) {
       if (run.encounter) return reject('Ya estás en una conversación.', { code: 'ENCOUNTER_ACTIVE', status: 409 });
       const npc = npcs.get(npcId);

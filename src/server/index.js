@@ -17,6 +17,7 @@ import { createSocialCatalog } from './game/socialCatalog.js';
 import { KINDS, kindNames, defaultPreset, normalizePreset, compose, importSillyTavern } from './ai/composer.js';
 import { characterPlan, evaluationPlan, narrationPlan, worldPlan, socialPlan } from './ai/plans.js';
 import { ambientHeader } from './ai/ambient.js';
+import { noticesSince } from './ai/context/notices.js';
 import { feedDue, applyGeneratedPosts, applyReactions, wipeFeed, publishPlayerPost, publishPlayerReply, toggleLike, toggleRepost, saveProfile, profileMedia, markNotificationsRead, socialView, socialInput, threadFor, migrateSocial, expectedReplies, playerPopularity, keyOfMinutes, withAvatars, REFRESH_GAP } from './game/social.js';
 import { saveRun, loadRun, listRuns, deleteRun } from './saves/store.js';
 import { randomUUID } from 'node:crypto';
@@ -280,7 +281,7 @@ async function devOperation(run, body, config) {
     }
     if (last?.data?.response && !String(last.type).startsWith('conversation')) {
       const before = { ...run, eventLog: run.eventLog.slice(0, -1), player: { ...run.player, locationId: last.from ?? run.player.locationId } };
-      const narrative = await ai.narrate(before, run, worldData, config);
+      const narrative = await ai.narrate(before, run, worldData, config, npcs);
       const next = structuredClone(run);
       next.eventLog.at(-1).data.response = narrative;
       next.narrative = { text: narrative, time: last.time };
@@ -486,10 +487,12 @@ async function performAction(before, input, config) {
   const event = run.eventLog.at(-1);
   if (input.type === 'freeform' && typeof ai.act === 'function') {
     const state = toolContext(run, config);
-    const header = ambientHeader({ run, worldData, present: presentFor(run), npcs });
+    const notices = noticesSince(run, { worldData, npcs, from: run.cursors?.gm ?? null, skipLast: 1, max: 8 });
+    const header = ambientHeader({ run, worldData, present: presentFor(run), npcs, notices });
     const result = await ai.act(worldPlan(run, worldData, header), { registry: gameRegistry, state }, config);
     if (!result.text) throw new AIError('El GM no devolvió una narración. Tu partida no ha cambiado; puedes reintentar.', 'AI_RESPONSE');
     run = result.run;
+    run.cursors = { ...run.cursors, gm: run.eventLog.length }; // lo siguiente que el GM sabrá por avisos es lo que ocurra después de esta llamada
     // `event` es el suceso de la acción libre dentro de la partida resultante (las herramientas clonan la partida en cada paso).
     const logged = run.eventLog.findLast((item) => item.type === 'player_action' && item.time === event.time) ?? run.eventLog.at(-1);
     logged.data = { ...logged.data, response: result.text };
@@ -497,7 +500,7 @@ async function performAction(before, input, config) {
     if (run.encounter && !before.encounter) run.encounter.lines.unshift({ who: 'narrator', text: result.text });
     return run;
   }
-  const narrative = await ai.narrate(before, run, worldData, config);
+  const narrative = await ai.narrate(before, run, worldData, config, npcs);
   event.data = { ...event.data, response: narrative };
   run.narrative = { text: narrative, time: event.time };
   return run;

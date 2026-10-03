@@ -16,9 +16,9 @@ const luna = npcs.get('luna_serp');
 
 // --- Herramientas del personaje -----------------------------------------------------------------------------------------------------
 test('the character only sees its own tools, per channel and per turn, and they only record claims', async () => {
-  assert.deepEqual(characterRegistry.names('character').sort(), ['agree_plan', 'end_conversation', 'note_to_self', 'remember', 'share_contact']);
-  assert.deepEqual(characterRegistry.names('text').sort(), ['agree_plan', 'remember'], 'en chat no hay despedidas ni contacto');
-  assert.deepEqual(characterToolNames({ mode: 'chat', canShare: true }), ['agree_plan', 'remember']);
+  assert.deepEqual(characterRegistry.names('character').sort(), ['agree_plan', 'end_conversation', 'note_to_self', 'recall', 'remember', 'share_contact']);
+  assert.deepEqual(characterRegistry.names('text').sort(), ['agree_plan', 'recall', 'remember'], 'en chat no hay despedidas ni contacto');
+  assert.deepEqual(characterToolNames({ mode: 'chat', canShare: true }), ['agree_plan', 'remember', 'recall']);
   assert.ok(!characterToolNames({ mode: 'closing', canShare: true }).includes('end_conversation'), 'en la despedida no se «termina» otra vez');
   assert.ok(!characterToolNames({ mode: 'reply', canShare: false }).includes('share_contact'), 'el contacto no se comparte dos veces');
   for (const forbidden of ['travel', 'wait', 'start_conversation', 'attempt']) assert.equal(characterRegistry.has(forbidden), false, `${forbidden} no es del personaje`);
@@ -83,7 +83,7 @@ test('the character answers with plain text and declares engine effects with too
   });
   const reply = await ai.npcReply(context(), config);
   assert.equal(bodies.length, 1, 'texto y efectos van juntos: sin segunda vuelta');
-  assert.deepEqual(bodies[0].tools.map((tool) => tool.function.name).sort(), ['agree_plan', 'end_conversation', 'note_to_self', 'remember', 'share_contact']);
+  assert.deepEqual(bodies[0].tools.map((tool) => tool.function.name).sort(), ['agree_plan', 'end_conversation', 'note_to_self', 'recall', 'remember', 'share_contact']);
   assert.equal(reply.gesture, 'seca una taza');
   assert.equal(reply.say, '{feliz} Claro, mañana a las tres en el parque. Me avisas si llegas tarde.', 'las marcas de emoción se conservan para el motor');
   assert.equal(reply.intent, 'Me cae bien.');
@@ -94,22 +94,19 @@ test('the character answers with plain text and declares engine effects with too
   // la petición no pide JSON ni lo envuelve: es texto
   const prompt = bodies[0].messages.map((message) => message.content).join('\n');
   assert.doesNotMatch(prompt, /Return only JSON/);
-  assert.match(prompt, /plain text with no JSON/);
+  assert.match(prompt, /plain text: no JSON/);
 });
 
 test('the tools shown to the character depend on the turn and the channel', async () => {
   const names = async (extra) => { const { ai, bodies } = fakeProvider({ content: 'Hola.' }); await ai.npcReply(context(extra), config); return bodies[0].tools.map((tool) => tool.function.name).sort(); };
-  assert.deepEqual(await names({ mode: 'chat' }), ['agree_plan', 'remember']);
-  assert.deepEqual(await names({ mode: 'closing' }), ['agree_plan', 'note_to_self', 'remember', 'share_contact']);
-  assert.deepEqual(await names({ contact: { yaCompartido: true } }), ['agree_plan', 'end_conversation', 'note_to_self', 'remember']);
-  // el texto del formato menciona solo lo que ese turno puede usar
-  const text = (mode, canShare) => compose('character', mode, defaultPreset('character'), characterPlan(context({ mode, contact: { yaCompartido: !canShare } }))).map((message) => message.content).join('\n');
-  assert.match(text('reply', true), /share_contact/);
-  assert.doesNotMatch(text('reply', false), /"share_contact"/);
-  assert.doesNotMatch(text('closing', true), /"end_conversation"/);
-  const chat = compose('text', 'chat', defaultPreset('text'), characterPlan(context({ mode: 'chat' }))).map((message) => message.content).join('\n');
-  assert.doesNotMatch(chat, /"share_contact"|"end_conversation"|asterisks/);
-  assert.match(chat, /"agree_plan"/);
+  assert.deepEqual(await names({ mode: 'chat' }), ['agree_plan', 'recall', 'remember']);
+  assert.deepEqual(await names({ mode: 'closing' }), ['agree_plan', 'note_to_self', 'remember', 'share_contact'], 'al despedirse no se consulta la memoria ni se termina otra vez');
+  assert.deepEqual(await names({ contact: { yaCompartido: true } }), ['agree_plan', 'end_conversation', 'note_to_self', 'recall', 'remember']);
+  // el formato solo fija el contrato de salida; cuándo usar cada herramienta lo dice la propia herramienta (una sola vez, no dos)
+  const format = (mode) => characterPlan(context({ mode })).format;
+  assert.match(format('reply'), /asterisks/);
+  assert.doesNotMatch(format('chat'), /asterisks|stage directions or emotion/);
+  assert.doesNotMatch(format('reply'), /agree_plan|share_contact|end_conversation/, 'no se repiten las descripciones de las herramientas');
 });
 
 test('the JSON fallback codec and the old JSON reply format still work for models without native tools', async () => {
