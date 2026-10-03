@@ -339,6 +339,7 @@ test('provider.chatWithTools talks to chat/completions with tools and records th
 import { mkdtemp } from 'node:fs/promises';
 import { defaultPreset } from '../src/server/ai/composer.js';
 import os from 'node:os';
+import { NANOGPT_HOSTS } from '../src/server/ai/provider.js';
 import { createSettingsStore, DEFAULT_TOOL_MODES } from '../src/server/ai/settings.js';
 
 test('each model has its own tool protocol: known defaults, per-model overrides that survive saving, and back to default with auto', async () => {
@@ -383,10 +384,40 @@ test('provider errors keep the reason the provider gave, and a rejected token ca
   assert.deepEqual(bodies.map((body) => body.max_tokens), [22000, 8192], 'el motor pide margen de razonamiento; el proveedor lo rechaza y se baja una vez');
 
   bodies.length = 0;
-  const ai = createNanoGPT(failing('model not available on this endpoint (key sk-secret-key)'), { prompts: { get: () => ({}), record() {} } });
+  const ai = createNanoGPT(failing('temperature out of range (key sk-secret-key)'), { prompts: { get: () => ({}), record() {} } });
   const error = await ai.chat({ apiKey: 'sk-secret-key', model: 'meituan/longcat-2.5-preview' }, [{ role: 'user', content: 'hi' }], 3000).catch((failure) => failure);
   assert.equal(error.code, 'AI_MODEL');
-  assert.match(error.message, /Motivo del proveedor: «model not available on this endpoint/);
+  assert.match(error.message, /Motivo del proveedor: «temperature out of range/);
   assert.doesNotMatch(error.message, /sk-secret-key/, 'la API key nunca viaja en un mensaje');
   assert.equal(bodies.length, 1, 'un 400 que no habla de tokens no se reintenta');
+});
+
+test('a model missing from one NanoGPT host is tried on the other, remembered, and the catalog merges both hosts', async () => {
+  const urls = [];
+  const model = 'longcat-2.5-preview';
+  const onlyOnWeb = async (url, init) => {
+    urls.push(url);
+    if (url.endsWith('/models')) return { ok: true, json: async () => ({ data: url.startsWith(NANOGPT_HOSTS.web) ? [{ id: model }, { id: 'a/shared' }] : [{ id: 'a/shared' }, { id: 'b/direct-only' }] }) };
+    if (url.startsWith(NANOGPT_HOSTS.direct)) return { ok: false, status: 400, json: async () => ({ error: { message: `Model ${model} is not supported on /v1/chat/completions.` } }) };
+    return { ok: true, json: async () => ({ choices: [{ message: { content: 'Hola.' }, finish_reason: 'stop' }] }) };
+  };
+  const ai = createNanoGPT(onlyOnWeb, { prompts: { get: () => ({}), record() {} } });
+  const ask = () => ai.chat({ apiKey: 'sk-k', model }, [{ role: 'user', content: 'hi' }], 500);
+  assert.equal(await ask(), 'Hola.');
+  assert.deepEqual(urls.map((url) => new URL(url).host), ['api.nano-gpt.com', 'nano-gpt.com']);
+  urls.length = 0;
+  assert.equal(await ask(), 'Hola.');
+  assert.deepEqual(urls.map((url) => new URL(url).host), ['nano-gpt.com'], 'la segunda vez va directo al host que funciona');
+  assert.deepEqual((await ai.models('sk-k')).map(({ id }) => id), ['a/shared', 'b/direct-only', model], 'catálogo unido, sin duplicados');
+  assert.ok(urls.every((url) => Object.values(NANOGPT_HOSTS).some((host) => url.startsWith(host + '/'))), 'solo hosts fijos');
+
+  // Si ningún host lo conoce, el error es el del host habitual (con su motivo); un fallo de otro tipo en el segundo host no se disfraza.
+  const unknown = createNanoGPT(async () => ({ ok: false, status: 400, json: async () => ({ error: { message: 'Model nada is not supported on /v1/chat/completions.' } }) }), { prompts: { get: () => ({}), record() {} } });
+  await assert.rejects(unknown.chat({ apiKey: 'k', model: 'nada' }, [{ role: 'user', content: 'hi' }], 500), (error) => error.code === 'AI_MODEL' && /Motivo del proveedor: «Model nada is not supported/.test(error.message));
+  let n = 0;
+  const authOnSecond = createNanoGPT(async () => (n++ === 0 ? { ok: false, status: 400, json: async () => ({ error: { message: 'Model x is not supported on /v1/chat/completions.' } }) } : { ok: false, status: 401, json: async () => ({}) }), { prompts: { get: () => ({}), record() {} } });
+  await assert.rejects(authOnSecond.chat({ apiKey: 'k', model: 'x' }, [{ role: 'user', content: 'hi' }], 500), { code: 'AI_AUTH' });
+  // el catálogo sigue funcionando si un host está caído
+  const oneDown = createNanoGPT(async (url) => (url.startsWith(NANOGPT_HOSTS.web) ? { ok: false, status: 503, json: async () => ({}) } : { ok: true, json: async () => ({ data: [{ id: 'z/ok' }] }) }), { prompts: { get: () => ({}), record() {} } });
+  assert.deepEqual((await oneDown.models('k')).map(({ id }) => id), ['z/ok']);
 });

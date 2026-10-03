@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
-import { createNanoGPT, NANOGPT_BASE_URL } from '../src/server/ai/provider.js';
+import { createNanoGPT, NANOGPT_HOSTS } from '../src/server/ai/provider.js';
 import { createSettingsStore } from '../src/server/ai/settings.js';
 import { createAppServer } from '../src/server/index.js';
 
@@ -98,7 +98,7 @@ test('settings gate, generation, persistence, failures and concurrent requests w
   assert.ok(!JSON.stringify(acted).includes('test-secret'));
   const prompt=calls.filter(({options})=>options.body).map(({options})=>JSON.parse(options.body).messages.at(-1).content).find((content)=>content.includes('Saludo a una viajera'));
   assert.match(prompt,/Mara/); assert.match(prompt,/La estación/);
-  assert.ok(calls.every(({url})=>url.startsWith(NANOGPT_BASE_URL)));
+  assert.ok(calls.every(({url})=>Object.values(NANOGPT_HOSTS).some((host)=>url.startsWith(host+'/'))), 'la API key solo viaja a los hosts fijos de NanoGPT');
   await api('/api/ai/settings','DELETE');
   assert.equal((await api('/api/runs','POST',profile)).status,428);
   assert.equal((await api(`/api/runs/${id}/posts`,'POST',{text:'Hola ciudad.'})).status,428);

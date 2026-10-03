@@ -3,7 +3,12 @@ import { characterPlan, evaluationPlan, narrationPlan, chatsPlan, socialPlan } f
 import { factoryPrompts } from './promptStore.js';
 import { AIError } from './errors.js';
 import { createToolChat } from './tools/loop.js';
-export const NANOGPT_BASE_URL = 'https://api.nano-gpt.com/api/v1';
+// NanoGPT tiene dos hosts con la misma API y catálogos que pueden diferir mientras se despliegan modelos nuevos: el directo
+// (peticiones largas, el que se usa por defecto) y el del sitio web. Solo se admiten estos dos: la API key nunca viaja a otro sitio.
+export const NANOGPT_HOSTS = Object.freeze({ direct: 'https://api.nano-gpt.com/api/v1', web: 'https://nano-gpt.com/api/v1' });
+export const NANOGPT_BASE_URL = NANOGPT_HOSTS.direct;
+// Respuestas del proveedor que significan «este modelo no existe en este host» (y no «tu petición es inválida»).
+const MODEL_NOT_ON_HOST = /not supported on|not found|unknown model|does not exist|no such model|not (available|supported)/i;
 
 
 const parseJson = (text, message) => {
@@ -43,10 +48,11 @@ function providerError(status) {
 // La generación solo se corta si el jugador pulsa «detener» o se cierra la conexión (`signal`).
 // `prompts` entrega el preset de cada prompt (personaje, texto, GM, social) y registra lo enviado; por defecto, los de fábrica.
 export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = {}) {
-  async function call(route, key, payload, signal) {
+  const hostOf = new Map(); // modelo → host donde funcionó la última vez (se recuerda mientras dure el servidor)
+  async function call(route, key, payload, signal, host = 'direct') {
     if (typeof key !== 'string' || !key.trim()) throw new AIError('Configura tu API key de NanoGPT en Ajustes.', 'AI_CONFIGURATION_REQUIRED', 428);
     try {
-      const response = await fetchImpl(NANOGPT_BASE_URL + '/' + route, {
+      const response = await fetchImpl(NANOGPT_HOSTS[host] + '/' + route, {
         method: payload ? 'POST' : 'GET', redirect: 'error',
         headers: { authorization: 'Bearer ' + key, ...(payload ? { 'content-type':'application/json' } : {}) },
         ...(payload ? { body:JSON.stringify(payload) } : {}),
@@ -73,11 +79,23 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
   // la salida por debajo de lo que pide el motor (hasta 32000 para dejar margen de razonamiento).
   const TOKEN_LIMIT_HINT = /max[_s-]*(completion[_s-]*|output[_s-]*)?tokens|output.{0,12}limit|too (large|long|high)|exceed/i;
   const SAFE_MAX_TOKENS = 8192;
-  async function callChat(config, body) {
-    try { return await call('chat/completions', config.apiKey, body, config.signal); }
+  async function callOn(host, config, body) {
+    try { return await call('chat/completions', config.apiKey, body, config.signal, host); }
     catch (error) {
       if (error?.code !== 'AI_MODEL' || !(body.max_tokens > SAFE_MAX_TOKENS) || !TOKEN_LIMIT_HINT.test(error.detail ?? '')) throw error;
-      return await call('chat/completions', config.apiKey, { ...body, max_tokens: SAFE_MAX_TOKENS }, config.signal);
+      return await call('chat/completions', config.apiKey, { ...body, max_tokens: SAFE_MAX_TOKENS }, config.signal, host);
+    }
+  }
+  // Si el host elegido dice que no conoce el modelo (los modelos recientes aparecen antes en el host del sitio web), se prueba el otro una
+  // vez y se recuerda cuál funciona. Si ambos fallan se informa del primer error, que es el del host habitual.
+  async function callChat(config, body) {
+    const first = hostOf.get(config.model) ?? 'direct';
+    try { return await callOn(first, config, body); }
+    catch (error) {
+      if (error?.code !== 'AI_MODEL' || !MODEL_NOT_ON_HOST.test(error.detail ?? '')) throw error;
+      const other = first === 'direct' ? 'web' : 'direct';
+      try { const result = await callOn(other, config, body); hostOf.set(config.model, other); return result; }
+      catch (second) { throw second?.code === 'AI_MODEL' ? error : second; }
     }
   }
 
@@ -133,9 +151,12 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
   return {
     chat, chatDetailed, complete, chatWithTools,
     async models(apiKey) {
-      const result = await call('models', apiKey);
-      if (!Array.isArray(result.data)) throw new AIError('NanoGPT no devolvió un catálogo de modelos válido.', 'AI_RESPONSE');
-      return result.data.filter((item) => typeof item.id === 'string').map(({ id }) => ({ id })).sort((a,b) => a.id.localeCompare(b.id));
+      // Catálogo de los dos hosts: un modelo recién publicado puede estar solo en uno. Basta con que uno responda.
+      const settled = await Promise.allSettled(Object.keys(NANOGPT_HOSTS).map((host) => call('models', apiKey, undefined, undefined, host)));
+      const catalogs = settled.filter((item) => item.status === 'fulfilled' && Array.isArray(item.value?.data)).map((item) => item.value.data);
+      if (!catalogs.length) throw settled.find((item) => item.status === 'rejected')?.reason ?? new AIError('NanoGPT no devolvió un catálogo de modelos válido.', 'AI_RESPONSE');
+      const ids = new Set(catalogs.flat().filter((item) => typeof item.id === 'string').map(({ id }) => id));
+      return [...ids].map((id) => ({ id })).sort((a,b) => a.id.localeCompare(b.id));
     },
     async verify(config) {
       await chat(config, [{ role:'user', content:'Responde únicamente: Conexión correcta.' }], 512);
