@@ -43,8 +43,7 @@ function providerError(status) {
 // La generación solo se corta si el jugador pulsa «detener» o se cierra la conexión (`signal`).
 // `prompts` entrega el preset de cada prompt (personaje, texto, GM, social) y registra lo enviado; por defecto, los de fábrica.
 export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = {}) {
-  // `detail` (solo sondas de desarrollo): añade al error el motivo que dio el proveedor, sin la API key.
-  async function call(route, key, payload, signal, { detail = false } = {}) {
+  async function call(route, key, payload, signal) {
     if (typeof key !== 'string' || !key.trim()) throw new AIError('Configura tu API key de NanoGPT en Ajustes.', 'AI_CONFIGURATION_REQUIRED', 428);
     try {
       const response = await fetchImpl(NANOGPT_BASE_URL + '/' + route, {
@@ -54,8 +53,11 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
         ...(signal ? { signal } : {})
       });
       if (!response.ok) {
+        // El motivo que da el proveedor (p. ej. «max_tokens demasiado alto» o «el modelo no admite tools») se conserva siempre:
+        // sin él, un 400 de un modelo reciente solo diría «no pudo usar ese modelo» y no habría forma de saber por qué.
         const failure = providerError(response.status);
-        if (detail) failure.detail = await providerDetail(response, key);
+        const reason = await providerDetail(response, key);
+        if (reason) { failure.detail = reason; if (failure.code === 'AI_MODEL') failure.message += ` Motivo del proveedor: «${reason}».`; }
         throw failure;
       }
       return await response.json();
@@ -67,6 +69,18 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
     }
   }
 
+  // chat/completions con un solo reintento si el proveedor rechaza el tope de tokens: los modelos nuevos o en vista previa suelen limitar
+  // la salida por debajo de lo que pide el motor (hasta 32000 para dejar margen de razonamiento).
+  const TOKEN_LIMIT_HINT = /max[_s-]*(completion[_s-]*|output[_s-]*)?tokens|output.{0,12}limit|too (large|long|high)|exceed/i;
+  const SAFE_MAX_TOKENS = 8192;
+  async function callChat(config, body) {
+    try { return await call('chat/completions', config.apiKey, body, config.signal); }
+    catch (error) {
+      if (error?.code !== 'AI_MODEL' || !(body.max_tokens > SAFE_MAX_TOKENS) || !TOKEN_LIMIT_HINT.test(error.detail ?? '')) throw error;
+      return await call('chat/completions', config.apiKey, { ...body, max_tokens: SAFE_MAX_TOKENS }, config.signal);
+    }
+  }
+
   // `maxTokens` es el tamaño esperado de la respuesta visible. Los modelos con razonamiento (p. ej. Spark) gastan tokens
   // pensando antes de responder, así que el tope real deja margen amplio y, si aun así se agota, se reintenta con más.
   // Devuelve el texto y las métricas de la llamada (tiempo, tokens, intentos) para la traza de desarrollo.
@@ -74,10 +88,10 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
     let budget = Math.min(32000, maxTokens * 6 + 4000);
     const started = Date.now(); const usage = {};
     for (let attempt = 0; ; attempt++) {
-      const result = await call('chat/completions', config.apiKey, {
+      const result = await callChat(config, {
         model:config.model, messages, stream:false, max_tokens:budget,
         ...(Number.isFinite(params?.temperature) ? { temperature:params.temperature } : {}), ...(Number.isFinite(params?.top_p) ? { top_p:params.top_p } : {})
-      }, config.signal);
+      });
       for (const [name, value] of Object.entries(usageOf(result.usage) ?? {})) usage[name] = (usage[name] ?? 0) + value;
       const choice = result.choices?.[0];
       const text = choice?.message?.content;
@@ -94,9 +108,9 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
 
   // Llamada de bajo nivel a chat/completions con un cuerpo arbitrario (tools, response_format…): la usan las sondas de desarrollo
   // y, más adelante, el bucle de herramientas. Devuelve la respuesta tal cual y el tiempo que tardó.
-  async function complete(config, body, { detail = false } = {}) {
+  async function complete(config, body) {
     const started = Date.now();
-    const json = await call('chat/completions', config.apiKey, { model:config.model, stream:false, ...body }, config.signal, { detail });
+    const json = await callChat(config, { model:config.model, stream:false, ...body });
     return { json, ms:Date.now() - started, usage:usageOf(json.usage) };
   }
 
@@ -107,7 +121,7 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
     const entry = { kind:options.label?.kind ?? 'tools', mode:options.label?.mode ?? options.role ?? 'gm', at:new Date().toISOString(), messages };
     const started = Date.now();
     try {
-      const result = await toolChat(config, messages, options);
+      const result = await toolChat(config, messages, { mode:config.toolMode ?? 'auto', ...options });
       prompts.record?.({ ...entry, response:result.text, meta:{ model:config.model, ms:result.ms, usage:result.usage, attempts:result.requests, transport:result.mode, steps:result.steps, calls:result.calls } });
       return result;
     } catch (error) {

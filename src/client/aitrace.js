@@ -51,10 +51,17 @@ export function openProbe(defaultModels = []) {
       const data = await dreq('/api/dev/ai/probe', { method: 'POST', body: JSON.stringify({ models }) });
       status.textContent = '';
       results.innerHTML = data.results.map((row) => {
-        const [tone, text] = verdict(row.tests);
+        const [tone, text, mode] = verdict(row.tests);
         const total = row.tests.reduce((sum, item) => sum + item.ms, 0);
-        return `<section class="at-model"><h3>${escapeHtml(row.model)}</h3><p class="at-verdict at-${tone}">Recomendado para el motor: <strong>${escapeHtml(text)}</strong> · ${seconds(total)} en total</p><ul class="at-tests">${row.tests.map((item) => `<li class="${item.ok ? 'ok' : 'fail'}"><span class="at-mark" aria-hidden="true">${item.ok ? '✔' : item.unsupported ? '∅' : '✘'}</span><span><strong>${escapeHtml(item.label)}</strong> <small>${seconds(item.ms)}${item.usage?.prompt != null ? ` · ${tokens(item.usage.prompt)}→${tokens(item.usage.completion ?? 0)} tokens` : ''}${item.calls > 1 ? ` · ${item.calls} llamadas` : ''}</small><br><small class="at-note">${escapeHtml(item.unsupported ? `No lo admite: ${item.note}` : item.note)}</small></span></li>`).join('')}</ul></section>`;
+        return `<section class="at-model"><h3>${escapeHtml(row.model)}</h3><p class="at-verdict at-${tone}">Recomendado para el motor: <strong>${escapeHtml(text)}</strong> · ${seconds(total)} en total${mode ? ` <button type="button" data-use="${escapeHtml(row.model)}|${mode}">Usar este protocolo</button>` : ''}</p><ul class="at-tests">${row.tests.map((item) => `<li class="${item.ok ? 'ok' : 'fail'}"><span class="at-mark" aria-hidden="true">${item.ok ? '✔' : item.unsupported ? '∅' : '✘'}</span><span><strong>${escapeHtml(item.label)}</strong> <small>${seconds(item.ms)}${item.usage?.prompt != null ? ` · ${tokens(item.usage.prompt)}→${tokens(item.usage.completion ?? 0)} tokens` : ''}${item.calls > 1 ? ` · ${item.calls} llamadas` : ''}</small><br><small class="at-note">${escapeHtml(item.unsupported ? `No lo admite: ${item.note}` : item.note)}</small></span></li>`).join('')}</ul></section>`;
       }).join('');
+      results.querySelectorAll('[data-use]').forEach((button) => {
+        button.onclick = async () => {
+          const [model, mode] = button.dataset.use.split('|');
+          try { await dreq('/api/dev/ai/toolmode', { method: 'POST', body: JSON.stringify({ model, mode }) }); button.textContent = 'Guardado ✔'; button.disabled = true; }
+          catch (error) { notify(error.message); }
+        };
+      });
     } catch (error) { status.textContent = error.message; }
     finally { run.disabled = false; }
   };

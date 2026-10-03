@@ -334,3 +334,59 @@ test('provider.chatWithTools talks to chat/completions with tools and records th
   await assert.rejects(ai.chatWithTools({ apiKey: '', model: 'm' }, messages, { registry: gameRegistry, state: gmState(), role: 'gm' }), { code: 'AI_CONFIGURATION_REQUIRED' });
   assert.equal(recorded.at(-1).error.length > 0, true, 'los fallos también quedan en la traza');
 });
+
+// --- Modelos reales: protocolo por modelo y errores del proveedor ----------------------------------------------------------------------
+import { mkdtemp } from 'node:fs/promises';
+import { defaultPreset } from '../src/server/ai/composer.js';
+import os from 'node:os';
+import { createSettingsStore, DEFAULT_TOOL_MODES } from '../src/server/ai/settings.js';
+
+test('each model has its own tool protocol: known defaults, per-model overrides that survive saving, and back to default with auto', async () => {
+  const settings = createSettingsStore(await mkdtemp(path.join(os.tmpdir(), 'hom-settings-')));
+  const spark = 'meta/muse-spark-1.3-contributor'; const deepseek = 'deepseek/deepseek-v4.1-flash';
+  assert.equal(DEFAULT_TOOL_MODES[spark], 'json');
+  assert.equal(DEFAULT_TOOL_MODES[deepseek], 'native');
+  await assert.rejects(settings.setToolMode(spark, 'json'), { code: 'AI_CONFIGURATION_REQUIRED' }, 'sin conexión no hay dónde guardarlo');
+  await settings.save({ apiKey: 'k', model: spark });
+  assert.equal((await settings.require()).toolMode, 'json', 'Spark usa el protocolo JSON sin tocar nada');
+  assert.deepEqual(await settings.toolMode(deepseek), { model: deepseek, mode: 'native', custom: false, default: 'native' });
+  assert.equal((await settings.setToolMode(spark, 'native')).mode, 'native');
+  await settings.save({ apiKey: 'k', model: spark }, { verified: true });
+  assert.equal((await settings.require()).toolMode, 'native', 'guardar los ajustes no borra el protocolo elegido');
+  await settings.save({ apiKey: 'k', model: 'meituan/longcat-2.5-preview' });
+  assert.equal((await settings.require()).toolMode, 'auto', 'un modelo desconocido prueba nativo y recuerda');
+  assert.equal((await settings.setToolMode(spark, 'auto')).mode, 'json', 'auto vuelve al valor por defecto del modelo');
+  await assert.rejects(settings.setToolMode(spark, 'xml'), { code: 'INVALID_REQUEST' });
+  await assert.rejects(settings.setToolMode('no valido!', 'json'), { code: 'AI_MODEL' });
+});
+
+test('act() uses the protocol saved for the model: json never sends `tools`, native does', async () => {
+  const sent = [];
+  const fetchImpl = async (url, init) => { sent.push(JSON.parse(init.body)); return { ok: true, json: async () => ({ choices: [{ message: { content: sent.at(-1).tools ? 'Narro.' : '{"say":"Narro.","calls":[]}' }, finish_reason: 'stop' }] }) }; };
+  const ai = createNanoGPT(fetchImpl, { prompts: { get: (kind) => defaultPreset(kind), record() {} } });
+  const plan = { kind: 'gm', mode: 'free', format: 'f', data: {}, macros: {} };
+  const run = async (toolMode) => ai.act(plan, { registry: gameRegistry, state: gmState() }, { apiKey: 'k', model: `m-${toolMode}`, toolMode });
+  assert.equal((await run('json')).text, 'Narro.');
+  assert.equal('tools' in sent.at(-1), false);
+  assert.equal((await run('native')).text, 'Narro.');
+  assert.equal('tools' in sent.at(-1), true);
+});
+
+test('provider errors keep the reason the provider gave, and a rejected token cap is retried once with a safe one', async () => {
+  const bodies = [];
+  const failing = (message) => async (url, init) => { bodies.push(JSON.parse(init.body)); return { ok: false, status: 400, json: async () => ({ error: { message } }) }; };
+  const aiLimit = createNanoGPT(async (url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return bodies.at(-1).max_tokens > 8192 ? { ok: false, status: 400, json: async () => ({ error: { message: 'max_tokens must be <= 8192 for this model, sk-secret-key' } }) } : { ok: true, json: async () => ({ choices: [{ message: { content: 'Hola.' }, finish_reason: 'stop' }] }) };
+  }, { prompts: { get: () => ({}), record() {} } });
+  assert.equal(await aiLimit.chat({ apiKey: 'sk-secret-key', model: 'meituan/longcat-2.5-preview' }, [{ role: 'user', content: 'hi' }], 3000), 'Hola.');
+  assert.deepEqual(bodies.map((body) => body.max_tokens), [22000, 8192], 'el motor pide margen de razonamiento; el proveedor lo rechaza y se baja una vez');
+
+  bodies.length = 0;
+  const ai = createNanoGPT(failing('model not available on this endpoint (key sk-secret-key)'), { prompts: { get: () => ({}), record() {} } });
+  const error = await ai.chat({ apiKey: 'sk-secret-key', model: 'meituan/longcat-2.5-preview' }, [{ role: 'user', content: 'hi' }], 3000).catch((failure) => failure);
+  assert.equal(error.code, 'AI_MODEL');
+  assert.match(error.message, /Motivo del proveedor: «model not available on this endpoint/);
+  assert.doesNotMatch(error.message, /sk-secret-key/, 'la API key nunca viaja en un mensaje');
+  assert.equal(bodies.length, 1, 'un 400 que no habla de tokens no se reintenta');
+});

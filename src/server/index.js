@@ -504,6 +504,14 @@ async function api(request, response, pathname) {
       return sendJson(response, 200, await runProbe(ai, config, { models, ...(Array.isArray(body.tests) ? { tests: body.tests.map(String) } : {}) }));
     });
   }
+  // Protocolo de herramientas del modelo guardado (auto | native | json): lo que midió la sonda manda sobre lo que anuncie el catálogo.
+  if (pathname === '/api/dev/ai/toolmode' && ['GET', 'POST'].includes(request.method)) {
+    if (request.headers['x-hom-dev'] !== '1') throw new AIError('Las herramientas de desarrollo están desactivadas.', 'DEV_DISABLED', 403);
+    if (typeof settings.toolMode !== 'function') throw new Error('Este almacenamiento no admite el protocolo de herramientas.');
+    const body = request.method === 'POST' ? await readBody(request) : {};
+    const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : (await settings.require()).model;
+    return sendJson(response, 200, request.method === 'POST' ? await settings.setToolMode(model, String(body.mode)) : await settings.toolMode(model));
+  }
   if (pathname.startsWith('/api/dev/')) return devRoutes(request, response, pathname);
   if (request.method === 'GET' && pathname === '/api/world') return sendJson(response, 200, worldData);
   if (request.method === 'POST' && pathname === '/api/creation/whispers') {

@@ -17,6 +17,7 @@ const COMMANDS = [
   ['/limpiarfeed', 'Borra todas las publicaciones y cuentas generadas del feed (conserva tu cuenta) para empezar de cero'],
   ['/prompts [personaje|texto|gm|social]', 'Abre el editor de prompts (módulos, orden, vista previa)'],
   ['/sonda [modelo …]', 'Prueba herramientas nativas, protocolo JSON y tiempos de uno o varios modelos'],
+  ['/herramientas [auto|nativo|json]', 'Protocolo con el que el modelo guardado usa las herramientas del motor (sin argumento, muestra el actual)'],
   ['/stats', 'Tiempos y tokens medios de las llamadas a la IA, por tipo'],
   ['/intenciones', 'Lista lo que el GM intentó hacer y el juego aún no resuelve (qué mecánicas construir)'],
   ['/contacto id', 'Desbloquea el contacto de un NPC (como si lo hubiera compartido)'],
@@ -79,6 +80,7 @@ export async function runCommand(text) {
   else if (command === '/limpiarfeed' || command === '/wipefeed') await wipeFeed();
   else if (command === '/feed') { try { await hooks.runDev({ op: 'social' }); await hooks.reload(); notify('Feed generado.'); } catch (error) { notify(error.message); } }
   else if (command === '/sonda' || command === '/probe') openProbe(argument.split(/[\s,]+/).filter(Boolean));
+  else if (command === '/herramientas' || command === '/tools') await toolMode(argument);
   else if (command === '/stats') openStats();
   else if (command === '/intenciones' || command === '/intents') openIntents();
   else if (command === '/prompts' || command === '/prompt') {
@@ -118,6 +120,15 @@ export async function openPanel() {
   node.querySelector('[data-intents]').onclick = () => openIntents();
   node.querySelectorAll('[data-prompts]').forEach((button) => button.onclick = () => openPromptEditor(button.dataset.prompts));
   node.querySelector('[data-import]').onchange = (event) => importFile(event.target.files[0]);
+}
+
+const MODE_LABELS = { auto: 'automático (prueba nativo y recuerda)', native: 'herramientas nativas', json: 'protocolo JSON de reserva' };
+async function toolMode(argument) {
+  const wanted = { nativo: 'native', native: 'native', json: 'json', auto: 'auto', automatico: 'auto' }[norm(argument)];
+  try {
+    const info = await dreq('/api/dev/ai/toolmode', wanted ? { method: 'POST', body: JSON.stringify({ mode: wanted }) } : {});
+    notify(`${info.model}: ${MODE_LABELS[info.mode]}${info.custom ? ' (ajustado por ti)' : info.default !== 'auto' ? ' (por defecto de este modelo)' : ''}. Usa /herramientas auto|nativo|json para cambiarlo.`);
+  } catch (error) { notify(error.message); }
 }
 
 // Restablece el feed de NorthLife: publicaciones, cuentas generadas y notificaciones. Conserva tu cuenta y el resto de la partida.
