@@ -42,7 +42,7 @@ export function characterPlan({ npc, player, location, relationship, attitude, t
       emocionesQueSeMantienen: !chat && stickyEmotions.length ? stickyEmotions : undefined,
       expresionActual: currentExpression || undefined,
       tuIntencionAnterior: intent || undefined,
-      conversacion: [...(spoken.omitted ? [{ nota: `Antes de esto hubo ${spoken.omitted} intervenciones más; lo importante ya está en tus recuerdos y pendientes.` }] : []), ...spoken.lines.map((line) => ({ quien: line.who === 'player' ? 'la otra persona' : npc.name, texto: line.text, ...(line.replyTo?.text ? { respondeA: String(line.replyTo.text).slice(0, 120) } : {}) }))]
+      conversacion: [...(spoken.omitted ? [{ nota: `Antes de esto hubo ${spoken.omitted} intervenciones más; lo importante ya está en tus recuerdos y pendientes.` }] : []), ...spoken.lines.map((line) => ({ ...(line.n ? { n: line.n } : {}), quien: line.who === 'player' ? 'la otra persona' : npc.name, texto: line.text, ...(line.replyTo?.text ? { respondeA: String(line.replyTo.text).slice(0, 120) } : {}) }))]
     }
   };
 }

@@ -20,6 +20,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // Espera que se puede saltar (botón de detener durante la reproducción de la respuesta).
 async function nap(ui, ms) { const end = performance.now() + ms; while (performance.now() < end && !ui.chatSkip) await sleep(Math.min(80, Math.max(0, end - performance.now()))); }
 
+// La barra de respuesta y las citas muestran solo el principio del mensaje, en una línea y sin saltos: el resto no se pinta.
+const SNIPPET_CHARS = 90;
+const snippet = (text) => { const clean = String(text ?? '').replace(/\s+/g, ' ').trim(); return clean.length > SNIPPET_CHARS ? `${clean.slice(0, SNIPPET_CHARS - 1)}…` : clean; };
 const messagesOf = (npcId) => state.run.chats?.[npcId] ?? [];
 const waitingOf = (messages) => { let count = 0; for (let index = messages.length - 1; index >= 0 && messages[index].who === 'player'; index--) count += 1; return count; };
 
@@ -33,7 +36,7 @@ function visibleMessages(npc, ui) {
 function messageHtml(message, { npc, ctx, tick = '' }) {
   const mine = message.who === 'player';
   const quote = message.replyTo
-    ? `<div class="quote"><b>${escapeHtml(message.replyTo.who === 'player' ? 'Tú' : npc.name)}</b><span>${escapeHtml(message.replyTo.text)}</span></div>` : '';
+    ? `<div class="quote"><b>${escapeHtml(message.replyTo.who === 'player' ? 'Tú' : npc.name)}</b><span>${escapeHtml(snippet(message.replyTo.text))}</span></div>` : '';
   return `<div class="msg ${mine ? 'you' : 'them'}" data-msg="${escapeHtml(message.id)}"><div class="bubble ${mine ? 'you' : 'them'}">${quote}${escapeHtml(message.text)}<time>${ctx.hourOf(message.time)}${tick}</time></div>`
     + `<button type="button" class="msg-reply" data-reply-msg="${escapeHtml(message.id)}" aria-label="Responder a este mensaje">${svg(REPLY_ICON)}</button></div>`;
 }
@@ -61,7 +64,7 @@ export function threadView(npc, ctx) {
   const { ui, initial } = ctx;
   const reply = ui.chatReplyTo;
   return `<div class="thread-head"><span class="avatar">${initial(npc.name)}</span><strong>${escapeHtml(npc.name)}</strong></div><div class="thread">${listHtml(npc, ctx)}</div>
-    <div class="chat-reply" ${reply ? '' : 'hidden'}><span><b>${escapeHtml(reply ? (reply.who === 'player' ? 'Tú' : npc.name) : '')}</b> ${escapeHtml(reply?.text ?? '')}</span><button type="button" data-cancel-reply aria-label="Cancelar respuesta">×</button></div>
+    <div class="chat-reply" ${reply ? '' : 'hidden'}><span><b>${escapeHtml(reply ? (reply.who === 'player' ? 'Tú' : npc.name) : '')}</b> ${escapeHtml(snippet(reply?.text))}</span><button type="button" data-cancel-reply aria-label="Cancelar respuesta">×</button></div>
     <form id="chat-form"><textarea name="text" rows="1" maxlength="4000" placeholder="Escribe un mensaje…" aria-label="Mensaje">${escapeHtml(ui.chatDraft ?? '')}</textarea><button type="submit" class="send-chat" aria-label="Enviar"></button></form>
     <p class="chat-hint" data-chat-hint></p><p class="error" data-chat-error role="alert"></p>`;
 }
@@ -91,7 +94,7 @@ export function bindChat(screen, ctx) {
   const paintList = () => { const list = thread(); if (!list) return; const near = list.scrollHeight - list.scrollTop - list.clientHeight < 90; list.innerHTML = listHtml(npc, ctx); if (near) scrollDown(); };
   const paintReplyBar = () => {
     const reply = ui.chatReplyTo; bar.hidden = !reply;
-    if (reply) bar.querySelector('span').innerHTML = `<b>${escapeHtml(reply.who === 'player' ? 'Tú' : npc.name)}</b> ${escapeHtml(reply.text)}`;
+    if (reply) bar.querySelector('span').innerHTML = `<b>${escapeHtml(reply.who === 'player' ? 'Tú' : npc.name)}</b> ${escapeHtml(snippet(reply.text))}`;
   };
   const fail = (message) => { const box = screen.querySelector('[data-chat-error]'); if (box) box.textContent = message; };
   const grow = () => { area.style.height = 'auto'; area.style.height = `${Math.min(110, area.scrollHeight)}px`; };
@@ -105,7 +108,7 @@ export function bindChat(screen, ctx) {
   // --- Responder a un mensaje: tocar y «↩», o arrastrar hacia la derecha ---
   const startReply = (id) => {
     const message = messagesOf(npc.id).find((item) => item.id === id); if (!message) return;
-    ui.chatReplyTo = { id: message.id, who: message.who, text: message.text.slice(0, 140) };
+    ui.chatReplyTo = { id: message.id, who: message.who, text: snippet(message.text) };
     paintReplyBar(); scrollDown(); area.focus(); // la barra le quita altura a la lista: se mantiene el final a la vista
   };
   thread()?.addEventListener('click', (event) => {

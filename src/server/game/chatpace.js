@@ -7,21 +7,24 @@ export const MAX_BURST = 4;            // mensajes por respuesta; lo que sobre s
 export const MAX_MESSAGE_CHARS = 600;
 export const MAX_UNANSWERED = 8;       // mensajes del jugador sin turno pasado
 const PACE = { slow: 1.7, fast: 0.5 };
-const PACE_TAG = /^\s*\{\s*(pausa|lento|rapido|rápido)\s*\}\s*/i;
+const LINE_TAG = /^\s*\{\s*(pausa|lento|rapido|rápido|re\s*:\s*\d{1,4})\s*\}\s*/i;
 
-// El texto de una respuesta de chat → [{ text, pace }]. Cada línea no vacía es un mensaje; {pausa}/{lento} y {rapido} al principio piden ritmo.
+// El texto de una respuesta de chat → [{ text, pace, re }]. Cada línea no vacía es un mensaje. Al principio de una línea puede haber marcas, en cualquier
+// orden: {pausa}/{lento} y {rapido} piden ritmo, y {re:N} responde al mensaje número N de la conversación (el `n` que ve el personaje).
 export function splitBurst(raw) {
   const messages = [];
   for (const line of String(raw ?? '').split(/\n+/)) {
-    let text = line; let pace = null;
-    const tag = PACE_TAG.exec(text);
-    if (tag) { pace = /^r/i.test(tag[1]) ? 'fast' : 'slow'; text = text.slice(tag[0].length); }
+    let text = line; let pace = null; let re = null;
+    for (let tag = LINE_TAG.exec(text); tag; tag = LINE_TAG.exec(text)) {
+      if (/^re/i.test(tag[1])) re = Number(tag[1].replace(/\D/g, '')); else pace = /^r/i.test(tag[1]) ? 'fast' : 'slow';
+      text = text.slice(tag[0].length);
+    }
     text = text.replace(/\{[^}]*\}/g, '').replace(/\s{2,}/g, ' ').trim().slice(0, MAX_MESSAGE_CHARS);
-    if (text) messages.push({ text, pace });
+    if (text) messages.push({ text, pace, re });
   }
   if (messages.length > MAX_BURST) {
     const rest = messages.splice(MAX_BURST - 1);
-    messages.push({ text: rest.map((item) => item.text).join(' ').slice(0, MAX_MESSAGE_CHARS), pace: rest[0].pace });
+    messages.push({ text: rest.map((item) => item.text).join(' ').slice(0, MAX_MESSAGE_CHARS), pace: rest[0].pace, re: rest[0].re });
   }
   return messages;
 }
@@ -41,6 +44,10 @@ export function readMs(npc, relationship, world) {
   if (affinityOf(relationship.notes ?? []) >= 5) ms -= 400;
   return Math.min(6000, Math.max(600, ms));
 }
+
+// Resumen corto de un mensaje para citarlo (una sola línea, sin saltos): la interfaz nunca recibe el mensaje entero.
+export const QUOTE_CHARS = 100;
+export const quoteText = (text) => { const clean = String(text ?? '').replace(/\s+/g, ' ').trim(); return clean.length > QUOTE_CHARS ? `${clean.slice(0, QUOTE_CHARS - 1)}…` : clean; };
 
 // Los mensajes guardados antes de existir las respuestas directas no tienen id: se les da uno estable (su posición).
 export function ensureChatIds(run) {

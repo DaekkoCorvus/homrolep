@@ -21,7 +21,7 @@ import { noticesSince } from './ai/context/notices.js';
 import { feedDue, applyGeneratedPosts, applyReactions, wipeFeed, publishPlayerPost, publishPlayerReply, toggleLike, toggleRepost, saveProfile, profileMedia, markNotificationsRead, socialView, socialInput, threadFor, migrateSocial, expectedReplies, playerPopularity, keyOfMinutes, withAvatars, REFRESH_GAP } from './game/social.js';
 import { saveRun, loadRun, listRuns, deleteRun } from './saves/store.js';
 import { randomUUID } from 'node:crypto';
-import { ensureChatIds, typingMs, readMs, MAX_UNANSWERED } from './game/chatpace.js';
+import { ensureChatIds, typingMs, readMs, quoteText, MAX_UNANSWERED } from './game/chatpace.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const publicDir = path.join(root, 'public');
@@ -511,7 +511,8 @@ async function performAction(before, input, config) {
 // Chat en ráfagas: el jugador manda los mensajes que quiera (`send`: se guardan al instante, sin modelo) y con el botón de turno (`turn`) el personaje
 // responde con uno o varios mensajes en UNA sola llamada. Un mensaje puede responder a otro concreto (`replyTo`). El motor fija el ritmo de lo que verá
 // el cliente (cuánto «escribe» cada mensaje); el modelo solo puede pedir ir más despacio o más rápido.
-const chatLine = (message) => ({ who: message.who, text: message.text, ...(message.replyTo ? { replyTo: message.replyTo } : {}) });
+// `n` numera los mensajes de la conversación (1, 2, 3…): el personaje responde a uno concreto con {re:N}. `offset` = cuántos quedaron fuera de la ventana.
+const chatLine = (message, index = 0, offset = 0) => ({ n: offset + index + 1, who: message.who, text: message.text, ...(message.replyTo ? { replyTo: message.replyTo } : {}) });
 
 function chatTarget(run, body) {
   const npc = npcs.get(String(body.npcId));
@@ -533,7 +534,7 @@ function chatSend(run, body) {
   if (body.replyTo) {
     const quoted = history.find((message) => message.id === String(body.replyTo));
     if (!quoted) throw new Error('Ese mensaje ya no está disponible para responderlo.');
-    replyTo = { id: quoted.id, who: quoted.who, text: quoted.text.slice(0, 140) };
+    replyTo = { id: quoted.id, who: quoted.who, text: quoteText(quoted.text) };
   }
   const next = structuredClone(run);
   next.chats = { ...next.chats, [npc.id]: [...history, { id: randomUUID(), who: 'player', text, time: timeKey(run.world), ...(replyTo ? { replyTo } : {}) }].slice(-80) };
@@ -547,15 +548,20 @@ async function chatTurn(run, body, config) {
   const history = run.chats?.[npc.id] ?? [];
   if (history.at(-1)?.who !== 'player') throw new Error('Escribe un mensaje antes de pasar el turno.');
   const context = await contextFor(run, npc);
-  const reply = await ai.npcReply(context(relationship, history.slice(-24).map(chatLine), { mode: 'chat' }), config);
+  const recent = history.slice(-24);
+  const reply = await ai.npcReply(context(relationship, recent.map((message, index) => chatLine(message, index, history.length - recent.length)), { mode: 'chat' }), config);
   let next = structuredClone(run);
   next.world = advanceTime(next.world, 1);
   const burst = reply.messages?.length ? reply.messages : [{ text: stripMarks(reply.say), pace: null }];
   const at = timeKey(next.world);
-  const answers = burst.map((message) => ({ id: randomUUID(), who: 'npc', text: message.text, time: at, typingMs: typingMs(message.text, message.pace) }));
+  // {re:N}: el personaje responde a un mensaje concreto (suyo o del jugador). Un número que no existe se ignora.
+  const answers = burst.map((message) => {
+    const target = Number.isInteger(message.re) ? history[message.re - 1] : null;
+    return { id: randomUUID(), who: 'npc', text: message.text, time: at, typingMs: typingMs(message.text, message.pace), ...(target ? { replyTo: { id: target.id, who: target.who, text: quoteText(target.text) } } : {}) };
+  });
   next.chats = { ...next.chats, [npc.id]: [...history, ...answers].slice(-80) };
   next.updatedAt = new Date().toISOString();
-  return applyReply(next, npc, reply, history.map(chatLine), config);
+  return applyReply(next, npc, reply, history.map((message, index) => chatLine(message, index)), config);
 }
 
 // La publicación o respuesta del jugador se guarda AL INSTANTE; la reacción de la red (respuestas, likes, reposts) la genera el modelo en segundo

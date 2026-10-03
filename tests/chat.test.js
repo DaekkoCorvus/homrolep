@@ -19,7 +19,8 @@ test('each non-empty line of the reply is one message; pace tags are hints, emot
   assert.deepEqual(burst.map((item) => item.text).slice(0, 3), ['hola!!^^', 'como estas todo bien?', 'justo voy llegando a casa btw :p']);
   assert.deepEqual(burst.map((item) => item.pace), [null, null, 'slow', 'fast'], 'el ritmo pedido va con su línea');
   assert.equal(burst[3].text, 'jaja y uno más', 'lo que sobra se une al último mensaje, sin perderse');
-  assert.deepEqual(splitBurst('{feliz} Hola {risas}'), [{ text: 'Hola', pace: null }], 'las marcas de emoción no existen en chat');
+  assert.deepEqual(splitBurst('{feliz} Hola {risas}'), [{ text: 'Hola', pace: null, re: null }], 'las marcas de emoción no existen en chat');
+  assert.deepEqual(splitBurst('{re:7} jaja sí\n{pausa}{re: 3}{rápido} y también eso\n{re:99999} número absurdo\n{re:2}'), [{ text: 'jaja sí', pace: null, re: 7 }, { text: 'y también eso', pace: 'fast', re: 3 }, { text: 'número absurdo', pace: null, re: null }], 'responder a un mensaje: {re:N} en cualquier orden con el ritmo; una marca sin texto no es un mensaje');
   assert.deepEqual(splitBurst('   \n \n'), []);
   assert.equal(splitBurst('x'.repeat(2000))[0].text.length, 600, 'tope por mensaje');
 });
@@ -135,10 +136,12 @@ test('API: replying to a specific message stores a short snapshot, validates the
   await chat({ op: 'turn' });
   const line = turns.at(-1).transcript.find((item) => item.text === 'Me refería a esto');
   assert.equal(line.replyTo.text, 'Primer mensaje', 'el personaje sabe a qué mensaje responde el jugador');
-  const long = 'z'.repeat(400);
+  const long = `${'z'.repeat(400)}\nsegunda línea`;
   const big = await chat({ op: 'send', text: long });
   const cited = await chat({ op: 'send', text: 'cita larga', replyTo: big.body.chats.luna_serp.at(-1).id });
-  assert.equal(cited.body.chats.luna_serp.at(-1).replyTo.text.length, 140, 'la cita se recorta');
+  const snapshot = cited.body.chats.luna_serp.at(-1).replyTo.text;
+  assert.equal(snapshot.length, 100, 'la cita se recorta: la interfaz nunca recibe el mensaje entero');
+  assert.ok(snapshot.endsWith('…') && !snapshot.includes('\n'), 'una sola línea');
 });
 
 test('API: too many unanswered messages ask for the turn; the old one-request format still works; chats from before ids can be replied to', async (t) => {
@@ -175,4 +178,42 @@ test('API: plans and facts the character notes in its burst are validated agains
   assert.equal(turn.status, 200);
   assert.deepEqual(turn.body.commitments.map((item) => item.text), ['Café el sábado']);
   assert.equal(runs.get(id).relationships.luna_serp.knownName, 'Mara Vega');
+});
+
+test('the character can reply to a specific message, its own or the player\'s, with {re:N}: every message has a number and the answer carries a short quote', async (t) => {
+  const seen = [];
+  const { chat } = await boot(t, {
+    npcReply: async (context) => {
+      seen.push(context);
+      // «n» es el número del mensaje en la conversación completa: 1 = el primero
+      return { say: 'x', messages: [{ text: 'jaja eso mismo digo yo', pace: null, re: 1 }, { text: 'y lo de antes sigue en pie', pace: null, re: 2 }, { text: 'esta no cita a nadie', pace: null, re: 999 }] };
+    }
+  });
+  await chat({ op: 'send', text: 'Tengo una idea larga '.repeat(30) + '\ncon otra línea' });
+  await chat({ op: 'send', text: 'segundo mensaje' });
+  const turn = await chat({ op: 'turn' });
+  assert.deepEqual(seen[0].transcript.map((line) => line.n), [1, 2], 'los mensajes se numeran para que el personaje pueda citarlos');
+  const replies = turn.body.chats.luna_serp.slice(2);
+  assert.equal(replies.length, 3);
+  assert.deepEqual(replies[0].replyTo, { id: turn.body.chats.luna_serp[0].id, who: 'player', text: replies[0].replyTo.text });
+  assert.equal(replies[0].replyTo.text.length, 100, 'la cita nunca lleva el mensaje entero');
+  assert.ok(!replies[0].replyTo.text.includes('\n'));
+  assert.equal(replies[1].replyTo.text, 'segundo mensaje');
+  assert.equal(replies[2].replyTo, undefined, 'un número que no existe se ignora, no rompe nada');
+  // el siguiente turno: el personaje puede citar también SUS propios mensajes (la numeración sigue sobre toda la conversación)
+  await chat({ op: 'send', text: 'ok' });
+  await chat({ op: 'turn' });
+  assert.deepEqual(seen[1].transcript.map((line) => line.n), [1, 2, 3, 4, 5, 6], 'la numeración es estable entre turnos');
+  const third = (await chat({ op: 'send', text: 'otra vez' })).body.chats.luna_serp;
+  assert.equal(third.length, 10, '2 del jugador + 3 del personaje + 1 + 3 + el nuevo');
+});
+
+test('the character prompt explains how to answer a specific message and shows each message\'s number', () => {
+  const transcript = [{ n: 4, who: 'npc', text: 'Hoy hay pan' }, { n: 5, who: 'player', text: 'me guardas uno?', replyTo: { id: 'x', who: 'npc', text: 'Hoy hay pan' } }];
+  const plan = characterPlan(chatContext(transcript));
+  assert.match(plan.format, /\{re:N\}/);
+  assert.deepEqual(plan.data.conversacion.map((line) => line.n), [4, 5]);
+  assert.equal(plan.data.conversacion[1].respondeA, 'Hoy hay pan');
+  const prompt = compose('text', 'chat', defaultPreset('text'), plan).map((message) => message.content).join('\n');
+  assert.match(prompt, /"n":5,"quien":"la otra persona","texto":"me guardas uno\?","respondeA":"Hoy hay pan"/);
 });
