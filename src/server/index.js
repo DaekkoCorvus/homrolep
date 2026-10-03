@@ -15,7 +15,8 @@ import { runProbe } from './ai/probe.js';
 import { createPromptStore } from './ai/promptStore.js';
 import { createSocialCatalog } from './game/socialCatalog.js';
 import { KINDS, kindNames, defaultPreset, normalizePreset, compose, importSillyTavern } from './ai/composer.js';
-import { characterPlan, evaluationPlan, narrationPlan, chatsPlan, socialPlan } from './ai/plans.js';
+import { characterPlan, evaluationPlan, narrationPlan, worldPlan, chatsPlan, socialPlan } from './ai/plans.js';
+import { ambientHeader } from './ai/ambient.js';
 import { feedDue, applyGeneratedPosts, applyReactions, wipeFeed, publishPlayerPost, publishPlayerReply, toggleLike, toggleRepost, saveProfile, profileMedia, markNotificationsRead, socialView, socialInput, threadFor, migrateSocial, expectedReplies, playerPopularity, keyOfMinutes, withAvatars, REFRESH_GAP } from './game/social.js';
 import { saveRun, loadRun, listRuns, deleteRun } from './saves/store.js';
 
@@ -64,8 +65,9 @@ async function publicRun(run, dev = false) {
   const toPublic = async (npc) => ({ ...publicNpc(npc), portraits: await listPortraits(assetDir, npc.id) });
   const relationships = Object.fromEntries(Object.entries(run.relationships ?? {}).map(([id, item]) => [id, dev ? debugView(relationshipOf(run, id)) : { met: item.met, contact: item.contact, added: item.added === true, encounters: item.encounters }]));
   const encounterNpc = run.encounter ? await toPublic(npcs.get(run.encounter.npcId)) : null;
+  const { intents, ...visible } = run; // intenciones sin mecánica: solo para el desarrollador
   return {
-    ...run, relationships, encounterNpc, social: socialView(run, { dev, seeds: socialCatalog.current().seeds, avatars: socialCatalog.current().avatars }),
+    ...visible, ...(dev ? { intents: intents ?? [] } : {}), relationships, encounterNpc, social: socialView(run, { dev, seeds: socialCatalog.current().seeds, avatars: socialCatalog.current().avatars }),
     commitments: (run.commitments ?? []).map((item) => ({ ...item, npcName: npcs.get(item.npcId)?.name ?? item.npcId })),
     presence: await Promise.all(presentFor(run).map(toPublic)),
     sharedContacts: [...npcs.values()].filter((npc) => run.relationships?.[npc.id]?.contact).map((npc) => ({ id: npc.id, name: npc.name, handle: npc.contact.handle, added: run.relationships[npc.id].added === true })),
@@ -206,7 +208,7 @@ const promptInfo = (kind) => {
   const spec = KINDS[kind];
   return {
     kind, label: spec.label, description: spec.description, modes: spec.modes, macros: spec.macros,
-    autos: Object.entries(spec.autos).map(([key, auto]) => ({ key, label: auto.label, description: auto.description, role: auto.role ?? 'system', locked: auto.locked === true, special: auto.special === true })),
+    autos: Object.entries(spec.autos).map(([key, auto]) => ({ key, label: auto.label, description: auto.description, role: auto.role ?? 'system', locked: auto.locked === true, special: auto.special === true, required: auto.required === true })),
     preset: structuredClone(prompts.get(kind)), defaults: defaultPreset(kind), custom: prompts.isCustom(kind)
   };
 };
@@ -225,7 +227,8 @@ async function previewPlan(kind, mode, run, npcId) {
     return characterPlan(context(relationship, mode === 'open' ? [] : withPlayer(lines), { mode }));
   }
   if (kind === 'gm') {
-    if (mode === 'narration' || mode === 'action') return narrationPlan(mode, run, run, worldData, here.map((person) => ({ id: person.id, nombre: person.name, rol: person.role })));
+    if (mode === 'free') return worldPlan(run, worldData, ambientHeader({ run, worldData, present: here, npcs }));
+    if (mode === 'action') return narrationPlan(mode, run, run, worldData);
     if (mode === 'chats') return chatsPlan({ ahora, playerName: run.player.name, locations: worldData.locations.map(({ id, name }) => ({ id, nombre: name })), chats: [{ npcId: npc.id, name: npc.name, lines: withPlayer(run.chats?.[npc.id]).slice(-6), commitments: commitmentsFor(run, npc.id, { withIds: true }) }] });
     const context = await contextFor(run, npc);
     return evaluationPlan(context(relationshipOf(run, npc.id), withPlayer(run.encounter?.lines ?? run.lastEncounter?.lines), { commitments: context.gmCommitments, locations: context.locations }));
@@ -363,21 +366,23 @@ async function talk(run, body, config) {
   throw new Error('Operación de conversación desconocida.');
 }
 
-// Acción libre: el GM narra y, si el jugador busca hablar con alguien presente, abre el encuentro sin pulsar «Hablar con».
+// Acción libre: el motor anota lo escrito y el GM, con la cabecera ambiente, actúa con herramientas (viajar, esperar, conversar con alguien
+// presente, `attempt` para lo que aún no tiene mecánica…). Cada herramienta pasa por el mismo handler que los botones; si algo falla, no se guarda nada.
 async function performAction(before, input, config) {
   let run = applyAction(before, input, worldData);
   const background = startBackground(run, config);
   const event = run.eventLog.at(-1);
-  if (input.type === 'freeform' && typeof ai.narrateFreeform === 'function') {
-    const here = presentFor(run);
-    const result = await ai.narrateFreeform(before, run, worldData, config, here.map((npc) => ({ id: npc.id, nombre: npc.name, rol: npc.role })));
-    event.data = { ...event.data, response: result.text };
-    run.narrative = { text: result.text, time: event.time };
-    const npc = result.talkTo ? here.find((person) => person.id === result.talkTo) : null;
-    if (npc) {
-      run = await openConversation(run, npc, config);
-      run.encounter.lines.unshift({ who: 'narrator', text: result.text });
-    }
+  if (input.type === 'freeform' && typeof ai.act === 'function') {
+    const state = toolContext(run, config);
+    const header = ambientHeader({ run, worldData, present: presentFor(run), npcs });
+    const result = await ai.act(worldPlan(run, worldData, header), { registry: gameRegistry, state }, config);
+    if (!result.text) throw new AIError('El GM no devolvió una narración. Tu partida no ha cambiado; puedes reintentar.', 'AI_RESPONSE');
+    run = result.run;
+    // `event` es el suceso de la acción libre dentro de la partida resultante (las herramientas clonan la partida en cada paso).
+    const logged = run.eventLog.findLast((item) => item.type === 'player_action' && item.time === event.time) ?? run.eventLog.at(-1);
+    logged.data = { ...logged.data, response: result.text };
+    run.narrative = { text: result.text, time: logged.time };
+    if (run.encounter && !before.encounter) run.encounter.lines.unshift({ who: 'narrator', text: result.text });
     return (await background)(run);
   }
   const narrative = await ai.narrate(before, run, worldData, config);

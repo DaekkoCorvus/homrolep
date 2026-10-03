@@ -90,7 +90,7 @@ test('normalisation protects what the engine needs: format and task are always p
   assert.equal(format.enabled, true); assert.equal(format.modes, undefined);
   assert.ok(messy.modules.some((item) => item.auto === 'task'), 'la instrucción del turno se restaura');
   assert.equal(messy.tasks.evaluation.length, 60000);
-  assert.ok(messy.tasks.narration, 'lo que falta se completa con la fábrica');
+  assert.ok(messy.tasks.free, 'lo que falta se completa con la fábrica');
   assert.deepEqual(messy.params, { top_p: 0.9 }, 'temperatura fuera de rango se descarta');
   assert.deepEqual(normalizePreset('social', 'no es un objeto').modules.map((item) => item.auto ?? item.id), defaultPreset('social').modules.map((item) => item.auto ?? item.id));
 });

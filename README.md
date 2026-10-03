@@ -97,7 +97,18 @@ Los verbos del juego viven en un **registro de herramientas** (`src/server/ai/to
 - `game.js`: handlers deterministas de `travel`, `wait`, `sleep`, `work`, `start_conversation` y `share_contact`. Los botones de la interfaz (`applyAction`, abrir una conversación) y el modelo pasan por los mismos handlers, así que el juego sigue funcionando sin IA y no pueden divergir.
 - `loop.js` (expuesto como `ai.chatWithTools`): bucle de hasta 3 pasos; el último va sin herramientas para que el modelo narre. Transporte nativo (`tools`/`tool_calls`) o codec JSON de reserva (`{"say", "calls"}`) para modelos sin `tools`; en modo `auto` se prueba el nativo y se recuerda por modelo si el proveedor lo rechaza. Cada llamada queda en la traza (`tools:<rol>`).
 
-Todavía **ninguna acción del juego llama a `chatWithTools`**: la Fase 1 deja la infraestructura probada (con transporte falso) y el juego no cambia. La Fase 2 conecta el mundo libre.
+Las acciones con botones siguen sin llamar al bucle; la acción libre lo usa desde la Fase 2.
+
+### Mundo libre con herramientas (Fase 2 del rediseño)
+
+La acción libre que escribe el jugador ya no pasa por un JSON con `talkTo`: el GM recibe una **cabecera ambiente** y actúa con las herramientas del motor (`ai.act` → `chatWithTools`).
+
+- **Cabecera ambiente** (`src/server/ai/ambient.js`): texto compacto que calcula el motor (día y hora, lugar con horario, quién está aquí con su id, pendientes y mapa de viaje). Cubre casi todas las consultas; es un módulo obligatorio del prompt GM.
+- **Herramientas del GM:** `travel`, `wait`, `sleep`, `work`, `spend_time` (el motor fija los minutos por tabla de actividades; el modelo solo sugiere), `start_conversation` (absorbe a `talkTo`), consultas (`who_is_here`, `place_info`, `recent_events`, `player_status`) y **`attempt`**.
+- **`attempt` / `no_mechanic`:** para comprar, usar objetos, pelear, robar, convencer… el modelo narra solo el *intento*; el motor no cambia dinero, objetos ni relaciones y anota la intención en `run.intents` (hasta 100 por partida). En modo desarrollador, `/intenciones` o «Intenciones sin mecánica» en el panel las cuentan por tipo: es la lista de mecánicas que conviene construir primero.
+- Los rechazos del motor vuelven al modelo como «sí, pero…». Si la IA falla o no narra, la partida no cambia. El modo de prompt `narration` pasó a `free` («Mundo libre (con herramientas)» en el editor, con vista previa que usa la cabecera real de la partida abierta).
+
+Viajar, esperar, dormir y trabajar con los botones siguen narrándose con el modo `action`, sin herramientas.
 
 La creación pregunta edad, género, apariencia e historia personal opcional; el nombre se pide justo antes de cruzar. La apariencia se guarda como referencia para futuras interacciones con NPC, pero no aparece en la ficha ni se envía al GM durante el prólogo o narraciones generales. La raza humana se asigna automáticamente por ser la única disponible. El prólogo comienza en la estación de Porta Magna. Ocupación y aspiración quedan sin definir al inicio y se desarrollarán durante el juego. El atajo de trabajo solo funciona en partidas que ya tengan la ocupación `worker`.
 

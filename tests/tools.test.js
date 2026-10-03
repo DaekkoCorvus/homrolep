@@ -156,7 +156,8 @@ test('native transport: the model calls a tool, the engine runs it, and the mode
   assert.deepEqual(result.calls.map((call) => [call.tool, call.ok]), [['travel', true]]);
   assert.equal(result.steps, 2);
   assert.deepEqual(result.usage, { prompt: 200, completion: 40 });
-  assert.deepEqual(requests[0].tools.map((tool) => tool.function.name).sort(), ['sleep', 'start_conversation', 'travel', 'wait', 'work']);
+  assert.deepEqual(requests[0].tools.map((tool) => tool.function.name), gameRegistry.names('gm'));
+  assert.ok(requests[0].tools.some((tool) => tool.function.name === 'travel'));
   assert.equal(requests[0].tool_choice, 'auto');
   const second = requests[1].messages;
   assert.equal(second.at(-2).role, 'assistant');
@@ -327,7 +328,7 @@ test('provider.chatWithTools talks to chat/completions with tools and records th
   assert.equal(state.run.world.hour, 16);
   assert.equal(bodies[0].model, 'deepseek/x');
   assert.equal(bodies[0].temperature, 0.7);
-  assert.equal(bodies[0].tools.length, 5);
+  assert.equal(bodies[0].tools.length, gameRegistry.names('gm').length);
   assert.deepEqual([recorded[0].kind, recorded[0].mode, recorded[0].meta.transport, recorded[0].meta.steps, recorded[0].meta.calls[0].tool], ['tools', 'gm', 'native', 2, 'sleep']);
   assert.deepEqual(recorded[0].meta.usage, { prompt: 100, completion: 10, total: 110 });
   await assert.rejects(ai.chatWithTools({ apiKey: '', model: 'm' }, messages, { registry: gameRegistry, state: gmState(), role: 'gm' }), { code: 'AI_CONFIGURATION_REQUIRED' });

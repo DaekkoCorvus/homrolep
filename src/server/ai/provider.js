@@ -104,7 +104,7 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
   // La partida resultante queda en `state.run`; quien llama decide si guardarla (si lanza, no debe guardar nada).
   const toolChat = createToolChat(complete);
   async function chatWithTools(config, messages, options = {}) {
-    const entry = { kind:'tools', mode:options.role ?? 'gm', at:new Date().toISOString(), messages };
+    const entry = { kind:options.label?.kind ?? 'tools', mode:options.label?.mode ?? options.role ?? 'gm', at:new Date().toISOString(), messages };
     const started = Date.now();
     try {
       const result = await toolChat(config, messages, options);
@@ -206,15 +206,14 @@ export function createNanoGPT(fetchImpl = fetch, { prompts = factoryPrompts } = 
     async narrate(before, after, worldData, config) {
       return await this.ask(narrationPlan('action', before, after, worldData), config);
     },
-    // Acción libre: el GM narra y, si el jugador busca hablar con alguien presente, devuelve su id para abrir el encuentro.
-    async narrateFreeform(before, after, worldData, config, present = []) {
-      const text = await this.ask(narrationPlan('narration', before, after, worldData, present), config, 3000);
-      try {
-        const result = JSON.parse(text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
-        const narration = clean(result?.narration, 6000);
-        if (narration) return { text:narration, talkTo:present.some((person) => person.id === result.talkTo) ? result.talkTo : null };
-      } catch { /* si no es JSON se trata como narración sin encuentro */ }
-      return { text, talkTo:null };
+    // Mundo libre: el GM interpreta lo que escribió el jugador y actúa con las herramientas del motor (viajar, esperar, conversar,
+    // `attempt` para lo que aún no tiene mecánica…). `state.run` avanza con cada herramienta; devuelve la narración final.
+    // Si lanza, quien llama no debe guardar `state.run`.
+    async act(plan, { registry, state }, config, maxTokens = 3000) {
+      const preset = prompts.get(plan.kind);
+      const messages = compose(plan.kind, plan.mode, preset, plan);
+      const result = await chatWithTools(config, messages, { registry, state, role:'gm', maxTokens, params:preset.params, label:{ kind:plan.kind, mode:plan.mode } });
+      return { text:clean(result.text, 6000), run:result.run, calls:result.calls };
     }
   };
 }

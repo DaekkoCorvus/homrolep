@@ -138,7 +138,10 @@ test('API: closing registers confirmed agreements; chats and the feed are proces
       { usuario: '@vecino99', nombre: 'Vecino', hora: '09:20', texto: 'Otra vez el metro con retraso', likes: 3 },
       { usuario: '@vecino99', nombre: 'Vecino', hora: '22:00', texto: 'Buenas noches, ciudad', likes: 1 }
     ]; },
-    narrate: async () => 'Nada.', narrateFreeform: async (before, run, worldData, config, present) => ({ text: 'Te acercas a la barra.', talkTo: talkTo && present.some((person) => person.id === talkTo) ? talkTo : null }),
+    narrate: async () => 'Nada.', act: async (plan, { registry, state }) => {
+      if (talkTo) { const outcome = await registry.execute('start_conversation', { npcId: talkTo }, state, { role: 'gm' }); if (outcome.ok) state.run = outcome.run; }
+      return { text: 'Te acercas a la barra.', run: state.run, calls: [] };
+    },
     prologue: async () => ({ text: 'x', locationId: 'station' })
   };
   const server = createAppServer({ ai, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });

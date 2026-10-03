@@ -1,6 +1,6 @@
 // Medición de la IA (modo desarrollador): estadísticas de llamadas por tipo y sonda de modelos (herramientas nativas, protocolo JSON,
 // tiempos y tokens) para comparar modelos sin jugar.
-import { notify, escapeHtml, dreq, layer } from './core.js';
+import { state, notify, escapeHtml, dreq, layer } from './core.js';
 
 const seconds = (ms) => `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`;
 const tokens = (value) => (value >= 10_000 ? `${(value / 1000).toFixed(0)}k` : String(value));
@@ -59,4 +59,19 @@ export function openProbe(defaultModels = []) {
     finally { run.disabled = false; }
   };
   return node;
+}
+
+// Intenciones que el GM intentó y el juego aún no resuelve (herramienta `attempt`): el mapa de qué mecánicas construir después.
+const KIND_LABELS = { buy: 'comprar', use_item: 'usar un objeto', search: 'buscar', interact_object: 'interactuar con un objeto', craft: 'fabricar', persuade: 'convencer', steal: 'robar', fight: 'pelear', other: 'otras' };
+export async function openIntents() {
+  if (!state.run) { notify('Abre una partida primero.'); return; }
+  let run;
+  try { run = await dreq(`/api/runs/${state.run.id}`); } catch (error) { notify(error.message); return; }
+  const intents = run.intents ?? [];
+  const counts = Object.entries(intents.reduce((acc, item) => ({ ...acc, [item.kind]: (acc[item.kind] ?? 0) + 1 }), {})).sort((a, b) => b[1] - a[1]);
+  const body = intents.length
+    ? `<h3>Por tipo</h3><ul class="at-tests">${counts.map(([kind, count]) => `<li><span class="at-mark" aria-hidden="true">${count}</span><span><strong>${escapeHtml(KIND_LABELS[kind] ?? kind)}</strong></span></li>`).join('')}</ul><h3>Últimas</h3><ul class="at-tests">${intents.slice(-30).reverse().map((item) => `<li><span class="at-mark" aria-hidden="true">·</span><span><strong>${escapeHtml(KIND_LABELS[item.kind] ?? item.kind)}</strong> <small>${escapeHtml(item.time)} · ${escapeHtml(item.placeId ?? '')}</small><br><small class="at-note">${escapeHtml(item.details || item.action || '')}</small></span></li>`).join('')}</ul>`
+    : '<p class="dev-hint">Aún no hay intenciones sin mecánica en esta partida. Aparecen cuando escribes una acción libre que el juego no sabe resolver (comprar, pelear, usar un objeto…).</p>';
+  const node = layer('dev-viewer', `<div class="dev-sheet pe-sheet" role="dialog" aria-label="Intenciones sin mecánica"><header><h2>Intenciones sin mecánica</h2><button type="button" data-close aria-label="Cerrar">×</button></header>${body}<p class="dev-hint">Cada fila es algo que el modelo quiso resolver con <code>attempt</code> y el juego todavía no implementa. Se guardan hasta 100 por partida.</p><footer><span></span><button type="button" data-close>Cerrar</button></footer></div>`);
+  node.querySelectorAll('[data-close]').forEach((button) => { button.onclick = () => node.remove(); });
 }

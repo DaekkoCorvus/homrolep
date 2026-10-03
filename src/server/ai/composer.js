@@ -37,14 +37,14 @@ export const KINDS = {
   },
   gm: {
     label: 'GM', short: 'GM',
-    description: 'Interpreta conversaciones al cerrarlas, narra acciones que el motor ya aplicó, procesa chats pendientes y, en una acción libre, puede solicitar un encuentro con alguien presente mediante talkTo. El servidor valida sus datos y aplica los cambios permitidos.',
-    modes: [{ id: 'evaluation', label: 'Evalúa una conversación' }, { id: 'narration', label: 'Narra acción libre' }, { id: 'action', label: 'Narra otras acciones' }, { id: 'chats', label: 'Procesa chats pendientes' }],
+    description: 'Interpreta conversaciones al cerrarlas, narra acciones que el motor ya aplicó, procesa chats pendientes y, en una acción libre usa las herramientas del motor (viajar, esperar, conversar, intentar algo sin mecánica…). El servidor valida cada llamada y aplica solo los cambios permitidos.',
+    modes: [{ id: 'evaluation', label: 'Evalúa una conversación' }, { id: 'free', label: 'Mundo libre (con herramientas)' }, { id: 'action', label: 'Narra otras acciones' }, { id: 'chats', label: 'Procesa chats pendientes' }],
     macros: [['player', 'Nombre real del jugador'], ['user', 'Igual que player'], ['char', 'Personaje evaluado (si aplica)'], ['location', 'Lugar actual'], ['time', 'Fecha y hora del juego'], ['mode', 'Tipo de llamada']],
     autos: {
       player: { label: 'Jugador', description: 'Nombre, edad, género, origen, ocupación, dinero y reputación del jugador. El GM lo sabe todo.', keys: ['jugador'], role: 'user' },
+      ambient: { label: 'Cabecera ambiente', description: 'Texto compacto que calcula el motor: hora y día, lugar, quién está aquí, pendientes y mapa. Obligatorio en el mundo libre: sin él el modelo tendría que consultarlo todo.', keys: ['cabecera'], role: 'user', text: true, required: true },
       world: { label: 'Mundo y lugar', description: 'Hora, estado del mundo, lugar actual y anterior, y prólogo.', keys: ['ahora', 'mundo', 'lugar', 'lugarAnterior', 'prologo'], role: 'user' },
       events: { label: 'Sucesos y acción', description: 'Sucesos recientes y la acción que acaba de hacer el jugador.', keys: ['sucesosRecientes', 'accion'], role: 'user' },
-      present: { label: 'Personas presentes', description: 'Quién está en el lugar (para abrir un encuentro).', keys: ['personasPresentes'], role: 'user' },
       character: { label: 'Personaje evaluado', description: 'Resumen y personalidad del personaje de la conversación.', keys: ['personaje'], role: 'user' },
       relationship: { label: 'Relación y recuerdos', description: 'Actitud previa, última conversación y recuerdos privados del personaje.', keys: ['relacion'], role: 'user' },
       pending: { label: 'Pendientes y lugares', description: 'Acuerdos vigentes (con id) y lugares del mapa.', keys: ['pendientes', 'lugares'], role: 'user' },
@@ -93,7 +93,7 @@ const ENGINE_TEXT = {
 const DEFAULT_ORDER = {
   character: ['main', 'language', 'engine', 'format', 'card', 'world', 'persona', 'relationship', 'commitments', 'contact', 'emotions', 'intent', 'history', 'task'],
   text: ['main', 'language', 'engine', 'format', 'card', 'world', 'persona', 'relationship', 'commitments', 'history', 'task'],
-  gm: ['main', 'language', 'task', 'format', 'player', 'world', 'events', 'present', 'character', 'relationship', 'pending', 'history'],
+  gm: ['main', 'language', 'task', 'format', 'ambient', 'player', 'world', 'events', 'character', 'relationship', 'pending', 'history'],
   social: ['main', 'language', 'task', 'format', 'world', 'accounts', 'player', 'feed', 'thread']
 };
 const GM_TASK_ROLE = 'system';
@@ -135,7 +135,7 @@ export function normalizePreset(kind, input) {
   }
   // El formato de salida y la instrucción del turno son obligatorios: si faltan vuelven a su sitio de fábrica (al final);
   // si estaban desactivados se reactivan. Sin ellos el motor no sabría qué pedir ni cómo leer la respuesta.
-  for (const key of ['task', 'format']) {
+  for (const key of ['task', 'format', ...Object.keys(spec.autos).filter((name) => spec.autos[name].required)]) {
     const required = modules.find((item) => item.auto === key);
     if (!required) modules.push(structuredClone(defaults.modules.find((item) => item.auto === key)));
     else { required.enabled = true; delete required.modes; }
@@ -157,6 +157,7 @@ export function expand(text, macros = {}) {
 
 const present = (value) => value !== undefined && value !== null && !(Array.isArray(value) && !value.length) && !(typeof value === 'string' && !value.trim());
 function renderAuto(auto, data = {}) {
+  if (auto.text) return auto.keys.map((key) => data[key]).filter((value) => typeof value === 'string' && value.trim()).join('\n');
   const picked = {};
   for (const key of auto.keys) if (present(data[key])) picked[key] = data[key];
   return Object.keys(picked).length ? JSON.stringify(picked) : '';

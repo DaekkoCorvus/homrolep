@@ -55,18 +55,27 @@ export function evaluationPlan({ npc, player, relationship, attitude, transcript
   };
 }
 
-// GM narrando una acción. `freeform` puede activar un encuentro con alguien presente.
-export function narrationPlan(mode, before, after, worldData, present = []) {
+const playerView = (player) => ({ nombre: player.name, edad: player.age, genero: player.gender, genderCustom: player.genderCustom, raza: player.race, origen: player.origin, ocupacion: player.occupation, aspiracion: player.aspiration, dinero: player.money, reputacion: player.reputation });
+
+// GM narrando una acción que el motor ya aplicó (viajar, esperar, dormir, trabajar).
+export function narrationPlan(mode, before, after, worldData) {
   const player = after.player;
   const here = worldData.locations.find(({ id }) => id === player.locationId);
   return {
     kind: 'gm', mode, format: GM_FORMATS[mode],
     macros: { player: player.name, user: player.name, location: here?.name ?? '', time: clock(after.world) },
-    data: {
-      jugador: { nombre: player.name, edad: player.age, genero: player.gender, genderCustom: player.genderCustom, raza: player.race, origen: player.origin, ocupacion: player.occupation, aspiracion: player.aspiration, dinero: player.money, reputacion: player.reputation },
-      mundo: after.world, lugar: here, prologo: before.prologue?.text, sucesosRecientes: before.eventLog.slice(-12), accion: after.eventLog.at(-1), lugarAnterior: before.player.locationId,
-      personasPresentes: mode === 'narration' ? present : undefined
-    }
+    data: { jugador: playerView(player), mundo: after.world, lugar: here, prologo: before.prologue?.text, sucesosRecientes: before.eventLog.slice(-12), accion: after.eventLog.at(-1), lugarAnterior: before.player.locationId }
+  };
+}
+
+// GM en el mundo libre: recibe la cabecera ambiente (texto calculado por el motor) y la acción escrita; actúa con herramientas.
+export function worldPlan(run, worldData, header) {
+  const player = run.player;
+  const here = worldData.locations.find(({ id }) => id === player.locationId);
+  return {
+    kind: 'gm', mode: 'free', format: GM_FORMATS.free,
+    macros: { player: player.name, user: player.name, location: here?.name ?? '', time: clock(run.world) },
+    data: { cabecera: header, jugador: playerView(player), prologo: run.prologue?.text, sucesosRecientes: run.eventLog.slice(-12), accion: run.eventLog.at(-1) }
   };
 }
 

@@ -4,7 +4,7 @@
 // ctx = { run, worldData, npcs, present(run) → npc[], openConversation(run, npc) → run }   (los dos últimos solo los usa quien conversa)
 import { advanceTime, timeKey } from '../../game/clock.js';
 import { shareContact, MAX_PLAYER_TEXT } from '../../game/run.js';
-import { relationshipOf, contactAllowed } from '../../game/npcs.js';
+import { relationshipOf, contactAllowed, scheduleFor } from '../../game/npcs.js';
 import { createRegistry, reject } from './registry.js';
 
 const busy = (run) => (run.encounter ? reject('Estás en plena conversación. Despídete antes de hacer otra cosa.', { code: 'ENCOUNTER_ACTIVE' }) : null);
@@ -20,7 +20,86 @@ function commit(run, minutes, event, change = () => {}) {
 }
 const spent = (before, after, minutes) => ({ minutes, from: timeKey(before.world), to: timeKey(after.world) });
 
+// Tiempo que cuesta cada actividad (lo fija el motor; el modelo solo propone una estimación acotada).
+export const ACTIVITIES = {
+  browse: { label: 'curiosear o mirar escaparates', min: 10, max: 120, base: 30 },
+  eat: { label: 'comer o tomar algo', min: 15, max: 90, base: 30 },
+  rest: { label: 'descansar o sentarse un rato', min: 10, max: 240, base: 30 },
+  chat: { label: 'charlar de pasada con desconocidos', min: 5, max: 60, base: 15 },
+  explore: { label: 'recorrer la zona', min: 20, max: 180, base: 45 },
+  read: { label: 'leer o mirar el móvil', min: 10, max: 180, base: 30 },
+  exercise: { label: 'hacer ejercicio', min: 20, max: 120, base: 45 }
+};
+
+// Lo que el modelo quiere intentar y el juego aún no sabe resolver. `kind` es cerrado para poder contar qué mecánicas faltan.
+export const ATTEMPT_KINDS = ['buy', 'use_item', 'search', 'interact_object', 'craft', 'persuade', 'steal', 'fight', 'other'];
+export const MAX_INTENTS = 100;
+
+const personView = (run, npcs, npc) => ({ id: npc.id, name: npc.name, role: npc.role, doing: scheduleFor(npc, run.world)?.activity ?? undefined });
+
 export const gameTools = [
+  // --- Consultas: devuelven datos, no cambian la partida ---------------------------------------------------------------------------
+  {
+    name: 'who_is_here',
+    description: 'Consulta quién está en el lugar actual del jugador ahora mismo. Solo esas personas pueden participar en la escena.',
+    kind: 'query', roles: ['gm'],
+    handler: ({ run, npcs, present }) => ({ ok: true, result: { place: run.player.locationId, people: present(run).map((npc) => personView(run, npcs, npc)) } })
+  },
+  {
+    name: 'place_info',
+    description: 'Consulta un lugar del mapa: descripción, horario, cuánto se tarda en llegar y quién suele estar ahora.',
+    kind: 'query', roles: ['gm'],
+    params: { type: 'object', properties: { place: { type: 'string', description: 'id del lugar (por defecto, el actual)' } }, additionalProperties: false },
+    handler({ run, worldData, npcs }, { place }) {
+      const location = worldData.locations.find((item) => item.id === (place ?? run.player.locationId));
+      if (!location) return reject('Ubicación desconocida.', { code: 'unknown_place', hint: `Lugares válidos: ${worldData.locations.map(({ id }) => id).join(', ')}.` });
+      const here = [...npcs.values()].filter((npc) => scheduleFor(npc, run.world)?.locationId === location.id).map((npc) => personView(run, npcs, npc));
+      return { ok: true, result: { id: location.id, name: location.name, district: location.district, description: location.description, hours: location.hours ?? 'siempre accesible', travelMinutes: location.travelMinutes, people: here } };
+    }
+  },
+  {
+    name: 'recent_events',
+    description: 'Consulta los últimos sucesos registrados por el motor (viajes, conversaciones, acuerdos…).',
+    kind: 'query', roles: ['gm'],
+    params: { type: 'object', properties: { count: { type: 'integer', description: 'cuántos (1 a 20, por defecto 8)' } }, additionalProperties: false },
+    handler: ({ run }, { count }) => ({ ok: true, result: { events: run.eventLog.slice(-Math.min(20, Math.max(1, count || 8))) } })
+  },
+  {
+    name: 'player_status',
+    description: 'Consulta el estado del jugador: dinero, ocupación, reputación y dónde está.',
+    kind: 'query', roles: ['gm'],
+    handler: ({ run }) => ({ ok: true, result: { name: run.player.name, money: run.player.money, occupation: run.player.occupation, reputation: run.player.reputation, place: run.player.locationId } })
+  },
+
+  // --- Acciones del mundo libre ---------------------------------------------------------------------------------------------------
+  {
+    name: 'spend_time',
+    description: `El jugador dedica un rato a algo corriente sin otro efecto en el juego. Actividades: ${Object.entries(ACTIVITIES).map(([id, item]) => `${id} (${item.label})`).join('; ')}. El motor decide cuántos minutos cuesta; minutes_hint solo orienta.`,
+    roles: ['gm'],
+    params: { type: 'object', properties: { activity: { type: 'string', enum: Object.keys(ACTIVITIES) }, minutes_hint: { type: 'integer', description: 'minutos que sugieres' } }, required: ['activity'], additionalProperties: false },
+    handler({ run }, { activity, minutes_hint }) {
+      const blocked = busy(run); if (blocked) return blocked;
+      const spec = ACTIVITIES[activity];
+      const minutes = Math.min(spec.max, Math.max(spec.min, Math.round(Number(minutes_hint)) || spec.base));
+      const next = commit(run, minutes, { type: 'time_spent', data: { activity, minutes } });
+      return { ok: true, run: next, result: { activity, ...spent(run, next, minutes) } };
+    }
+  },
+  {
+    // Salida para todo lo que el juego aún no implementa (comprar, usar objetos, pelear…): el modelo narra solo el INTENTO, sin conceder
+    // resultados, y el motor anota la intención. Esa lista es el mapa de qué mecánicas construir después, medida con juego real.
+    name: 'attempt',
+    description: 'Úsala cuando el jugador intenta algo que ninguna otra herramienta resuelve (comprar, usar un objeto, buscar, convencer, robar, pelear…). El juego aún no tiene esa mecánica: no cambia dinero, objetos ni relaciones. Narra solo el intento y su ambiente, sin conceder ni negar resultados.',
+    roles: ['gm'],
+    params: { type: 'object', properties: { kind: { type: 'string', enum: ATTEMPT_KINDS }, details: { type: 'string', maxLength: 240, description: 'qué intenta, en una frase' } }, required: ['kind'], additionalProperties: false },
+    handler({ run }, { kind, details = '' }) {
+      const next = structuredClone(run);
+      next.intents = [...(run.intents ?? []), { time: timeKey(run.world), placeId: run.player.locationId, kind, details: String(details).trim().slice(0, 240), action: run.eventLog.findLast((event) => event.type === 'player_action')?.data?.text?.slice(0, 200) }].slice(-MAX_INTENTS);
+      next.updatedAt = new Date().toISOString();
+      return { ok: true, run: next, result: { status: 'no_mechanic', note: 'El juego todavía no resuelve esto: nada cambió. Narra solo el intento (o una oportunidad plausible) sin conceder ni negar resultados.' } };
+    }
+  },
+
   {
     name: 'travel',
     description: 'Mueve al jugador a otro lugar. El motor calcula cuánto tarda y rechaza lugares desconocidos o en los que ya está.',

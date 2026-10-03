@@ -71,10 +71,10 @@ export async function openPromptEditor(startKind = 'character') {
   }
 
   function moduleRow(module, index, total) {
-    const required = module.auto === 'format' || module.auto === 'task';
+    const required = module.auto === 'format' || module.auto === 'task' || autoOf(module)?.required === true;
     const isOpen = opened.has(module.id);
     const scope = module.modes?.length ? ` · solo: ${module.modes.map(modeLabel).join(', ')}` : '';
-    const meta = module.type === 'auto' ? `automático · ${roleLabel[module.role]}${scope}${module.auto === 'format' ? ' · obligatorio' : module.auto === 'task' ? ' · obligatorio' : ''}` : `texto · ${roleLabel[module.role]}${scope}`;
+    const meta = module.type === 'auto' ? `automático · ${roleLabel[module.role]}${scope}${required ? ' · obligatorio' : ''}` : `texto · ${roleLabel[module.role]}${scope}`;
     const modesField = required ? '' : `<div class="dev-field"><span>Se envía en</span><div class="pm-modes">${info[kind].modes.map((mode) => `<label><input type="checkbox" data-mode="${mode.id}" ${module.modes?.includes(mode.id) ? 'checked' : ''}>${escapeHtml(mode.label)}</label>`).join('')}</div><small>Sin marcar = en todos los tipos de turno.</small></div>`;
     const content = module.type === 'auto'
       ? `<p class="dev-hint">${escapeHtml(autoOf(module)?.description ?? '')}</p>`
