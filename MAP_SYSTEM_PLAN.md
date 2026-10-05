@@ -32,14 +32,17 @@ ways[]      { id, name, kind, points[[x,y]…], width, z, group }               
 districts[] { id, name, color, polygon, fog, allowPlayerPlaces, group }           // zonas de juego
 places[]    { id, name, aliases[], kind, x, y, district, access, hours, tags[], description,
               discovery, owner, footprint?, group, requires[] }
-links[]     { id, name, mode, from, to, minutes, cost, requires[] }               // p. ej. el metro de Porta Magna
+links[]     { id, name, mode, from, to, minutes|null, cost, requires[], distanceKm|null, path[[x,y]…], line, twoWay }   // conexiones reales (carretera, ferrocarril, Northline, ruta marítima…)
+lines[]     { id, name, mode, color }                                              // líneas de transporte (Línea Este…): agrupan enlaces con un color
+decor[]     { id, name, kind, x, y, size, rotation, group }                        // decoración y etiquetas de texto (solo visuales)
+travel      { speedsKmh: { modo: km/h } } | null                                   // velocidades propias del mapa para calcular tiempos
 groups[]    { id, name, parent, locked, baked }                                   // árbol; el bloqueo se hereda hacia abajo
 publish     { version, builtAt, sourceHash, format, tileSize, minZoom, maxZoom, bounds } | null   // metadatos de las teselas exportadas
 ```
 
 - **Área y relleno:** `fill.pattern` ∈ `none` / `organic` / `grid` / `radial` / `forest`, con `seed`, `blockSize`, `lotSize`, `density`, `streetWidth`, `rotation` (y `center`, `rings`, `spokes` en radial; `treeSpacing` en bosque). Salirse de los rangos realistas da un aviso, no un error.
 - **Grupos:** un elemento bloqueado por su grupo o por un ancestro no se edita (el editor lo congela). `baked` (reservado) nombrará el archivo con el relleno generado y congelado de un grupo terminado.
-- **Lugar (`place`)**: `kind` ∈ `home`, `food`, `shop`, `poi`, `transport`, `gateway`, `other`; `access` ∈ `public` / `private` / `restricted`; `discovery` (estado inicial) ∈ `hidden` / `rumor` / `known`; `owner` = id de NPC opcional; `requires` = requisitos de acceso (`escort`, `invitation`, `story_flag`, `knows_place`, `money`), tipos cerrados que valida el motor; el modelo nunca los concede.
+- **Lugar (`place`)**: `kind` ∈ `home`, `food`, `shop`, `poi`, `transport`, `gateway`, `other` y, para mapas regionales, `capital`, `city`, `town`, `station`, `district`, `port`, `facility`; además `importance` (1–5), `icon`, `faction`, `image` y `data` (pares clave → valor para el simulador); `access` ∈ `public` / `private` / `restricted`; `discovery` (estado inicial) ∈ `hidden` / `rumor` / `known`; `owner` = id de NPC opcional; `requires` = requisitos de acceso (`escort`, `invitation`, `story_flag`, `knows_place`, `money`), tipos cerrados que valida el motor; el modelo nunca los concede.
 - **Distrito**: polígono (en m²) para la niebla y para asignar el distrito de cada lugar. `allowPlayerPlaces` marca dónde el jugador puede colocar su casa o marcas (§2.2).
 - **Enlace (`link`)**: arista escrita a mano entre dos lugares (el metro de Porta Magna con la capital y otras facciones). Duración y costo los pone el autor; no hay cálculo de rutas.
 - **Estado en la partida (no en el canon):** `run.knowledge.places[id] = { state: hidden|rumor|known|visited, via, at }`, `run.flags` para hitos de historia, y **`run.places`** para lo que crea el jugador (§2.2). Las partidas existentes no se rompen: sus lugares actuales pasan a «conocido».
@@ -157,3 +160,21 @@ Nace de dos problemas reales del hito 1: una imagen grande se pixela al acercar,
 5. Continuar con el hito 2 del motor (tiempos por distancia en metros, que se simplifica porque ya no hay escala que calibrar).
 
 **El «mapa provisional»**: con esto el boceto *es* el mapa. Se modela la ciudad principal con unas cuantas formas y los lugares, y se va ampliando sin tirar nada.
+
+## 8. Mapas regionales y atlas (hecho el 2026-10-05)
+
+Se extendió el editor existente (no hay un editor aparte) para construir mapas de **cientos de kilómetros** con los mismos datos y herramientas, y se construyó con él el primer mapa regional: **`northfortress_territory`** (el mapa de la ciudad `northfortress` sigue siendo el del juego). Detalle de uso en [README.md](README.md) («Mapas regionales y el atlas de Northfortress»).
+
+**Arquitectura.** Capas de datos en `src/shared/` (sirven al navegador y a Node): `mapDefaults.js` (tipos de lugar, iconos, importancia, decoración), `mapTerrain.js` (terreno con nieve, desierto, zona árida, urbano e industrial; celda configurable de 4 m a 5 km; `paintPolygon`; dispersión por trozos de copas, cumbres y edificios), `mapTravel.js` (**distancias y tiempos**: `linkKm`, `linkMinutes`, `planTrip` con transbordos, formato de duraciones), `mapLayers.js` (13 capas) y `mapSchema.js` (normalización y validación de lo nuevo). Pintores en el cliente: `maprender.js` (terreno y escena) y `mapatlas.js` (símbolos de ciudades, conexiones por modo, regiones, decoración, **composición de etiquetas sin solapes**), usados tanto por la vista final del editor como por el mapa del juego.
+
+**Decisiones.**
+- **Escala:** 1 unidad = 1 m también a escala regional (el dibujo es la distancia real); una conexión puede guardar además una distancia diegética (`distanceKm`) distinta de la dibujada. Los tiempos salen de la distancia y de la velocidad del modo (por mapa) o se escriben a mano.
+- **Capas:** solo del editor (visibilidad y bloqueo), no se guardan; la capa de cada elemento se deduce de su tipo.
+- **No se tocó el viaje del juego:** `geography.js` y `world.json` siguen igual (80 m/min dentro de la ciudad). El atlas es de **solo lectura** (`/api/atlas…`) y es la base para el viaje entre ciudades.
+
+**Pendiente / preparado para conectar.**
+1. **Viaje entre ciudades en el juego:** enlazar `place.data.detail_map` / `detail_place` (la capital apunta a la ciudad `northfortress`, Porta Magna a su estación) con `geography.js`, aplicar `planTrip` en la herramienta `travel` y definir tope a pie, taxi y costos (§6).
+2. Lugares y conocimiento del atlas (niebla por distrito, `discovery`) en el cliente del juego.
+3. Exportar el atlas a teselas horneadas (el estilo «Atlas oscuro» ya es un tema con postproceso) y horneado de grupos.
+4. Pendientes del terreno: que pertenezca a grupos/bloqueos y caminos que sigan la orilla.
+5. Nombres provisionales «(prov.)» y la geografía menor del territorio por validar con el autor; las distancias de las cinco ciudades siguen el lore (Heartstone ≈ 20 km, Market Bridge 35–50, High Sanctuary 60–90, Westwall 100–150).

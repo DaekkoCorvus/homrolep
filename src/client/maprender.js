@@ -1,9 +1,11 @@
 // Pintor del mapa (canvas 2D + postproceso WebGL). Pinta áreas, relleno generado, caminos y nombres con la paleta de un estilo (src/shared/mapStyle.js) y
 // después pasa un shader sobre la imagen (grano de papel, manchas, viñeta, saturación, contraste, calidez, tinta en los bordes). El editor lo usa para
 // la «vista final» y el relleno en vivo; el exportador de teselas usará exactamente estas mismas funciones, así que lo que se ve es lo que se hornea.
-import { pickIndex } from '/shared/mapStyle.js';
+import { pickIndex, SNOW_DEFAULT } from '/shared/mapStyle.js';
 import { PAINT_ORDER, TERRAIN_CODE, CHUNK, contourChunk, strideFor, scatterChunk, lodFor } from '/shared/mapTerrain.js';
 import { polygonArea, polygonCentroid } from '/shared/geo.js';
+import { layerOf } from '/shared/mapLayers.js';
+import { drawLinks, drawSymbols, drawRegions, drawDecor, drawPlaceLabels, drawRegionLabels, layoutPlaces } from '/mapatlas.js';
 
 const CASED = new Set(['avenue', 'street', 'path', 'bridge']);
 const worldBox = (v, pad = 0) => ({ minX: -v.tx / v.k - pad, minY: -v.ty / v.k - pad, maxX: (v.width - v.tx) / v.k + pad, maxY: (v.height - v.ty) / v.k + pad });
@@ -85,8 +87,29 @@ export function drawCanopies(ctx, v, trees, theme, lite = false) {
   paths.forEach((path, index) => { ctx.fillStyle = style.colors[index]; ctx.fill(path); });
 }
 
+// Oscurece (factor < 1) o aclara (> 1) un color #rrggbb.
+function shade(hex, factor) {
+  const m = /^#([0-9a-f]{6})/i.exec(hex ?? ''); if (!m) return hex;
+  const n = parseInt(m[1], 16); const f = (c) => Math.max(0, Math.min(255, Math.round(c * factor)));
+  return `#${[f(n >> 16), f((n >> 8) & 255), f(n & 255)].map((c) => c.toString(16).padStart(2, '0')).join('')}`;
+}
+// Edificios sueltos de las zonas urbanas e industriales pintadas (cuadrados agrupados por color, sin rotación): dan textura de ciudad a escala regional.
+function drawBlocks(ctx, v, items, theme, kind) {
+  const { k, tx, ty } = v; const box = worldBox(v, 40);
+  const base = theme.areas[kind] ?? '#888888';
+  const palette = kind === 'industrial' ? [shade(base, 0.7), shade(base, 0.9), shade(base, 1.15)] : [...theme.buildings.colors.slice(0, 3), theme.buildings.colors.at(-1)];
+  const paths = palette.map(() => new Path2D()); let any = false;
+  for (const t of items) {
+    if (t.x < box.minX || t.x > box.maxX || t.y < box.minY || t.y > box.maxY || t.r * k < 0.5) continue;
+    const r = t.r * k; const cx = t.x * k + tx; const cy = t.y * k + ty; const path = paths[Math.min(palette.length - 1, Math.floor(t.tone * palette.length))];
+    path.rect(cx - r, cy - r * 0.8, r * 2, r * 1.6); any = true;
+  }
+  if (!any) return;
+  ctx.save(); ctx.globalAlpha = 0.95; paths.forEach((path, index) => { ctx.fillStyle = palette[index]; ctx.fill(path); }); ctx.restore();
+}
+
 // Montañas dibujadas: triángulos con una cara clara y otra oscura.
-function drawPeaks(ctx, v, peaks, theme) {
+function drawPeaks(ctx, v, peaks, theme, snowy = false) {
   const { k, tx, ty } = v; const box = worldBox(v, 60);
   const light = new Path2D(); const dark = new Path2D(); const edge = new Path2D();
   for (const p of peaks) {
@@ -96,8 +119,9 @@ function drawPeaks(ctx, v, peaks, theme) {
     dark.moveTo(cx, cy - r); dark.lineTo(cx + r * 0.95, cy + r * 0.55); dark.lineTo(cx + r * 0.05, cy + r * 0.55); dark.closePath();
     edge.moveTo(cx - r * 0.95, cy + r * 0.55); edge.lineTo(cx, cy - r); edge.lineTo(cx + r * 0.95, cy + r * 0.55);
   }
-  ctx.fillStyle = theme.mountain.light; ctx.fill(light); ctx.fillStyle = theme.mountain.dark; ctx.fill(dark);
-  ctx.strokeStyle = theme.mountain.dark; ctx.lineWidth = 0.8; ctx.stroke(edge);
+  const palette = snowy ? (theme.snow ?? SNOW_DEFAULT) : theme.mountain;
+  ctx.fillStyle = palette.light; ctx.fill(light); ctx.fillStyle = palette.dark; ctx.fill(dark);
+  ctx.strokeStyle = snowy ? theme.mountain.dark : palette.dark; ctx.lineWidth = 0.8; ctx.stroke(edge);
 }
 
 // --- Terreno pintado (rejilla de celdas con bordes naturales; ver src/shared/mapTerrain.js) -------------------------------------------------------------
@@ -122,8 +146,11 @@ function scatterFor(cache, terrain, cx, cy, kind, lod) {
 }
 
 // Pinta el terreno visible: base de tierra, cada material encima en su orden, orillas, y después las copas de los bosques y las montañas.
-export function drawTerrain(ctx, v, terrain, theme, lite = false) {
+// `hidden`: capas ocultas ('terrain' y 'water' se pueden ocultar por separado).
+export function drawTerrain(ctx, v, terrain, theme, lite = false, hidden = null) {
   if (!terrain || terrain.isEmpty()) return;
+  const showLand = !hidden?.has('terrain'); const showWater = !hidden?.has('water');
+  if (!showLand && !showWater) return;
   let cache = terrainCaches.get(terrain); if (!cache) { cache = { paths: new Map(), scatter: new Map() }; terrainCaches.set(terrain, cache); }
   if (cache.paths.size > 4000) cache.paths.clear();
   if (cache.scatter.size > 4000) cache.scatter.clear();
@@ -141,9 +168,10 @@ export function drawTerrain(ctx, v, terrain, theme, lite = false) {
     }
     if (edgeColor) { ctx.strokeStyle = edgeColor; ctx.lineWidth = edgeWidth / v.k; for (const entry of drawn) ctx.stroke(entry.edge); }
   };
-  pass(0, theme.areas.land, theme.areaEdge, 1.4);
+  if (showLand) pass(0, theme.areas.land, theme.areaEdge, 1.4);
   for (const kind of PAINT_ORDER) {
-    const edge = kind === 'water' ? (theme.casing.river ?? theme.areaEdge) : kind === 'forest' ? theme.trees.rim : kind === 'mountain' ? theme.mountain.dark : null;
+    if (kind === 'water' ? !showWater : !showLand) continue;
+    const edge = kind === 'water' ? (theme.casing.river ?? theme.areaEdge) : kind === 'forest' ? theme.trees.rim : kind === 'mountain' ? theme.mountain.dark : kind === 'snow' ? (theme.snow ?? SNOW_DEFAULT).dark : null;
     pass(TERRAIN_CODE[kind], theme.areas[kind] ?? '#cccccc', edge, kind === 'water' ? 1.6 : 1);
     if (kind === 'water' && theme.waterGlow && !lite && v.k * terrain.cell * stride >= 2) {   // orilla más clara por dentro
       ctx.save(); ctx.globalAlpha = 0.6; ctx.strokeStyle = theme.waterGlow; ctx.lineWidth = Math.max(5, 14 * Math.min(1, v.k * 2)) / v.k;
@@ -152,7 +180,15 @@ export function drawTerrain(ctx, v, terrain, theme, lite = false) {
     }
   }
   ctx.restore();
+  if (!showLand) return;
   const lod = lodFor(terrain, v.k);
+  for (const kind of ['urban', 'industrial']) {
+    const kindLod = lodFor(terrain, v.k, kind);
+    for (const [cx, cy] of chunks) {
+      if (!(terrain.codesNear(cx, cy) & (1 << TERRAIN_CODE[kind]))) continue;
+      const blocks = scatterFor(cache, terrain, cx, cy, kind, kindLod); if (blocks.length) drawBlocks(ctx, v, blocks, theme, kind);
+    }
+  }
   for (const [cx, cy] of chunks) {
     if (terrain.codesNear(cx, cy) & (1 << TERRAIN_CODE.forest)) { const trees = scatterFor(cache, terrain, cx, cy, 'forest', lod); if (trees.length) drawCanopies(ctx, v, trees, theme, lite); }
   }
@@ -160,55 +196,60 @@ export function drawTerrain(ctx, v, terrain, theme, lite = false) {
     if (!(terrain.codesNear(cx, cy) & (1 << TERRAIN_CODE.mountain))) continue;
     const peaks = scatterFor(cache, terrain, cx, cy, 'mountain', Math.max(0, lod - 2)); if (peaks.length) drawPeaks(ctx, v, peaks, theme);
   }
+  for (const [cx, cy] of chunks) {
+    if (!(terrain.codesNear(cx, cy) & (1 << TERRAIN_CODE.snow))) continue;
+    const peaks = scatterFor(cache, terrain, cx, cy, 'snow', Math.max(0, lod - 2)); if (peaks.length) drawPeaks(ctx, v, peaks, theme, true);
+  }
 }
 
-// Escena completa de un mapa con un estilo: fondo, áreas (en su orden) con su relleno, caminos, nombres. `results`: Map areaId → resultado de generateFill.
-export function renderScene(ctx, v, map, results, theme, { labels = true, terrain = null, lite = false } = {}) {
+// Escena completa de un mapa con un estilo: fondo, terreno, áreas (en su orden) con su relleno, regiones, caminos, conexiones, símbolos de ciudades, decoración y nombres.
+// `results`: Map areaId → resultado de generateFill. `hidden`: capas ocultas (src/shared/mapLayers.js).
+export function renderScene(ctx, v, map, results, theme, { labels = true, terrain = null, lite = false, hidden = null } = {}) {
   ctx.save();
   ctx.fillStyle = theme.background; ctx.fillRect(0, 0, v.width, v.height);
-  drawTerrain(ctx, v, terrain, theme, lite);
+  drawTerrain(ctx, v, terrain, theme, lite, hidden);
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  const areas = [...map.areas].filter((area) => area.polygon.length >= 3).sort((a, b) => a.z - b.z);
+  const areas = [...map.areas].filter((area) => area.polygon.length >= 3 && area.kind !== 'region' && !hidden?.has(layerOf('area', area, map))).sort((a, b) => a.z - b.z);
   for (const area of areas) {
     const path = polygonPath(area.polygon, v);
-    ctx.fillStyle = theme.areas[area.kind] ?? '#cccccc'; ctx.fill(path);
+    ctx.fillStyle = area.color ?? theme.areas[area.kind] ?? '#cccccc'; ctx.fill(path);
     if (theme.waterGlow && area.kind === 'water') {      // orilla más clara por dentro
       ctx.save(); ctx.clip(path); ctx.strokeStyle = theme.waterGlow; ctx.lineWidth = Math.max(6, 18 * Math.min(1, v.k * 2)); ctx.stroke(path); ctx.restore();
     }
     ctx.strokeStyle = theme.areaEdge; ctx.lineWidth = 1; ctx.stroke(path);
     const result = results.get(area.id); if (result) drawFill(ctx, v, result, theme, lite);
   }
-  const ways = [...map.ways].filter((way) => way.points.length >= 2).sort((a, b) => a.z - b.z);
+  drawRegions(ctx, v, map, theme, { hidden });
+  const ways = [...map.ways].filter((way) => way.points.length >= 2 && !hidden?.has(layerOf('way', way, map))).sort((a, b) => a.z - b.z);
   const trace = (way) => { const path = new Path2D(); way.points.forEach(([x, y], index) => (index ? path.lineTo(x * v.k + v.tx, y * v.k + v.ty) : path.moveTo(x * v.k + v.tx, y * v.k + v.ty))); return path; };
   const widthOf = (way) => Math.max(way.width * v.k, 1.2);
   const traced = new Map(ways.map((way) => [way.id, trace(way)]));
   for (const way of ways) if (theme.casing[way.kind]) { ctx.strokeStyle = theme.casing[way.kind]; ctx.lineWidth = widthOf(way) + (CASED.has(way.kind) ? 2 : 3); ctx.stroke(traced.get(way.id)); }
   for (const way of ways) {
     ctx.lineCap = way.kind === 'wall' ? 'butt' : 'round';
-    ctx.strokeStyle = theme.ways[way.kind] ?? '#ffffff'; ctx.lineWidth = widthOf(way); ctx.stroke(traced.get(way.id));
+    ctx.strokeStyle = theme.ways[way.kind] ?? '#ffffff'; ctx.lineWidth = widthOf(way);
+    if (way.kind === 'border') { ctx.lineWidth = Math.max(way.width * v.k, 1.6); ctx.setLineDash([12, 7]); ctx.lineCap = 'butt'; ctx.globalAlpha = 0.9; ctx.stroke(traced.get(way.id)); ctx.setLineDash([]); ctx.globalAlpha = 1; continue; }
+    ctx.stroke(traced.get(way.id));
     if (way.kind === 'rail') { ctx.strokeStyle = '#ffffff99'; ctx.lineWidth = Math.max(widthOf(way) * 0.4, 1); ctx.setLineDash([8, 8]); ctx.stroke(traced.get(way.id)); ctx.setLineDash([]); }
     if (way.kind === 'wall') { ctx.strokeStyle = '#00000044'; ctx.lineWidth = widthOf(way); ctx.setLineDash([2, 2]); ctx.stroke(traced.get(way.id)); ctx.setLineDash([]); }
   }
   ctx.lineCap = 'round';
+  drawLinks(ctx, v, map, theme, { hidden });
+  const layout = layoutPlaces(v, map, { hidden });
+  drawSymbols(ctx, v, map, theme, { hidden, layout });
+  drawDecor(ctx, v, map, theme, { hidden });
   if (labels) {
     ctx.textAlign = 'center'; ctx.lineJoin = 'round';
     const text = (value, x, y, size, upper = false) => {
       ctx.font = `600 ${size}px "Georgia", serif`; const label = upper ? value.toUpperCase() : value;
       ctx.lineWidth = 3; ctx.strokeStyle = theme.label.halo; ctx.strokeText(label, x, y); ctx.fillStyle = theme.label.color; ctx.fillText(label, x, y);
     };
-    for (const area of areas) {
+    if (!hidden?.has('labels')) for (const area of areas) {
       if (!area.name || polygonArea(area.polygon) * v.k * v.k < 8000) continue;
       const c = polygonCentroid(area.polygon); text(area.name, c.x * v.k + v.tx, c.y * v.k + v.ty, 14, true);
     }
-    if (v.k >= 0.12) {
-      ctx.textAlign = 'left';
-      for (const place of map.places) {
-        const x = place.x * v.k + v.tx; const y = place.y * v.k + v.ty;
-        if (x < -80 || x > v.width + 80 || y < -20 || y > v.height + 20) continue;
-        ctx.fillStyle = theme.label.color; ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fill();
-        text(place.name, x + 8, y + 4, 12);
-      }
-    }
+    drawRegionLabels(ctx, v, map, theme, { hidden });
+    drawPlaceLabels(ctx, v, map, theme, { hidden, layout });
   }
   ctx.restore();
 }

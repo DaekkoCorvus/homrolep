@@ -3,19 +3,19 @@
 import { boundsOf, pointInPolygon, segmentsCross } from './geo.js';
 import { lockedBy } from './mapSchema.js';
 
-export const SELECTABLE = ['place', 'area', 'way', 'district'];
-export const COLLECTION = { place: 'places', area: 'areas', way: 'ways', district: 'districts' };
+export const SELECTABLE = ['place', 'area', 'way', 'district', 'decor'];
+export const COLLECTION = { place: 'places', area: 'areas', way: 'ways', district: 'districts', decor: 'decor' };
 const pointsOf = (type, item) => (type === 'way' ? item.points : item.polygon);
 
 // Caja de un elemento { minX, minY, maxX, maxY }.
 export function itemBounds(type, item) {
-  if (type === 'place') return { minX: item.x, minY: item.y, maxX: item.x, maxY: item.y };
+  if (type === 'place' || type === 'decor') return { minX: item.x, minY: item.y, maxX: item.x, maxY: item.y };
   return boundsOf(pointsOf(type, item).filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y)));
 }
 
 const inRect = (rect, x, y) => x >= rect.minX && x <= rect.maxX && y >= rect.minY && y <= rect.maxY;
 function touchesRect(type, item, rect) {
-  if (type === 'place') return inRect(rect, item.x, item.y);
+  if (type === 'place' || type === 'decor') return inRect(rect, item.x, item.y);
   const points = pointsOf(type, item); if (!points?.length) return false;
   if (points.some(([x, y]) => inRect(rect, x, y))) return true;
   const edges = [[[rect.minX, rect.minY], [rect.maxX, rect.minY]], [[rect.maxX, rect.minY], [rect.maxX, rect.maxY]], [[rect.maxX, rect.maxY], [rect.minX, rect.maxY]], [[rect.minX, rect.maxY], [rect.minX, rect.minY]]];

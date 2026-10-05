@@ -4,23 +4,26 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Editor de mapas · Heroes of Misery</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/mapeditor.css">
 </head>
 <body>
   <header class="me-top">
+    <button type="button" id="toggle-left" class="me-narrow" title="Herramientas y listas" aria-label="Herramientas y listas">☰</button>
     <strong class="me-brand">Editor de mapas</strong>
     <label class="me-inline">Mapa <select id="map-select"></select></label>
-    <button type="button" id="new-map">Nuevo mapa…</button>
-    <label class="me-inline" title="Lo que dibujes se añade a este grupo">Grupo activo <select id="active-group"></select></label>
+    <button type="button" id="new-map" title="Crear un mapa nuevo (ciudad, región o continente)">Nuevo mapa…</button>
+    <label class="me-inline" title="Grupo activo: lo que dibujes se añade a este grupo">Grupo <select id="active-group"></select></label>
     <span class="me-spacer"></span>
     <span id="status" class="me-status" role="status"></span>
     <button type="button" id="undo" title="Deshacer (Ctrl+Z)">Deshacer</button>
     <button type="button" id="redo" title="Rehacer (Ctrl+Y)">Rehacer</button>
     <button type="button" id="save" class="primary" title="Guardar en el proyecto (Ctrl+S)">Guardar</button>
     <a class="me-back" href="/">Volver al juego</a>
+    <button type="button" id="toggle-right" class="me-narrow" title="Propiedades del elemento" aria-label="Propiedades del elemento">ⓘ</button>
   </header>
   <main class="me-main">
-    <aside class="me-left">
+    <aside class="me-left" id="left">
       <nav class="me-tools" aria-label="Herramientas" id="tools"></nav>
       <div class="me-options" id="options"></div>
       <nav class="me-tabs" id="tabs"></nav>
@@ -28,17 +31,26 @@
     </aside>
     <section class="me-stage">
       <div id="canvas" class="me-canvas" tabindex="0" aria-label="Mapa"></div>
+      <div id="ctx-bar" class="me-ctx" hidden></div>
+      <div id="layers-pop" class="me-pop" hidden role="dialog" aria-label="Capas del mapa"></div>
+      <div id="view-pop" class="me-pop" hidden role="dialog" aria-label="Opciones de vista">
+        <h4>Vista del editor</h4>
+        <label class="me-inline" title="Estilo del mapa (se ve en la vista final)">Estilo <select id="theme"></select></label>
+        <label class="me-inline"><input type="checkbox" id="grid" checked> Cuadrícula</label>
+        <label class="me-inline" title="Imanta lo que dibujas o mueves a la cuadrícula visible (los vértices existentes mandan; Alt lo desactiva)"><input type="checkbox" id="snap-grid"> Imán a la cuadrícula</label>
+        <label class="me-inline" title="Casas, manzanas y árboles generados con la receta de cada área"><input type="checkbox" id="fill-preview" checked> Relleno de las áreas</label>
+        <label class="me-inline" title="Terreno pintado con el pincel"><input type="checkbox" id="terrain-view" checked> Terreno</label>
+        <label class="me-inline"><input type="checkbox" id="fog-preview"> Niebla de los distritos</label>
+        <label class="me-inline"><input type="checkbox" id="labels" checked> Nombres</label>
+        <label class="me-inline" title="Dibuja con los colores del estilo del mapa mientras editas (no cambia nada al guardar)"><input type="checkbox" id="themed"> Colores del estilo al editar</label>
+      </div>
       <div class="me-hud">
         <span id="coords">—</span>
         <span id="hint" class="me-hint"></span>
-        <label class="me-inline"><input type="checkbox" id="grid" checked> Cuadrícula</label>
-        <label class="me-inline" title="Casas, manzanas y árboles generados con la receta de cada área"><input type="checkbox" id="fill-preview" checked> Relleno</label>
-        <label class="me-inline" title="Terreno pintado con el pincel"><input type="checkbox" id="terrain-view" checked> Terreno</label>
-        <label class="me-inline"><input type="checkbox" id="fog-preview"> Niebla</label>
-        <label class="me-inline" title="Estilo del mapa (se ve en la vista final)">Estilo <select id="theme"></select></label>
+        <button type="button" id="layers-btn" title="Mostrar, ocultar o bloquear capas" aria-expanded="false">Capas ▾</button>
+        <button type="button" id="view-btn" title="Cuadrícula, imán, terreno, nombres…" aria-expanded="false">Vista ▾</button>
         <label class="me-inline" title="Vista previa del render final con el estilo y el shader (solo lectura)"><input type="checkbox" id="final-view"> Vista final</label>
-        <label class="me-inline"><input type="checkbox" id="labels" checked> Nombres</label>
-        <button type="button" id="fit">Encajar</button>
+        <button type="button" id="fit" title="Encajar el territorio (o todo el mapa) en la pantalla">Encajar</button>
       </div>
     </section>
     <aside class="me-right" id="inspector"></aside>

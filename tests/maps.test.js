@@ -110,7 +110,7 @@ test('normalizing gives a stable shape, rounds to 0.1 m and derives the district
   const map = normalizeMap({ id: ' norte ', name: '  Mapa   del norte ', extra: 'x',
     districts: [{ id: 'centro', name: 'Centro', polygon: [[0, 0], [1500, 0], [1500, 1500], [0, 1500]], color: '#AA3333' }],
     places: [{ id: 'aa', name: 'A', x: 123.456789, y: 300, kind: 'poi', district: 'inventado', junk: 1 }, { id: 'bb', name: 'B', x: 9000, y: 9000 }] });
-  assert.deepEqual(Object.keys(map), ['schemaVersion', 'id', 'name', 'units', 'style', 'underlays', 'areas', 'ways', 'districts', 'places', 'links', 'groups', 'terrain', 'publish']);
+  assert.deepEqual(Object.keys(map), ['schemaVersion', 'id', 'name', 'units', 'style', 'underlays', 'areas', 'ways', 'districts', 'places', 'links', 'lines', 'decor', 'groups', 'terrain', 'travel', 'publish']);
   assert.equal(map.schemaVersion, SCHEMA_VERSION); assert.equal(map.units, 'm');
   assert.equal(map.id, 'norte'); assert.equal(map.name, 'Mapa del norte');
   assert.equal(map.places[0].x, 123.5);
@@ -443,7 +443,7 @@ test('API: the map routes exist only in development mode and enforce the same va
   assert.equal(geo.status, 200);
   assert.match(geo.headers.get('content-type'), /javascript/);
   assert.match(await geo.text(), /export function pointInPolygon/);
-  for (const name of ['mapSchema.js', 'mapDefaults.js', 'mapGen.js']) assert.equal((await fetch(`${url}/shared/${name}`)).status, 200, name);
+  for (const name of ['mapSchema.js', 'mapDefaults.js', 'mapGen.js', 'mapTravel.js', 'mapLayers.js']) assert.equal((await fetch(`${url}/shared/${name}`)).status, 200, name);
   assert.equal((await fetch(`${url}/shared/secreto.js`)).status, 404);
   assert.equal((await fetch(`${url}/shared/..%2Fserver%2Findex.js`)).status, 404);
 });
@@ -459,11 +459,11 @@ test('the editor page and every module it imports are served by the game server'
   assert.match(page, /<script type="module" src="\/mapeditor\.js">/);
   for (const [, file] of page.matchAll(/(?:href|src)="(\/[^"]+\.(?:css|js))"/g)) assert.equal((await fetch(url + file)).status, 200, `${file} se sirve`);
   // cada import del editor y del visor apunta a un archivo que existe: un import roto dejaría el editor en blanco sin avisar
-  for (const file of ['mapeditor.js', 'mapview.js', 'maprender.js']) {
+  for (const file of ['mapeditor.js', 'mapview.js', 'maprender.js', 'mapatlas.js']) {
     const source = await (await fetch(`${url}/${file}`)).text();
     for (const [, target] of source.matchAll(/from '(\/[^']+)'/g)) assert.equal((await fetch(url + target)).status, 200, `${file} importa ${target}`);
   }
-  for (const module of ['mapSchema.js', 'mapGen.js']) {
+  for (const module of ['mapSchema.js', 'mapGen.js', 'mapTravel.js', 'mapLayers.js', 'mapStyle.js', 'mapTerrain.js', 'mapSelect.js']) {
     const shared = await (await fetch(`${url}/shared/${module}`)).text();
     for (const [, target] of shared.matchAll(/from '(\.\/[^']+)'/g)) assert.equal((await fetch(`${url}/shared/${target.slice(2)}`)).status, 200, `${module} importa ${target}`);
   }

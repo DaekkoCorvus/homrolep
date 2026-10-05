@@ -4,35 +4,40 @@
 // Todo el estado vive en `state.map`, con deshacer/rehacer por instantáneas.
 import { MapView } from '/mapview.js';
 import { normalizeMap, validateMap, emptyMap, groupChain, lockedBy, mapBounds, PLACE_KINDS, ACCESS, DISCOVERY, LINK_MODES, REQUIREMENT_TYPES } from '/shared/mapSchema.js';
-import { AREA_KINDS, WAY_KINDS, FILL_PATTERNS, AREA_LABEL, WAY_LABEL, PATTERN_LABEL, AREA_COLOR, WAY_COLOR, AREA_Z, WAY_Z, WAY_WIDTH, FILL_DEFAULTS } from '/shared/mapDefaults.js';
+import { AREA_KINDS, WAY_KINDS, FILL_PATTERNS, AREA_LABEL, WAY_LABEL, PATTERN_LABEL, AREA_COLOR, WAY_COLOR, AREA_Z, WAY_Z, WAY_WIDTH, FILL_DEFAULTS, PLACE_KIND_LABEL, PLACE_KIND_COLOR, PLACE_IMPORTANCE, PLACE_ICONS, PLACE_ICON_LABEL, PLACE_DEFAULT_ICON, DECOR_KINDS, DECOR_LABEL, DECOR_SIZE } from '/shared/mapDefaults.js';
+import { TRAVEL_MODES, linkPoints, linkKm, drawnKm, linkMinutes, planTrip, formatDuration, formatKm, speedKmh, placeIndex, walkMinutes } from '/shared/mapTravel.js';
+import { LAYERS, LAYER_LABEL, layerOf } from '/shared/mapLayers.js';
+import { drawLinks, drawSymbols, drawDecor, drawRegions, drawRegionLabels, layoutPlaces, linkColor, decorPixels, smoothLine } from '/mapatlas.js';
 import { generateFill, contextFor } from '/shared/mapGen.js';
 import { itemsInRect, toggleItem, mergeItems, assignToGroup, removeItems } from '/shared/mapSelect.js';
 import { THEMES, themeFor, POST_KEYS, POST_RANGE, POST_LABEL, POST_NEUTRAL } from '/shared/mapStyle.js';
 import { renderScene, drawFill, drawTerrain, PostProcessor, copyPlain } from '/maprender.js';
-import { Terrain, TERRAIN_KINDS, TERRAIN_LABEL, TERRAIN_DEFAULTS, paintStroke, floodFill, generateTerrain } from '/shared/mapTerrain.js';
+import { Terrain, TERRAIN_KINDS, TERRAIN_LABEL, TERRAIN_DEFAULTS, TERRAIN_PRESETS, paintStroke, paintPolygon, floodFill, generateTerrain } from '/shared/mapTerrain.js';
 import { distance, minutesFor, WALK_METERS_PER_MIN, TAXI_METERS_PER_MIN, slugify, uniqueId, districtAt, pointInPolygon, polygonCentroid, polygonArea, polylineLength, distanceToPolyline, boundsOf, mergeBounds, round, ID_PATTERN } from '/shared/geo.js';
 
 const $ = (selector) => document.querySelector(selector);
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
-const KIND_LABEL = { home: 'Casa', food: 'Comida', shop: 'Tienda', poi: 'Punto de interés', transport: 'Transporte', gateway: 'Puerta', other: 'Otro' };
-const KIND_COLOR = { home: '#2f9e55', food: '#d98a2b', shop: '#2a7fc9', poi: '#f4f4f4', transport: '#8d54d6', gateway: '#d43d77', other: '#7d8699' };
+const KIND_LABEL = PLACE_KIND_LABEL;
+const KIND_COLOR = PLACE_KIND_COLOR;
 const ACCESS_LABEL = { public: 'Público', private: 'Privado', restricted: 'Restringido' };
 const DISCOVERY_LABEL = { hidden: 'Oculto', rumor: 'Rumor', known: 'Conocido' };
 const REQUIREMENT_LABEL = { escort: 'Solo con guía', invitation: 'Invitación', story_flag: 'Hito de historia', knows_place: 'Conocer un lugar', money: 'Dinero' };
-const LINK_LABEL = { metro: 'Metro', ferry: 'Ferry', train: 'Tren', other: 'Otro' };
+const LINK_LABEL = Object.fromEntries(LINK_MODES.map((mode) => [mode, TRAVEL_MODES[mode].label]));
 const PALETTE = ['#c0392b', '#2e86c1', '#27ae60', '#d4ac0d', '#8e44ad', '#e67e22', '#16a085', '#7f8c8d'];
-const COLLECTION = { place: 'places', district: 'districts', area: 'areas', way: 'ways', link: 'links', group: 'groups' };
-const TAB_OF = { place: 'places', link: 'places', area: 'zones', district: 'zones', way: 'ways', group: 'groups' };
-const TOOLS = [['select', 'Mover', 'V'], ['pick', 'Selección', 'S'], ['brush', 'Pincel', 'B'], ['place', 'Lugar', 'P'], ['area', 'Área', 'A'], ['way', 'Camino', 'W'], ['district', 'Distrito', 'D'], ['measure', 'Medir', 'M'], ['scale', 'Escala', 'E']];
+const COLLECTION = { place: 'places', district: 'districts', area: 'areas', way: 'ways', link: 'links', group: 'groups', decor: 'decor', line: 'lines' };
+const TAB_OF = { place: 'places', link: 'links', line: 'links', area: 'zones', district: 'zones', way: 'ways', group: 'groups', decor: 'places' };
+const TOOLS = [['select', 'Mover', 'V'], ['pick', 'Selección', 'S'], ['brush', 'Pincel', 'B'], ['place', 'Lugar', 'P'], ['link', 'Conexión', 'C'], ['area', 'Área', 'A'], ['way', 'Camino', 'W'], ['district', 'Distrito', 'D'], ['decor', 'Decoración', 'O'], ['measure', 'Medir', 'M'], ['scale', 'Escala', 'E']];
 const HINTS = {
   select: 'Clic en un lugar, camino, área o borde de distrito para seleccionarlo (Ctrl o Mayús suman o quitan). Arrastra sus vértices; arrastra el fondo para desplazar; rueda = zoom; Alt = sin imán; Supr borra.',
-  brush: 'Arrastra para pintar el terreno natural (agua, tierra, bosque, montaña…). [ y ] cambian el radio; Alt borra; clic derecho o central desplaza. Los polígonos quedan para las zonas urbanas.',
+  brush: 'Arrastra para pintar el terreno natural (agua, tierra, bosque, montaña, nieve, desierto, urbano, industrial…). [ y ] cambian el radio; Alt borra; clic derecho o central desplaza. Modo «Forma»: dibuja un polígono (doble clic o Intro lo rellena de golpe).',
   pick: 'Arrastra un rectángulo: de izquierda a derecha elige lo que queda ENTERO dentro; de derecha a izquierda, lo que toca. Clic elige uno; Ctrl o Mayús suman o quitan; Ctrl+G agrupa; Supr borra.',
-  place: 'Clic para colocar un lugar (se añade al grupo activo).',
+  place: 'Clic para colocar un lugar del tipo elegido arriba (se añade al grupo activo). Después ajusta su importancia, icono y datos en el panel derecho.',
+  link: 'Conexión entre dos lugares: clic en el primero, clics en el vacío para dibujar el trazado (curvas, pasos de montaña…) y clic en el último lugar para terminar. Clic derecho quita el último punto; Esc cancela. Distancia y tiempo se calculan solos (o los escribes).',
+  decor: 'Clic para colocar un elemento decorativo o una etiqueta de texto (mar, cordillera…): el tipo se elige arriba.',
   area: 'Clic para añadir vértices (se imantan a los existentes; Alt lo desactiva). Doble clic, Intro o clic en el primero cierran; Retroceso o clic derecho quitan el último; Esc cancela.',
   way: 'Clic para añadir puntos (clic derecho quita el último); doble clic o Intro terminan. Un camino tiene prioridad sobre el relleno: al generar, parte las zonas que cruza.',
   district: 'Zona de juego (niebla, lugares del jugador). Mismos controles que «Área» (clic derecho quita el último punto).',
-  measure: 'Dos clics: distancia en metros y tiempo a pie y en taxi (velocidades provisionales).',
+  measure: 'Dos clics: distancia y tiempo a pie, en carretera y en Northline (velocidades de la pestaña Conexiones).',
   scale: 'Dos clics sobre una distancia conocida de una imagen de calco; escribes los metros reales y la imagen se reescala.'
 };
 const NICE = [1, 2, 5];
@@ -42,9 +47,15 @@ const state = {
   map: null, saved: '', history: [], future: [], loadedAt: 0,
   tool: 'select', tab: 'places', selection: null, draft: null, measure: null, calib: null, mouse: null,
   issues: { errors: [], warnings: [] }, showFog: false, showLabels: true, showGrid: true, showFill: true, showTerrain: true, terrain: null, terrainFor: undefined, stroke: null, brush: { kind: 'forest', mode: 'paint', radius: 120, rugged: 0.4, protectWater: true }, gen: { seed: 1, scale: 1800, sea: 0.45, forest: 0.45, mountains: 0.35, fields: 0.25, island: 0, overwrite: false, region: 'view' }, final: false, multi: [], marquee: null, postDragging: false, drag: null, down: null,
-  activeGroup: null, newArea: 'urban', newWay: { kind: 'street', width: WAY_WIDTH.street }
+  activeGroup: null, newArea: 'urban', newWay: { kind: 'street', width: WAY_WIDTH.street },
+  // capas del editor (no se guardan en el mapa): qué clases de elementos se ven y cuáles no se pueden editar
+  layers: { hidden: new Set(), locked: new Set() }, layersOpen: false, themed: false, snapGrid: false,
+  newPlace: { kind: 'poi' }, newLink: { mode: 'road', line: '' }, newDecor: { kind: 'compass' }, route: { from: '', to: '' }, region: null
 };
 const view = new MapView($('#canvas'));
+// Colores con los que se dibuja mientras se edita: los planos del editor o, si se activa «Estilo del mapa», los del estilo elegido (sin postproceso).
+const editTheme = () => (state.themed && state.map ? themeFor(state.map) : THEMES.default);
+const hiddenLayers = () => state.layers.hidden;
 // Ids creados por una herramienta y aún no editados a mano: siguen al nombre mientras el autor lo escribe.
 const autoIds = new Set();
 // Relleno generado (manzanas, casas, árboles) por área: no se guarda en el mapa, se recalcula cuando cambia la receta o lo que hay alrededor.
@@ -65,7 +76,7 @@ function refreshGenerated() {
 function drawGenerated(ctx) {
   if (!state.showFill) return;
   const v = { k: view.k, tx: view.tx, ty: view.ty, width: view.rect.width, height: view.rect.height };
-  for (const { result } of genCache.values()) drawFill(ctx, v, result, THEMES.default);
+  for (const { result } of genCache.values()) drawFill(ctx, v, result, editTheme());
 }
 
 // Vista final: pinta TODO el mapa con el estilo elegido en un canvas intermedio y le pasa el shader de postproceso (grano, manchas, viñeta, color, tinta).
@@ -79,7 +90,7 @@ function renderFinal() {
   const ctx = scene.getContext('2d'); ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   const theme = themeFor(state.map);
   const results = new Map([...genCache].map(([id, entry]) => [id, entry.result]));
-  renderScene(ctx, { k: view.k, tx: view.tx, ty: view.ty, width, height }, state.map, results, theme, { labels: state.showLabels, terrain: getTerrain() });
+  renderScene(ctx, { k: view.k, tx: view.tx, ty: view.ty, width, height }, state.map, results, theme, { labels: state.showLabels, terrain: getTerrain(), hidden: hiddenLayers() });
   post ??= new PostProcessor(view.final);
   if (post.ok) post.apply(scene, theme.post, [view.tx * ratio, view.ty * ratio]); else copyPlain(scene, view.final);
 }
@@ -118,7 +129,7 @@ function validate() {
 }
 const find = (type, id) => state.map?.[COLLECTION[type]]?.find((item) => item.id === id) ?? null;
 const selected = () => (state.selection ? find(state.selection.type, state.selection.id) : null);
-const SELECTABLE = ['place', 'area', 'way', 'district'];
+const SELECTABLE = ['place', 'area', 'way', 'district', 'decor'];
 const isSelected = (type, id) => (state.selection?.type === type && state.selection.id === id) || state.multi.some((entry) => entry.type === type && entry.id === id);
 // Lo seleccionado ahora como lista (uno o varios elementos que se pueden agrupar o borrar en bloque).
 const currentSet = () => (state.multi.length ? state.multi : state.selection && SELECTABLE.includes(state.selection.type) ? [state.selection] : []);
@@ -129,14 +140,37 @@ function setSet(list, { tab = true } = {}) {
 }
 const takenPlaceIds = () => new Set([...state.context.takenIds, ...state.map.places.map((item) => item.id), ...state.map.links.map((item) => item.id)]);
 // Ids de todo lo que NO es lugar ni enlace: se evita que dos cosas del mismo mapa se llamen igual aunque el esquema solo exija unicidad por tipo.
-const localIds = () => new Set(['areas', 'ways', 'districts', 'groups', 'underlays'].flatMap((key) => state.map[key].map((item) => item.id)));
+const localIds = () => new Set(['areas', 'ways', 'districts', 'groups', 'underlays', 'decor', 'lines'].flatMap((key) => state.map[key].map((item) => item.id)));
 const newId = (name) => uniqueId(slugify(name), localIds());
 
-// Bloqueos: un elemento está congelado si su grupo, o alguno de sus ancestros, está bloqueado.
-const frozenBy = (item) => (state.map && item ? lockedBy(state.map, item) : null);
-const lockText = (group) => `Bloqueado por el grupo «${group.name || group.id}». Desbloquéalo en la pestaña Grupos para editarlo.`;
-function refuseIfFrozen(item) {
-  const group = frozenBy(item);
+// Tipo de un elemento a partir de su forma (para saber a qué capa pertenece cuando solo se tiene el objeto).
+function itemType(item) {
+  if (item.from !== undefined) return 'link'; if (item.points) return 'way';
+  if (item.polygon) return item.fog !== undefined ? 'district' : 'area';
+  if (item.size !== undefined) return 'decor'; if (item.x !== undefined) return 'place';
+  return null;
+}
+// Bloqueos: un elemento está congelado si su grupo (o alguno de sus ancestros) o su CAPA están bloqueados.
+function frozenBy(item, type) {
+  if (!state.map || !item) return null;
+  const group = lockedBy(state.map, item); if (group) return group;
+  const kind = type ?? itemType(item); if (!kind) return null;
+  const layer = layerOf(kind, item, state.map);
+  return state.layers.locked.has(layer) ? { id: `layer:${layer}`, name: LAYER_LABEL[layer], layer: true } : null;
+}
+const isHiddenItem = (type, item) => Boolean(item && state.layers.hidden.has(layerOf(type, item, state.map)));
+const lockText = (group) => (group.layer ? `Bloqueado por la capa «${group.name}». Desbloquéala en el menú «Capas» para editarlo.` : `Bloqueado por el grupo «${group.name || group.id}». Desbloquéalo en la pestaña Grupos para editarlo.`);
+const layerKey = () => `hom-map-layers:${state.map?.id ?? ''}`;
+function saveLayerPrefs() { try { localStorage.setItem(layerKey(), JSON.stringify({ hidden: [...state.layers.hidden], locked: [...state.layers.locked], themed: state.themed, snapGrid: state.snapGrid })); } catch { /* sin almacenamiento: no pasa nada */ } }
+function loadLayerPrefs() {
+  let saved = null; try { saved = JSON.parse(localStorage.getItem(layerKey()) ?? 'null'); } catch { saved = null; }
+  state.layers = { hidden: new Set((saved?.hidden ?? []).filter((id) => LAYER_LABEL[id])), locked: new Set((saved?.locked ?? []).filter((id) => LAYER_LABEL[id])) };
+  state.themed = typeof saved?.themed === 'boolean' ? saved.themed : state.map?.style?.theme === 'atlas';
+  state.snapGrid = saved?.snapGrid === true;
+  fitBrush();   // el tamaño del pincel y del generador dependen de la escala del mapa que se abre
+}
+function refuseIfFrozen(item, type) {
+  const group = frozenBy(item, type);
   if (group) setStatus(lockText(group), 'bad');
   return Boolean(group);
 }
@@ -147,9 +181,9 @@ const descendantIds = (groupId) => {
 };
 const membersOf = (groupId) => {
   const ids = descendantIds(groupId);
-  return ['areas', 'ways', 'districts', 'places'].flatMap((key) => state.map[key].filter((item) => ids.has(item.group)).map((item) => ({ key, item })));
+  return ['areas', 'ways', 'districts', 'places', 'decor'].flatMap((key) => state.map[key].filter((item) => ids.has(item.group)).map((item) => ({ key, item })));
 };
-const pointsOf = (type, item) => (type === 'way' ? item.points : item.polygon ?? null);
+const pointsOf = (type, item) => (type === 'way' ? item.points : type === 'link' ? item.path : item.polygon ?? null);
 
 // --- Mapa: abrir, crear, guardar ---------------------------------------------------------------------------------------------------------------
 // `keepContext`: con un mapa abierto, el contexto de validación ya es el suyo (los ids de OTROS mapas); el de la lista general incluiría sus propios ids.
@@ -163,14 +197,24 @@ async function refreshList(selectId, { keepContext = false } = {}) {
 
 const underlayUrl = (item) => `/assets/maps/${item.file}?v=${state.loadedAt}`;
 function resetSession() { state.history = []; state.future = []; state.selection = null; state.draft = null; state.measure = null; state.calib = null; state.drag = null; state.activeGroup = null; state.multi = []; state.marquee = null; state.loadedAt = Date.now(); genCache.clear(); state.terrain = null; state.terrainFor = undefined; state.stroke = null; }
-function fitAll() { view.fitBounds(mapBounds(state.map) ?? { minX: -600, minY: -400, maxX: 600, maxY: 400 }); }
+// Encuadre: si el mapa tiene una región política (un territorio), se encaja ella; si no, todo lo dibujado. Un mapa vacío de escala regional empieza con un lienzo de cientos de km.
+function regionBounds() {
+  const boxes = state.map.areas.filter((area) => area.kind === 'region' && area.polygon.length >= 3).map((area) => boundsOf(area.polygon));
+  return boxes.length ? boxes.reduce((a, b) => mergeBounds(a, b)) : null;
+}
+function fitAll() {
+  const cell = state.map?.terrain?.cell ?? TERRAIN_DEFAULTS.cell; const grow = cell > TERRAIN_DEFAULTS.cell ? cell : 0;
+  view.fitBounds(regionBounds() ?? mapBounds(state.map) ?? (grow ? { minX: -grow * 160, minY: -grow * 100, maxX: grow * 160, maxY: grow * 100 } : { minX: -600, minY: -400, maxX: 600, maxY: 400 }));
+}
 
 async function openMap(id) {
   if (!id) return;
   const { map, context, issues } = await api(`/api/dev/maps/${id}`);
   state.map = map; state.saved = JSON.stringify(map); resetSession();
   setContext(context); state.issues = issues;
-  state.tab = 'places'; fitAll(); validate(); renderAll();
+  loadLayerPrefs(); state.tab = 'places'; fitAll(); validate(); renderAll();
+  $('#map-select').value = id;   // el selector sigue al mapa abierto (también cuando se abre solo al arrancar)
+  try { localStorage.setItem('hom-map-last', id); } catch { /* sin almacenamiento */ }
 }
 
 async function save() {
@@ -213,7 +257,8 @@ function askNewMap() {
   dialog.innerHTML = `<form method="dialog"><h3>Nuevo mapa</h3>
     <label class="me-field"><span>Nombre</span><input name="name" required maxlength="60" placeholder="Northfortress"></label>
     <label class="me-field"><span>Id (minúsculas y guiones bajos; no se cambia después)</span><input name="id" required pattern="[a-z][a-z0-9_]{1,40}" placeholder="northfortress"></label>
-    <p class="me-note">El lienzo empieza vacío y es infinito. Más tarde puedes añadir imágenes de calco (opcionales) en la pestaña «Mapa».</p>
+    <label class="me-field"><span>Escala del mapa (tamaño de las celdas del terreno)</span><select name="scale">${Object.entries(TERRAIN_PRESETS).map(([id, preset]) => `<option value="${id}">${esc(preset.label)}</option>`).join('')}</select></label>
+    <p class="me-note">El lienzo empieza vacío y es infinito; las coordenadas son metros del mundo, así que un mapa de región mide cientos de kilómetros. Más tarde puedes añadir imágenes de calco (opcionales) en la pestaña «Mapa».</p>
     <p class="me-note" data-error></p>
     <menu><button value="cancel" type="button" data-cancel>Cancelar</button><button class="primary" value="ok">Crear</button></menu></form>`;
   document.body.append(dialog);
@@ -227,8 +272,10 @@ function askNewMap() {
     const error = dialog.querySelector('[data-error]');
     if (!ID_PATTERN.test(id)) { error.textContent = 'El id no es válido.'; return; }
     if (state.maps.some((item) => item.id === id)) { error.textContent = 'Ya existe un mapa con ese id.'; return; }
+    const preset = TERRAIN_PRESETS[form.elements.scale.value] ?? TERRAIN_PRESETS.city;
     state.map = emptyMap(id, name); state.saved = ''; resetSession();
-    dialog.close(); state.tab = 'map'; fitAll(); validate(); renderAll(); setStatus('Mapa nuevo: aún no está guardado.', 'dirty');
+    if (preset.cell !== TERRAIN_DEFAULTS.cell) { state.map.terrain = { cell: preset.cell, seed: 1, forest: { ...preset.forest }, chunks: {} }; state.map.style = { theme: 'atlas' }; }
+    loadLayerPrefs(); dialog.close(); state.tab = 'map'; fitAll(); validate(); renderAll(); setStatus('Mapa nuevo: aún no está guardado.', 'dirty');
   };
   dialog.addEventListener('close', () => dialog.remove());
   dialog.showModal();
@@ -248,14 +295,74 @@ function focusName() { const field = $('#inspector [data-f="name"]'); field?.foc
 function chooseSelection(type, id, { focus = false } = {}) { state.multi = []; state.selection = { type, id }; state.tab = TAB_OF[type]; renderAll(); if (focus) focusName(); }
 const groupForNew = () => (state.activeGroup && !frozenBy({ group: state.activeGroup }) ? state.activeGroup : null);
 
+const newPlaceObject = (id, name, kind, x, y, group) => ({ id, name, aliases: [], kind, x: round(x), y: round(y), access: 'public', hours: null, tags: [], description: '', discovery: 'known', owner: null, footprint: null, group, requires: [], importance: PLACE_IMPORTANCE[kind] ?? 2, icon: null, faction: null, image: null, data: {} });
 function addPlace(wx, wy) {
-  const group = groupForNew();
-  const id = uniqueId(slugify('Nuevo lugar'), takenPlaceIds());
-  mutate((map) => map.places.push({ id, name: 'Nuevo lugar', aliases: [], kind: 'poi', x: round(wx), y: round(wy), access: 'public', hours: null, tags: [], description: '', discovery: 'known', owner: null, footprint: null, group, requires: [] }));
+  const group = groupForNew(); const kind = state.newPlace.kind;
+  const id = uniqueId(slugify(PLACE_KIND_LABEL[kind] ?? 'Nuevo lugar'), takenPlaceIds());
+  mutate((map) => map.places.push(newPlaceObject(id, kind === 'poi' ? 'Nuevo lugar' : PLACE_KIND_LABEL[kind], kind, wx, wy, group)));
   autoIds.add(id); chooseSelection('place', id, { focus: true });
 }
 
+// Decoración y etiquetas de texto.
+function addDecor(wx, wy) {
+  const kind = state.newDecor.kind; const id = newId(kind === 'label' ? 'Etiqueta' : DECOR_LABEL[kind]);
+  mutate((map) => map.decor.push({ id, name: kind === 'label' ? 'Nueva etiqueta' : '', kind, x: round(wx), y: round(wy), size: DECOR_SIZE[kind] * (state.map.terrain?.cell > TERRAIN_DEFAULTS.cell ? 1 : 0.02), rotation: 0, group: groupForNew() }));
+  autoIds.add(id); state.tool = 'select'; chooseSelection('decor', id, { focus: kind === 'label' });
+}
+
+// Conexiones: se empieza en un lugar, se añaden puntos de trazado en el vacío y se termina en otro lugar.
+const nearestPlace = (wx, wy, reach = 18 / view.k) => {
+  let best = null; let bestDistance = reach;
+  for (const place of state.map.places) { if (!Number.isFinite(place.x) || isHiddenItem('place', place)) continue; const d = Math.hypot(place.x - wx, place.y - wy); if (d < bestDistance) { best = place; bestDistance = d; } }
+  return best;
+};
+function linkClick(wx, wy, target, event) {
+  const hit = (target?.dataset.type === 'place' ? find('place', target.dataset.id) : null) ?? nearestPlace(wx, wy);
+  if (!state.draft) {
+    if (!hit) { setStatus('Empieza la conexión haciendo clic en un lugar.', 'bad'); return; }
+    state.draft = { kind: 'link', from: hit.id, points: [] }; renderCanvas(); return;
+  }
+  if (hit && hit.id !== state.draft.from) { finishLink(hit.id); return; }
+  if (hit) return;
+  const [x, y] = snap(wx, wy, { off: event.altKey }); state.draft.points.push([x, y]); renderCanvas();
+}
+function finishLink(toId) {
+  const draft = state.draft; state.draft = null; if (!draft) return;
+  const a = find('place', draft.from); const b = find('place', toId); if (!a || !b) { renderAll(); return; }
+  const mode = state.newLink.mode; const line = state.newLink.line && state.map.lines.some((item) => item.id === state.newLink.line) ? state.newLink.line : null;
+  const id = uniqueId(slugify(`${mode} ${a.name} ${b.name}`), takenPlaceIds());
+  const km = (draft.points.length ? polylineLength([[a.x, a.y], ...draft.points, [b.x, b.y]]) : Math.hypot(a.x - b.x, a.y - b.y)) / 1000;
+  mutate((map) => map.links.push({ id, name: `${LINK_LABEL[mode]}: ${a.name} – ${b.name}`, mode, from: a.id, to: b.id, minutes: null, cost: 0, requires: [], distanceKm: null, path: draft.points.map(([x, y]) => [round(x), round(y)]), line, twoWay: true }));
+  autoIds.add(id); chooseSelection('link', id);
+  const normalized = normalizeMap(state.map); const made = normalized.links.find((item) => item.id === id);
+  setStatus(`Conexión creada: ${formatKm(km)} · ${formatDuration(linkMinutes(normalized, made, placeIndex(normalized)))} (${LINK_LABEL[mode]}). Puedes seguir dibujando otra.`, 'dirty');
+}
+
+// Duplicar lo seleccionado (uno o varios elementos, o una conexión): copias desplazadas con ids nuevos, en el mismo grupo.
+function duplicateSelection() {
+  const items = currentSet().length ? currentSet() : state.selection && ['link', 'line'].includes(state.selection.type) ? [state.selection] : [];
+  if (!items.length) return;
+  const offset = round(Math.max(30 / view.k, 1)); const created = []; let skipped = 0;
+  const used = new Set([...takenPlaceIds(), ...localIds()]);
+  mutate((map) => {
+    for (const { type, id } of items) {
+      const source = find(type, id); if (!source || frozenBy(source, type)) { skipped += 1; continue; }
+      const copy = structuredClone(source);
+      const fresh = uniqueId(slugify(source.id).slice(0, 34), used); used.add(fresh); copy.id = fresh;
+      if (copy.name) copy.name = `${copy.name} (copia)`.slice(0, 60);
+      if (copy.x !== undefined) { copy.x = round(copy.x + offset); copy.y = round(copy.y + offset); }
+      for (const key of ['polygon', 'points', 'path']) if (copy[key]) copy[key] = copy[key].map(([x, y]) => [round(x + offset), round(y + offset)]);
+      if (copy.fill?.center) copy.fill.center = [round(copy.fill.center[0] + offset), round(copy.fill.center[1] + offset)];
+      map[COLLECTION[type]].push(copy); created.push({ type, id: fresh }); autoIds.add(fresh);
+    }
+  });
+  if (created.length) { state.draft = null; setSet(created); setStatus(`${created.length} elemento(s) duplicado(s)${skipped ? ` · ${skipped} bloqueado(s) sin copiar` : ''}.`, 'dirty'); }
+  else setStatus('Nada que duplicar: lo seleccionado está bloqueado.', 'bad');
+}
+
 function finishDraft() {
+  if (state.draft?.kind === 'terrain') { finishShape(); return; }
+  if (state.draft?.kind === 'link') return;   // una conexión termina haciendo clic en el lugar de destino
   const draft = state.draft; state.draft = null;
   if (!draft) return;
   const points = draft.points.map(([x, y]) => [round(x), round(y)]);
@@ -310,7 +417,7 @@ function removeMulti() {
   state.selection = null; state.multi = []; renderAll();
   setStatus(`${result.removed} borrado(s)${result.skipped.length ? ` · ${result.skipped.length} bloqueado(s) se conservaron` : ''}.`, 'dirty');
 }
-function selectAll() { setSet(SELECTABLE.flatMap((type) => state.map[COLLECTION[type]].map((item) => ({ type, id: item.id })))); }
+function selectAll() { setSet(SELECTABLE.flatMap((type) => state.map[COLLECTION[type]].filter((item) => !isHiddenItem(type, item)).map((item) => ({ type, id: item.id })))); }
 
 function removeSelected() {
   if (state.multi.length > 1) { removeMulti(); return; }
@@ -323,9 +430,10 @@ function removeSelected() {
   mutate((map) => {
     map[COLLECTION[type]] = map[COLLECTION[type]].filter((entry) => entry.id !== id);
     if (type === 'place') map.links = map.links.filter((link) => link.from !== id && link.to !== id);
+    if (type === 'line') for (const link of map.links) if (link.line === id) link.line = null;
     if (type === 'group') {
       // lo que había dentro pasa al grupo de arriba (o queda suelto): borrar un grupo nunca borra su contenido
-      for (const key of ['areas', 'ways', 'districts', 'places', 'groups']) for (const entry of map[key]) { const field = key === 'groups' ? 'parent' : 'group'; if (entry[field] === id) entry[field] = item.parent ?? null; }
+      for (const key of ['areas', 'ways', 'districts', 'places', 'groups', 'decor']) for (const entry of map[key]) { const field = key === 'groups' ? 'parent' : 'group'; if (entry[field] === id) entry[field] = item.parent ?? null; }
     }
   });
   if (state.activeGroup === id) state.activeGroup = null;
@@ -337,7 +445,7 @@ function renameId(type, oldId, requested) {
   const id = requested.trim();
   if (id === oldId) return true;
   if (!ID_PATTERN.test(id)) { setStatus('El id debe usar minúsculas, números y guiones bajos (empieza con letra).', 'bad'); return false; }
-  const taken = type === 'place' || type === 'link' ? takenPlaceIds() : new Set(state.map[COLLECTION[type]].map((item) => item.id));
+  const taken = type === 'place' || type === 'link' ? takenPlaceIds() : new Set(localIds());
   if (taken.has(id)) { setStatus(`El id «${id}» ya está en uso.`, 'bad'); return false; }
   const refs = type === 'place' ? state.context.refs.filter((ref) => ref.placeId === oldId) : [];
   if (refs.length && !confirm(`Estos personajes usan «${oldId}»:\n- ${[...new Set(refs.map((ref) => ref.where))].join('\n- ')}\n\nTendrás que actualizar sus fichas al nuevo id. ¿Renombrar?`)) return false;
@@ -347,7 +455,8 @@ function renameId(type, oldId, requested) {
       for (const link of map.links) { if (link.from === oldId) link.from = id; if (link.to === oldId) link.to = id; }
       for (const entry of [...map.places, ...map.links]) for (const need of entry.requires ?? []) if (need.type === 'knows_place' && need.place === oldId) need.place = id;
     }
-    if (type === 'group') for (const key of ['areas', 'ways', 'districts', 'places', 'groups']) for (const entry of map[key]) { const field = key === 'groups' ? 'parent' : 'group'; if (entry[field] === oldId) entry[field] = id; }
+    if (type === 'line') for (const link of map.links) if (link.line === oldId) link.line = id;
+    if (type === 'group') for (const key of ['areas', 'ways', 'districts', 'places', 'groups', 'decor']) for (const entry of map[key]) { const field = key === 'groups' ? 'parent' : 'group'; if (entry[field] === oldId) entry[field] = id; }
   });
   if (type === 'group' && state.activeGroup === oldId) state.activeGroup = id;
   state.selection = { type, id };
@@ -379,27 +488,48 @@ function snap(wx, wy, { except = null, off = false } = {}) {
     for (const item of state.map[key]) { if (except && except.type === type && except.id === item.id) continue; for (const [x, y] of item[field]) consider(x, y); }
   }
   for (const place of state.map.places) consider(place.x, place.y);
-  return best ?? [wx, wy];
+  if (best) return best;
+  if (state.snapGrid) { const step = gridStep(); return [Math.round(wx / step) * step, Math.round(wy / step) * step]; }
+  return [wx, wy];
 }
+const gridStep = () => GRID_STEPS.find((candidate) => candidate * view.k >= 60) ?? GRID_STEPS.at(-1);
 
 // ¿Qué hay bajo este punto? Orden: camino (el más cercano a la línea), área (la de mayor z; a igualdad, la menor), distrito.
 function pick(wx, wy, { preferDistrict = false } = {}) {
   const map = state.map; const point = { x: wx, y: wy };
   if (preferDistrict) { const district = districtAt(point, map.districts); if (district) return { type: 'district', id: district.id }; }
   let way = null; let wayDistance = Infinity;
+  const decorHit = map.decor.filter((item) => !isHiddenItem('decor', item) && Math.hypot(item.x - wx, item.y - wy) <= Math.max(decorPixels(item, view.k) / view.k / 2, 10 / view.k)).sort((a, b) => Math.hypot(a.x - wx, a.y - wy) - Math.hypot(b.x - wx, b.y - wy))[0];
+  if (decorHit) return { type: 'decor', id: decorHit.id };
+  const index = placeIndex(map); let linkHit = null; let linkDistance = 7 / view.k;
+  for (const item of map.links) {
+    if (isHiddenItem('link', item)) continue;
+    const points = linkPoints(map, item, index); if (!points) continue;
+    const d = distanceToPolyline(point, points); if (d < linkDistance) { linkHit = item; linkDistance = d; }
+  }
+  if (linkHit) return { type: 'link', id: linkHit.id };
   for (const item of map.ways) {
+    if (isHiddenItem('way', item)) continue;
     const reach = Math.max(item.width / 2, 6 / view.k); const d = distanceToPolyline(point, item.points);
     if (d <= reach && (d < wayDistance || (d === wayDistance && item.z > (way?.z ?? -1)))) { way = item; wayDistance = d; }
   }
   if (way) return { type: 'way', id: way.id };
-  const areas = map.areas.filter((item) => item.polygon.length >= 3 && pointInPolygon(point, item.polygon)).sort((a, b) => b.z - a.z || polygonArea(a.polygon) - polygonArea(b.polygon));
+  // una región política se elige por su borde (cubre todo un territorio: si se eligiera por dentro, tapaba todo lo demás)
+  const region = map.areas.find((item) => item.kind === 'region' && item.polygon.length >= 3 && !isHiddenItem('area', item) && distanceToPolyline(point, [...item.polygon, item.polygon[0]]) <= REGION_PICK_PX / view.k);
+  if (region) return { type: 'area', id: region.id };
+  const areas = map.areas.filter((item) => item.kind !== 'region' && item.polygon.length >= 3 && !isHiddenItem('area', item) && pointInPolygon(point, item.polygon)).sort((a, b) => b.z - a.z || polygonArea(a.polygon) - polygonArea(b.polygon));
   if (areas.length) return { type: 'area', id: areas[0].id };
   const district = districtAt(point, map.districts);
   return district ? { type: 'district', id: district.id } : null;
 }
 
 function centerOnItem(type, item) {
-  if (type === 'place') view.centerOn(item.x, item.y);
+  if (type === 'place' || type === 'decor') view.centerOn(item.x, item.y);
+  else if (type === 'link') {
+    const points = linkPoints(state.map, item); if (!points) return;
+    const box = boundsOf(points); const pad = Math.max(box.maxX - box.minX, box.maxY - box.minY, 4000) * 0.25;
+    view.fitBounds({ minX: box.minX - pad, minY: box.minY - pad, maxX: box.maxX + pad, maxY: box.maxY + pad });
+  }
   else if (type === 'area' || type === 'district') { const c = polygonCentroid(item.polygon); view.centerOn(c.x, c.y); }
   else if (type === 'way') { const box = boundsOf(item.points); view.centerOn((box.minX + box.maxX) / 2, (box.minY + box.maxY) / 2); }
   else if (type === 'group') {
@@ -424,25 +554,33 @@ function defineHatches(svg) {
   pattern('hatch-forest', 12, (p) => { svg('circle', { cx: 3, cy: 3, r: 2, fill: '#1d5a2d66' }, p); svg('circle', { cx: 9, cy: 9, r: 2, fill: '#1d5a2d66' }, p); });
 }
 
+const luminanceOf = (hex) => { const m = /^#([0-9a-f]{6})/i.exec(hex ?? ''); if (!m) return 0.5; const n = parseInt(m[1], 16); return (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255; };
+// Distancia a la que se puede seleccionar el borde de una región (una región cubre todo un territorio: si se eligiera al hacer clic dentro, taparía todo lo demás).
+const REGION_PICK_PX = 9;
+
 function renderCanvas() {
   if (state.final && state.map) { renderFinal(); return; }
   view.clearLayer();
   const ctx = view.beginCanvas(); const ground = view.beginGround();
   if (!state.map) return;
-  if (state.showTerrain) drawTerrain(ground, { k: view.k, tx: view.tx, ty: view.ty, width: view.rect.width, height: view.rect.height }, getTerrain(), THEMES.default);
+  const theme = editTheme(); const hidden = hiddenLayers(); const dark = luminanceOf(theme.background) < 0.4;
+  $('#canvas').style.background = state.themed ? theme.background : '';
+  const v = { k: view.k, tx: view.tx, ty: view.ty, width: view.rect.width, height: view.rect.height };
+  if (state.showTerrain) drawTerrain(ground, v, getTerrain(), theme, false, hidden);
   const map = state.map; const S = (x, y) => view.toScreen(x, y);
   const svg = (name, attributes, parent) => view.svgElement(name, attributes, parent);                 // capa de fondo
   const top = (name, attributes, parent = view.top) => view.svgElement(name, attributes, parent);        // capa superior (sobre el relleno)
   const polyPoints = (points) => points.map(([x, y]) => { const p = S(x, y); return `${p.x},${p.y}`; }).join(' ');
   const { width, height } = view.rect;
+  const tip = (node, textValue) => { const title = view.svgElement('title', {}, node); title.textContent = textValue; };
   defineHatches(svg);
 
   if (state.showGrid) {
-    const step = GRID_STEPS.find((candidate) => candidate * view.k >= 60) ?? GRID_STEPS.at(-1);
+    const step = gridStep();
     const box = view.worldBounds;
-    const grid = svg('g', { 'pointer-events': 'none' });
-    for (let x = Math.floor(box.minX / step) * step; x <= box.maxX; x += step) { const p = S(x, 0); svg('line', { x1: p.x, y1: 0, x2: p.x, y2: height, stroke: x === 0 ? '#00000055' : '#00000018' }, grid); }
-    for (let y = Math.floor(box.minY / step) * step; y <= box.maxY; y += step) { const p = S(0, y); svg('line', { x1: 0, y1: p.y, x2: width, y2: p.y, stroke: y === 0 ? '#00000055' : '#00000018' }, grid); }
+    const grid = svg('g', { 'pointer-events': 'none' }); const faint = dark ? '#ffffff14' : '#00000018'; const axis = dark ? '#ffffff40' : '#00000055';
+    for (let x = Math.floor(box.minX / step) * step; x <= box.maxX; x += step) { const p = S(x, 0); svg('line', { x1: p.x, y1: 0, x2: p.x, y2: height, stroke: x === 0 ? axis : faint }, grid); }
+    for (let y = Math.floor(box.minY / step) * step; y <= box.maxY; y += step) { const p = S(0, y); svg('line', { x1: 0, y1: p.y, x2: width, y2: p.y, stroke: y === 0 ? axis : faint }, grid); }
   }
 
   for (const item of map.underlays) {
@@ -452,74 +590,135 @@ function renderCanvas() {
   }
 
   for (const area of [...map.areas].sort((a, b) => a.z - b.z)) {
-    if (area.polygon.length < 3) continue;
+    if (area.polygon.length < 3 || isHiddenItem('area', area)) continue;
     const picked = isSelected('area', area.id);
     const points = polyPoints(area.polygon);
-    svg('polygon', { points, fill: AREA_COLOR[area.kind] ?? '#ccc', stroke: picked ? '#fff' : '#00000033', 'stroke-width': picked ? 3 : 1, 'stroke-linejoin': 'round', 'pointer-events': 'none' });
+    if (area.kind === 'region') {   // las regiones se pintan en el canvas (translúcidas, con borde discontinuo); aquí solo el contorno de selección
+      if (picked) top('polygon', { points, fill: 'none', stroke: '#ffffff', 'stroke-width': 3, 'stroke-linejoin': 'round', 'pointer-events': 'none' });
+      continue;
+    }
+    svg('polygon', { points, fill: area.color ?? theme.areas[area.kind] ?? AREA_COLOR[area.kind] ?? '#ccc', stroke: picked ? '#fff' : '#00000033', 'stroke-width': picked ? 3 : 1, 'stroke-linejoin': 'round', 'pointer-events': 'none' });
     const generated = state.showFill && genCache.get(area.id)?.result; const hasGenerated = generated && (generated.buildings.length || generated.trees.length || generated.blocks.length);
     if (area.fill && area.fill.pattern !== 'none' && !hasGenerated) svg('polygon', { points, fill: `url(#hatch-${area.fill.pattern})`, 'pointer-events': 'none' });
-    if (picked) top('polygon', { points, fill: 'none', stroke: '#1b2a4a', 'stroke-width': 1.2, 'stroke-dasharray': '6 4', 'pointer-events': 'none' });
-    if (state.showLabels && area.name && polygonArea(area.polygon) * view.k * view.k > 4000) { const c = polygonCentroid(area.polygon); const p = S(c.x, c.y); const label = svg('text', { x: p.x, y: p.y, 'text-anchor': 'middle', class: 'me-label dark', 'font-size': 12 }); label.textContent = area.name; }
+    if (picked) top('polygon', { points, fill: 'none', stroke: dark ? '#fff' : '#1b2a4a', 'stroke-width': 1.2, 'stroke-dasharray': '6 4', 'pointer-events': 'none' });
+    if (state.showLabels && !hidden.has('labels') && area.name && polygonArea(area.polygon) * view.k * view.k > 4000) { const c = polygonCentroid(area.polygon); const p = S(c.x, c.y); const label = svg('text', { x: p.x, y: p.y, 'text-anchor': 'middle', class: dark ? 'me-label' : 'me-label dark', 'font-size': 12 }); label.textContent = area.name; }
   }
 
   drawGenerated(ctx);
-  const ways = [...map.ways].sort((a, b) => a.z - b.z).filter((way) => way.points.length >= 2);
+  // lo «regional» se pinta en el canvas con las mismas rutinas que la vista final: regiones, conexiones, símbolos de ciudades, decoración y nombres de regiones
+  drawRegions(ctx, v, map, theme, { hidden, selectedId: state.selection?.type === 'area' ? state.selection.id : null });
+  drawLinks(ctx, v, map, theme, { hidden, selectedId: state.selection?.type === 'link' ? state.selection.id : null });
+  const forced = new Set([state.selection?.type === 'place' ? state.selection.id : null, ...state.multi.filter((entry) => entry.type === 'place').map((entry) => entry.id)].filter(Boolean));
+  const layout = layoutPlaces(v, map, { hidden, always: forced });
+  drawSymbols(ctx, v, map, theme, { hidden, layout });
+  drawDecor(ctx, v, map, theme, { hidden });
+  if (state.showLabels) drawRegionLabels(ctx, v, map, theme, { hidden });
+
+  const ways = [...map.ways].sort((a, b) => a.z - b.z).filter((way) => way.points.length >= 2 && !isHiddenItem('way', way));
   const lineWidth = (way) => Math.max(way.width * view.k, 1.5);
   for (const way of ways) if (isSelected('way', way.id)) top('polyline', { points: polyPoints(way.points), fill: 'none', stroke: '#fff', 'stroke-opacity': 0.8, 'stroke-width': lineWidth(way) + 8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'pointer-events': 'none' });
-  for (const way of ways) if (CASED.has(way.kind)) top('polyline', { points: polyPoints(way.points), fill: 'none', stroke: '#6f6552', 'stroke-width': lineWidth(way) + 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'pointer-events': 'none' });
+  for (const way of ways) if (CASED.has(way.kind)) top('polyline', { points: polyPoints(way.points), fill: 'none', stroke: theme.casing?.[way.kind] ?? '#6f6552', 'stroke-width': lineWidth(way) + 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'pointer-events': 'none' });
   for (const way of ways) {
     const pts = polyPoints(way.points);
-    top('polyline', { points: pts, fill: 'none', stroke: WAY_COLOR[way.kind] ?? '#fff', 'stroke-width': lineWidth(way), 'stroke-linecap': way.kind === 'wall' ? 'butt' : 'round', 'stroke-linejoin': 'round', 'pointer-events': 'none' });
+    top('polyline', { points: pts, fill: 'none', stroke: theme.ways?.[way.kind] ?? WAY_COLOR[way.kind] ?? '#fff', 'stroke-width': lineWidth(way), 'stroke-linecap': way.kind === 'wall' || way.kind === 'border' ? 'butt' : 'round', 'stroke-linejoin': 'round', 'stroke-dasharray': way.kind === 'border' ? '12 7' : null, 'pointer-events': 'none' });
     if (way.kind === 'rail') top('polyline', { points: pts, fill: 'none', stroke: '#fff', 'stroke-width': Math.max(lineWidth(way) * 0.4, 1), 'stroke-dasharray': '8 8', 'pointer-events': 'none' });
     if (way.kind === 'wall') top('polyline', { points: pts, fill: 'none', stroke: '#00000044', 'stroke-width': lineWidth(way), 'stroke-dasharray': '2 2', 'pointer-events': 'none' });
   }
 
   for (const district of map.districts) {
-    if (district.polygon.length < 3) continue;
+    if (district.polygon.length < 3 || isHiddenItem('district', district)) continue;
     const foggy = state.showFog && district.fog !== 'known';
     const picked = isSelected('district', district.id);
-    top('polygon', { points: polyPoints(district.polygon), fill: foggy ? '#000' : district.color, 'fill-opacity': foggy ? (district.fog === 'hidden' ? 0.85 : 0.5) : picked ? 0.2 : 0.1, stroke: district.color, 'stroke-width': picked ? 4 : 2.5, 'stroke-dasharray': '10 5', 'stroke-linejoin': 'round', 'pointer-events': 'stroke', 'data-type': 'district', 'data-id': district.id, style: 'cursor:pointer' });
-    if (state.showLabels && !foggy) { const c = polygonCentroid(district.polygon); const p = S(c.x, c.y); const label = top('text', { x: p.x, y: p.y - 14, 'text-anchor': 'middle', class: 'me-label', 'font-size': 14 }); label.textContent = district.name; }
+    const node = top('polygon', { points: polyPoints(district.polygon), fill: foggy ? '#000' : district.color, 'fill-opacity': foggy ? (district.fog === 'hidden' ? 0.85 : 0.5) : picked ? 0.2 : 0.1, stroke: district.color, 'stroke-width': picked ? 4 : 2.5, 'stroke-dasharray': '10 5', 'stroke-linejoin': 'round', 'pointer-events': 'stroke', 'data-type': 'district', 'data-id': district.id, style: 'cursor:pointer' });
+    tip(node, `Distrito: ${district.name}`);
+    const namesAPlace = map.places.some((place) => place.name.trim().toLowerCase() === district.name.trim().toLowerCase());   // el nombre ya está en el lugar: no se repite
+    if (state.showLabels && !hidden.has('labels') && !foggy && !namesAPlace && (picked || polygonArea(district.polygon) * view.k * view.k > 14000)) { const c = polygonCentroid(district.polygon); const p = S(c.x, c.y); const label = top('text', { x: p.x, y: p.y - 14, 'text-anchor': 'middle', class: dark ? 'me-label' : 'me-label', 'font-size': 14 }); label.textContent = district.name; }
   }
+
+  // conexiones: la línea ya está pintada en el canvas; aquí van las zonas de clic (finas y transparentes), los tooltips y los asas del trazado
+  const index = placeIndex(map);
   for (const link of map.links) {
-    const a = map.places.find((place) => place.id === link.from); const b = map.places.find((place) => place.id === link.to);
-    if (!a || !b) continue;
-    const p = S(a.x, a.y); const q = S(b.x, b.y);
-    top('line', { x1: p.x, y1: p.y, x2: q.x, y2: q.y, stroke: isSelected('link', link.id) ? '#fff' : '#8d54d6', 'stroke-width': 2.5, 'stroke-dasharray': '6 5', 'pointer-events': 'none' });
+    if (isHiddenItem('link', link)) continue;
+    const points = linkPoints(map, link, index); if (!points) continue;
+    const node = top('polyline', { points: polyPoints(smoothLine(points, points.length > 2 ? 3 : 0)), fill: 'none', stroke: 'transparent', 'stroke-width': 14, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'pointer-events': 'stroke', 'data-type': 'link', 'data-id': link.id, style: 'cursor:pointer' });
+    tip(node, `${link.name || link.id} · ${formatKm(linkKm(map, link, index))} · ${formatDuration(linkMinutes(map, link, index))}`);
   }
+  for (const item of map.decor) {
+    if (isHiddenItem('decor', item) || !Number.isFinite(item.x)) continue;
+    const p = S(item.x, item.y); const px = decorPixels(item, view.k); const picked = isSelected('decor', item.id);
+    const wide = item.kind === 'label' ? Math.max(40, (item.name?.length ?? 6) * px * 0.55) : px;
+    const group = top('g', { 'data-type': 'decor', 'data-id': item.id, style: 'cursor:pointer', transform: `rotate(${item.rotation || 0} ${p.x} ${p.y})` });
+    top('rect', { x: p.x - wide / 2, y: p.y - px / 2, width: wide, height: px, fill: 'transparent', stroke: picked ? '#fff' : 'none', 'stroke-width': 2, 'stroke-dasharray': '6 4', rx: 4 }, group);
+    tip(group, item.kind === 'label' ? `Etiqueta: ${item.name}` : `${DECOR_LABEL[item.kind] ?? item.kind}${item.name ? `: ${item.name}` : ''}`);
+  }
+  const labelClass = dark ? 'me-label' : 'me-label dark';
   for (const place of map.places) {
-    if (!Number.isFinite(place.x)) continue;
+    if (!Number.isFinite(place.x) || isHiddenItem('place', place)) continue;
     const p = S(place.x, place.y); const picked = isSelected('place', place.id);
+    const symbol = layout.symbols.find((item) => item.place.id === place.id);
     const group = top('g', { 'data-type': 'place', 'data-id': place.id, style: 'cursor:pointer' });
+    const color = KIND_COLOR[place.kind] ?? '#fff';
     if (place.footprint?.width > 0 && place.footprint?.depth > 0) {
       const w = place.footprint.width * view.k; const d = place.footprint.depth * view.k;
       if (w > 3) top('rect', { x: p.x - w / 2, y: p.y - d / 2, width: w, height: d, fill: '#b3492c88', stroke: '#6b2a18', transform: `rotate(${place.footprint.rotation || 0} ${p.x} ${p.y})` }, group);
     }
-    if (picked) top('circle', { cx: p.x, cy: p.y, r: 13, fill: 'none', stroke: '#fff', 'stroke-width': 2.5 }, group);
-    if (place.discovery !== 'known') top('circle', { cx: p.x, cy: p.y, r: 11, fill: 'none', stroke: KIND_COLOR[place.kind] ?? '#fff', 'stroke-dasharray': '3 3', 'stroke-width': 2 }, group);
-    top('circle', { cx: p.x, cy: p.y, r: 7, fill: KIND_COLOR[place.kind] ?? '#fff', stroke: '#000a', 'stroke-width': 2 }, group);
+    const radius = symbol ? 5 : 5 + Math.max(0, (place.importance ?? 2) - 2);
+    if (picked) top('circle', { cx: p.x, cy: p.y, r: radius + 7, fill: 'none', stroke: '#fff', 'stroke-width': 2.5 }, group);
+    if (place.discovery !== 'known') top('circle', { cx: p.x, cy: p.y, r: radius + 4, fill: 'none', stroke: color, 'stroke-dasharray': '3 3', 'stroke-width': 2 }, group);
+    top('circle', { cx: p.x, cy: p.y, r: Math.max(radius + 6, 12), fill: 'transparent' }, group);   // zona de clic cómoda (también con el dedo)
+    top('circle', { cx: p.x, cy: p.y, r: radius, fill: symbol ? 'none' : color, stroke: symbol ? color : '#000a', 'stroke-width': symbol ? 2.5 : 2 }, group);
     if (place.access !== 'public') { const lock = top('text', { x: p.x + 9, y: p.y - 7, 'font-size': 11 }, group); lock.textContent = place.access === 'private' ? '🔒' : '⛔'; }
-    if (state.showLabels || picked) { const label = top('text', { x: p.x + 11, y: p.y + 4, class: 'me-label', 'font-size': 12 }, group); label.textContent = place.name; }
+    const spec = layout.labels.get(place.id);
+    if (spec && state.showLabels && !hidden.has('labels')) {
+      const label = top('text', { x: spec.x, y: spec.y, class: labelClass, 'font-size': spec.size, 'text-anchor': spec.align === 'center' ? 'middle' : spec.align === 'left' ? 'start' : 'end', 'dominant-baseline': 'central', 'letter-spacing': spec.spacing || null, 'font-weight': spec.level >= 4 ? 700 : 600 }, group);
+      label.textContent = spec.text;
+    } else if (picked) { const label = top('text', { x: p.x + 14, y: p.y + 4, class: labelClass, 'font-size': 12 }, group); label.textContent = place.name; }
+    tip(group, `${place.name} · ${KIND_LABEL[place.kind] ?? place.kind} · importancia ${place.importance ?? 2}${place.faction ? ` · ${place.faction}` : ''}`);
   }
 
-  const item = state.selection && ['area', 'district', 'way'].includes(state.selection.type) ? selected() : null;
-  if (item && state.tool === 'select' && !frozenBy(item)) {
-    const closed = state.selection.type !== 'way'; const points = pointsOf(state.selection.type, item);
-    const color = state.selection.type === 'district' ? item.color : '#1b2a4a';
-    points.forEach(([x, y], index) => {
-      const p = S(x, y);
-      const next = closed ? points[(index + 1) % points.length] : points[index + 1];
-      if (next) { const m = S((x + next[0]) / 2, (y + next[1]) / 2); top('circle', { cx: m.x, cy: m.y, r: 4, fill: '#ffffff99', stroke: color, 'data-type': 'mid', 'data-index': index, style: 'cursor:copy' }); }
-      top('rect', { x: p.x - 5, y: p.y - 5, width: 10, height: 10, fill: '#fff', stroke: color, 'stroke-width': 2, 'data-type': 'vertex', 'data-index': index, style: 'cursor:move' });
-    });
+  // asas del elemento seleccionado (vértices de áreas, distritos, caminos y del trazado de una conexión)
+  const item = state.selection && ['area', 'district', 'way', 'link'].includes(state.selection.type) ? selected() : null;
+  if (item && state.tool === 'select' && !frozenBy(item, state.selection.type)) {
+    const type = state.selection.type;
+    const closed = type === 'area' || type === 'district';
+    const color = type === 'district' ? item.color : dark ? '#ffffff' : '#1b2a4a';
+    if (type === 'link') {
+      const full = linkPoints(map, item, index);
+      if (full) {
+        full.forEach(([x, y], i) => {
+          if (i < full.length - 1) { const next = full[i + 1]; const m = S((x + next[0]) / 2, (y + next[1]) / 2); top('circle', { cx: m.x, cy: m.y, r: 5, fill: '#ffffffcc', stroke: color, 'data-type': 'mid', 'data-index': i, style: 'cursor:copy' }); }
+          if (i > 0 && i < full.length - 1) { const p = S(x, y); top('rect', { x: p.x - 5, y: p.y - 5, width: 10, height: 10, fill: '#fff', stroke: color, 'stroke-width': 2, 'data-type': 'vertex', 'data-index': i - 1, style: 'cursor:move' }); }
+        });
+      }
+    } else {
+      const points = pointsOf(type, item);
+      points.forEach(([x, y], i) => {
+        const p = S(x, y);
+        const next = closed ? points[(i + 1) % points.length] : points[i + 1];
+        if (next) { const m = S((x + next[0]) / 2, (y + next[1]) / 2); top('circle', { cx: m.x, cy: m.y, r: 4, fill: '#ffffff99', stroke: color, 'data-type': 'mid', 'data-index': i, style: 'cursor:copy' }); }
+        top('rect', { x: p.x - 5, y: p.y - 5, width: 10, height: 10, fill: '#fff', stroke: color, 'stroke-width': 2, 'data-type': 'vertex', 'data-index': i, style: 'cursor:move' });
+      });
+    }
   }
 
   if (state.draft) {
-    const screen = state.draft.points.map(([x, y]) => S(x, y));
-    const preview = state.mouse ? [...screen, S(...snap(state.mouse.wx, state.mouse.wy, { off: state.mouse.alt }))] : screen;
-    const color = state.draft.kind === 'way' ? '#fff' : '#1b2a4a';
-    if (preview.length) top('polyline', { points: preview.map((p) => `${p.x},${p.y}`).join(' '), fill: state.draft.kind === 'way' ? 'none' : '#ffffff44', stroke: color, 'stroke-width': state.draft.kind === 'way' ? Math.max(state.newWay.width * view.k, 2) : 2, 'stroke-opacity': state.draft.kind === 'way' ? 0.7 : 1, 'stroke-dasharray': '6 4', 'stroke-linecap': 'round', 'pointer-events': 'none' });
-    screen.forEach((p, index) => top('circle', { cx: p.x, cy: p.y, r: index === 0 ? 7 : 4, fill: index === 0 ? '#fff' : '#f2d6a8', stroke: '#000', 'pointer-events': 'none' }));
+    const mouse = state.mouse ? snap(state.mouse.wx, state.mouse.wy, { off: state.mouse.alt }) : null;
+    if (state.draft.kind === 'link') {
+      const from = find('place', state.draft.from); const hover = state.mouse ? nearestPlace(state.mouse.wx, state.mouse.wy) : null;
+      const world = [[from.x, from.y], ...state.draft.points, ...(hover && hover.id !== from.id ? [[hover.x, hover.y]] : mouse ? [mouse] : [])];
+      const screen = world.map(([x, y]) => S(x, y));
+      top('polyline', { points: screen.map((p) => `${p.x},${p.y}`).join(' '), fill: 'none', stroke: linkColor(map, { mode: state.newLink.mode, line: state.newLink.line }, theme), 'stroke-width': 4, 'stroke-opacity': 0.85, 'stroke-dasharray': '8 6', 'stroke-linecap': 'round', 'pointer-events': 'none' });
+      state.draft.points.forEach(([x, y]) => { const p = S(x, y); top('circle', { cx: p.x, cy: p.y, r: 4, fill: '#f2d6a8', stroke: '#000', 'pointer-events': 'none' }); });
+      const a = S(from.x, from.y); top('circle', { cx: a.x, cy: a.y, r: 9, fill: 'none', stroke: '#fff', 'stroke-width': 3, 'pointer-events': 'none' });
+      if (hover && hover.id !== from.id) { const h = S(hover.x, hover.y); top('circle', { cx: h.x, cy: h.y, r: 11, fill: 'none', stroke: '#5ec8e5', 'stroke-width': 3, 'pointer-events': 'none' }); }
+      const km = polylineLength(world) / 1000; const lab = top('text', { x: screen.at(-1).x + 12, y: screen.at(-1).y - 10, class: 'me-label', 'font-size': 13 }); lab.textContent = formatKm(km);
+    } else {
+      const screen = state.draft.points.map(([x, y]) => S(x, y));
+      const preview = state.mouse ? [...screen, S(...snap(state.mouse.wx, state.mouse.wy, { off: state.mouse.alt }))] : screen;
+      const color = state.draft.kind === 'way' ? '#fff' : '#1b2a4a';
+      if (preview.length) top('polyline', { points: preview.map((p) => `${p.x},${p.y}`).join(' '), fill: state.draft.kind === 'way' ? 'none' : '#ffffff44', stroke: color, 'stroke-width': state.draft.kind === 'way' ? Math.max(state.newWay.width * view.k, 2) : 2, 'stroke-opacity': state.draft.kind === 'way' ? 0.7 : 1, 'stroke-dasharray': '6 4', 'stroke-linecap': 'round', 'pointer-events': 'none' });
+      screen.forEach((p, i) => top('circle', { cx: p.x, cy: p.y, r: i === 0 ? 7 : 4, fill: i === 0 ? '#fff' : '#f2d6a8', stroke: '#000', 'pointer-events': 'none' }));
+    }
   }
   for (const [line, color, kind] of [[state.calib, '#1f9d6b', 'calib'], [state.measure, '#c27a1e', 'measure']]) {
     if (!line) continue;
@@ -532,7 +731,7 @@ function renderCanvas() {
     top('circle', { cx: q.x, cy: q.y, r: 5, fill: color, stroke: '#000', 'pointer-events': 'none' });
     const m = distance(line.a, b);
     const label = top('text', { x: (p.x + q.x) / 2 + 8, y: (p.y + q.y) / 2 - 8, class: 'me-label', 'font-size': 13 });
-    label.textContent = kind === 'calib' ? fmtMeters(m) : `${fmtMeters(m)} · ${minutesFor(m, WALK_METERS_PER_MIN)} min a pie · ${minutesFor(m, TAXI_METERS_PER_MIN)} min en taxi`;
+    label.textContent = kind === 'calib' ? fmtMeters(m) : measureText(m);
   }
 
   placeBrushCursor();
@@ -543,11 +742,16 @@ function renderCanvas() {
   // barra de escala
   const target = 120 / view.k; const power = 10 ** Math.floor(Math.log10(target));
   const metersBar = NICE.map((n) => n * power).concat(10 * power).filter((m) => m <= target).at(-1) ?? power;
-  const barY = height - 46; const barW = metersBar * view.k;
-  top('line', { x1: 16, y1: barY, x2: 16 + barW, y2: barY, stroke: '#111', 'stroke-width': 3, 'pointer-events': 'none' });
-  top('line', { x1: 16, y1: barY - 5, x2: 16, y2: barY + 5, stroke: '#111', 'stroke-width': 2, 'pointer-events': 'none' });
-  top('line', { x1: 16 + barW, y1: barY - 5, x2: 16 + barW, y2: barY + 5, stroke: '#111', 'stroke-width': 2, 'pointer-events': 'none' });
-  const barLabel = top('text', { x: 16, y: barY - 9, class: 'me-label dark', 'font-size': 12 }); barLabel.textContent = fmtMeters(metersBar);
+  const barY = height - 46; const barW = metersBar * view.k; const barColor = dark ? '#f1f5fb' : '#111';
+  top('line', { x1: 16, y1: barY, x2: 16 + barW, y2: barY, stroke: barColor, 'stroke-width': 3, 'pointer-events': 'none' });
+  top('line', { x1: 16, y1: barY - 5, x2: 16, y2: barY + 5, stroke: barColor, 'stroke-width': 2, 'pointer-events': 'none' });
+  top('line', { x1: 16 + barW, y1: barY - 5, x2: 16 + barW, y2: barY + 5, stroke: barColor, 'stroke-width': 2, 'pointer-events': 'none' });
+  const barLabel = top('text', { x: 16, y: barY - 9, class: dark ? 'me-label' : 'me-label dark', 'font-size': 12 }); barLabel.textContent = fmtMeters(metersBar);
+}
+// Texto de la herramienta Medir: distancia y tiempo por cada medio (las velocidades salen de las del mapa).
+function measureText(meters) {
+  const km = meters / 1000; const mode = (name) => formatDuration(Math.max(1, Math.round((km / speedKmh(state.map, name)) * 60)));
+  return `${fmtMeters(meters)} · a pie ${mode('walk')} · carretera ${mode('road')} · Northline ${mode('northline')}`;
 }
 
 // --- Paneles -----------------------------------------------------------------------------------------------------------------------------------
@@ -556,13 +760,17 @@ function renderTools() {
   $('#canvas').className = `me-canvas mv tool-${state.tool}${state.final ? ' final' : ''}`;
   $('#hint').textContent = state.map ? (state.final ? 'Vista final (solo lectura): desplaza y haz zoom. Desactiva «Vista final» o pulsa Esc para volver a editar.' : HINTS[state.tool]) : '';
   const options = $('#options');
-  if (state.tool === 'area') options.innerHTML = `<label class="me-inline">Tipo <select data-opt="area-kind">${AREA_KINDS.map((kind) => `<option value="${kind}" ${kind === state.newArea ? 'selected' : ''}>${esc(AREA_LABEL[kind])}</option>`).join('')}</select></label>`;
+  if (state.tool === 'place') options.innerHTML = `<label class="me-inline">Tipo <select data-opt="place-kind">${PLACE_KINDS.map((kind) => `<option value="${kind}" ${kind === state.newPlace.kind ? 'selected' : ''}>${esc(KIND_LABEL[kind])}</option>`).join('')}</select></label>`;
+  else if (state.tool === 'link') options.innerHTML = `<label class="me-inline">Modo <select data-opt="link-mode">${LINK_MODES.map((mode) => `<option value="${mode}" ${mode === state.newLink.mode ? 'selected' : ''}>${esc(LINK_LABEL[mode])}</option>`).join('')}</select></label>
+    <label class="me-inline">Línea <select data-opt="link-line"><option value="">— ninguna —</option>${(state.map?.lines ?? []).map((line) => `<option value="${esc(line.id)}" ${line.id === state.newLink.line ? 'selected' : ''}>${esc(line.name || line.id)}</option>`).join('')}</select></label>`;
+  else if (state.tool === 'decor') options.innerHTML = `<label class="me-inline">Tipo <select data-opt="decor-kind">${DECOR_KINDS.map((kind) => `<option value="${kind}" ${kind === state.newDecor.kind ? 'selected' : ''}>${esc(DECOR_LABEL[kind])}</option>`).join('')}</select></label>`;
+  else if (state.tool === 'area') options.innerHTML = `<label class="me-inline">Tipo <select data-opt="area-kind">${AREA_KINDS.map((kind) => `<option value="${kind}" ${kind === state.newArea ? 'selected' : ''}>${esc(AREA_LABEL[kind])}</option>`).join('')}</select></label>`;
   else if (state.tool === 'way') options.innerHTML = `<label class="me-inline">Tipo <select data-opt="way-kind">${WAY_KINDS.map((kind) => `<option value="${kind}" ${kind === state.newWay.kind ? 'selected' : ''}>${esc(WAY_LABEL[kind])}</option>`).join('')}</select></label>
     <label class="me-inline">Ancho (m) <input type="number" min="0.5" step="0.5" data-opt="way-width" value="${state.newWay.width}"></label>`;
   else if (state.tool === 'brush') {
-    const b = state.brush; const slider = Math.round((100 * Math.log(b.radius / 8)) / Math.log(375));
+    const b = state.brush; const [rMin, rMax] = brushRange(); const slider = Math.round((100 * Math.log(Math.max(b.radius, rMin) / rMin)) / Math.log(rMax / rMin));
     options.innerHTML = `<div class="me-chips">${[...TERRAIN_KINDS, 'none'].map((kind) => `<button type="button" class="me-chip${b.kind === kind ? ' active' : ''}" data-brush-kind="${kind}" style="--c:${kind === 'none' ? '#ffffff' : THEMES.default.areas[kind]}"><i></i>${kind === 'none' ? 'Borrar' : esc(TERRAIN_LABEL[kind])}</button>`).join('')}</div>
-      <label class="me-inline">Modo <select data-opt="brush-mode">${[['paint', 'Pintar'], ['smooth', 'Suavizar'], ['fill', 'Bote']].map(([value, label]) => `<option value="${value}" ${b.mode === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+      <label class="me-inline">Modo <select data-opt="brush-mode">${[['paint', 'Pintar'], ['shape', 'Forma (polígono)'], ['smooth', 'Suavizar'], ['fill', 'Bote']].map(([value, label]) => `<option value="${value}" ${b.mode === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
       <label class="me-inline">Radio <input type="range" min="0" max="100" data-opt="brush-size" value="${slider}"><output>${fmtMeters(b.radius)}</output></label>
       <label class="me-inline">Borde irregular <input type="range" min="0" max="1" step="0.05" data-opt="brush-rugged" value="${b.rugged}"></label>
       <label class="me-inline"><input type="checkbox" data-opt="brush-protect" ${b.protectWater ? 'checked' : ''}> No pisar el agua</label>`;
@@ -571,11 +779,34 @@ function renderTools() {
 
 function renderTabs() {
   const count = state.issues.errors.length + state.issues.warnings.length;
-  const tabs = [['places', 'Lugares'], ['zones', 'Zonas'], ['ways', 'Caminos'], ['terrain', 'Terreno'], ['groups', 'Grupos'], ['map', 'Mapa'], ['issues', `Avisos${count ? ` (${count})` : ''}`]];
+  const tabs = [['places', 'Lugares'], ['links', 'Conexiones'], ['zones', 'Zonas'], ['ways', 'Caminos'], ['terrain', 'Terreno'], ['groups', 'Grupos'], ['map', 'Mapa'], ['issues', `Avisos${count ? ` (${count})` : ''}`]];
   $('#tabs').innerHTML = tabs.map(([id, label]) => `<button type="button" data-tab="${id}" class="${state.tab === id ? 'active' : ''}">${label}</button>`).join('');
 }
 
-const row = (type, item, dot, extra, indent = 0) => `<div class="me-row${isSelected(type, item.id) ? ' selected' : ''}" data-select="${type}:${esc(item.id)}" style="padding-left:${0.45 + indent}rem"><span class="me-dot" style="background:${esc(dot)}"></span><span>${esc(item.name || item.id)}</span><small>${frozenBy(item) || (type === 'group' && item.locked) ? '🔒 ' : ''}${esc(extra)}</small></div>`;
+const row = (type, item, dot, extra, indent = 0) => `<div class="me-row${isSelected(type, item.id) ? ' selected' : ''}" data-select="${type}:${esc(item.id)}" style="padding-left:${0.45 + indent}rem"><span class="me-dot" style="background:${esc(dot)}"></span><span>${esc(item.name || item.id)}</span><small>${frozenBy(item, type) || (type === 'group' && item.locked) ? '🔒 ' : ''}${esc(extra)}</small></div>`;
+
+// --- Pestaña «Conexiones»: líneas de transporte, enlaces con su distancia y tiempo, calculadora de viaje y velocidades del mapa -----------------------------------
+function linksPanel() {
+  const map = normalizeMap(state.map); const index = placeIndex(map); const theme = themeFor(state.map);
+  const linkRow = (link) => row('link', link, linkColor(map, link, theme), `${formatKm(linkKm(map, link, index))} · ${link.minutes ? '' : '≈ '}${formatDuration(linkMinutes(map, link, index))}`);
+  const lines = map.lines.map((line) => row('line', line, line.color, `${map.links.filter((link) => link.line === line.id).length === 1 ? '1 enlace' : `${map.links.filter((link) => link.line === line.id).length} enlaces`}`)).join('');
+  const groups = Object.keys(TRAVEL_MODES).filter((mode) => mode !== 'walk').map((mode) => [mode, map.links.filter((link) => link.mode === mode)]).filter(([, list]) => list.length);
+  const options = (selectedId) => `<option value="">— elige —</option>${[...map.places].sort((a, b) => a.name.localeCompare(b.name, 'es')).map((place) => `<option value="${esc(place.id)}" ${place.id === selectedId ? 'selected' : ''}>${esc(place.name)}</option>`).join('')}`;
+  let result = '<p class="me-note">Elige origen y destino para ver cuánto se tarda a pie y por cada medio de transporte del mapa.</p>';
+  if (state.route.from && state.route.to && state.route.from !== state.route.to) {
+    const trip = planTrip(map, state.route.from, state.route.to);
+    result = trip.options.length ? trip.options.map((option) => `<div class="me-route${option.tooFar ? ' far' : ''}"><strong>${esc(option.label)}</strong> <span>${formatDuration(option.minutes)}</span> <small>${formatKm(option.km)}${option.cost ? ` · costo ${option.cost}` : ''}${option.tooFar ? ' · demasiado lejos a pie' : ''}</small>${option.legs.length ? `<div class="me-legs">${option.legs.map((leg) => `<span class="me-leg" style="--c:${esc(linkColor(map, leg, theme))}">${esc(TRAVEL_MODES[leg.mode]?.label ?? leg.mode)}: ${esc(map.places.find((place) => place.id === leg.from)?.name ?? leg.from)} → ${esc(map.places.find((place) => place.id === leg.to)?.name ?? leg.to)} · ${formatDuration(leg.minutes)}</span>`).join('')}</div>` : ''}</div>`).join('') : '<p class="me-note">No hay ninguna forma de ir de uno a otro con lo que hay dibujado.</p>';
+  }
+  const speeds = Object.entries(TRAVEL_MODES).map(([mode, info]) => `<label class="me-field"><span>${esc(info.label)} (km/h)</span><input type="number" min="1" step="1" data-speed="${mode}" value="${state.map.travel?.speedsKmh?.[mode] ?? ''}" placeholder="${info.kmh}"></label>`).join('');
+  return `<h3>${map.links.length} conexiones</h3>
+    <p class="me-note">Una conexión une dos lugares con un modo de transporte. Su <strong>distancia</strong> sale del trazado dibujado (o la escribes) y su <strong>tiempo</strong> de la distancia y la velocidad del modo (o lo escribes). Son datos que el motor puede usar para calcular desplazamientos. Herramienta «Conexión» (C) para dibujar una nueva.</p>
+    <h4>Líneas de transporte (${map.lines.length})</h4>${lines || '<p class="me-empty">Sin líneas: sirven para agrupar enlaces de un mismo tren o metro (Línea Este…) con su color.</p>'}<button type="button" data-action="add-line">Nueva línea</button>
+    ${groups.map(([mode, list]) => `<h4>${esc(TRAVEL_MODES[mode].label)} (${list.length})</h4>${list.map(linkRow).join('')}`).join('') || '<p class="me-empty">Aún no hay conexiones.</p>'}
+    <button type="button" data-action="add-link" ${map.places.length < 2 ? 'disabled' : ''}>Añadir conexión entre dos lugares</button>
+    <h4>Calculadora de viaje</h4>
+    <div class="me-grid2"><label class="me-field"><span>Desde</span><select data-route="from">${options(state.route.from)}</select></label><label class="me-field"><span>Hasta</span><select data-route="to">${options(state.route.to)}</select></label></div>${result}
+    <h4>Velocidades de este mapa</h4><p class="me-note">Dejar vacío = la velocidad por defecto (gris). Las usa el cálculo de tiempos cuando una conexión no tiene minutos escritos.</p><div class="me-grid2">${speeds}</div>`;
+}
 
 function renderActiveGroup() {
   const select = $('#active-group');
@@ -597,12 +828,15 @@ function renderPanel() {
   if (!map) { panel.innerHTML = '<p class="me-empty">Elige un mapa en la barra superior o crea uno nuevo.</p>'; return; }
   if (state.tab === 'places') {
     const legacy = [...state.context.legacyIds].filter((id) => !takenPlaceIds().has(id));
-    panel.innerHTML = `<h3>${map.places.length} lugares</h3>${map.places.map((place) => row('place', place, KIND_COLOR[place.kind], place.id)).join('') || '<p class="me-empty">Usa la herramienta «Lugar» y haz clic en el mapa.</p>'}
-      <h4>Enlaces (${map.links.length})</h4><p class="me-note">Un enlace une dos lugares con un trayecto escrito a mano (p. ej. el metro de Porta Magna): duración y costo los pones tú.</p>
-      ${map.links.map((link) => row('link', link, '#8d54d6', LINK_LABEL[link.mode])).join('')}<button type="button" data-action="add-link" ${map.places.length < 2 ? 'disabled' : ''}>Añadir enlace</button>
+    const places = [...map.places].sort((a, b) => (b.importance ?? 2) - (a.importance ?? 2) || a.name.localeCompare(b.name, 'es'));
+    panel.innerHTML = `<h3>${map.places.length} lugares</h3>${places.map((place) => row('place', place, KIND_COLOR[place.kind], KIND_LABEL[place.kind] ?? place.kind)).join('') || '<p class="me-empty">Usa la herramienta «Lugar» y haz clic en el mapa.</p>'}
+      <h4>Decoración y etiquetas (${map.decor.length})</h4>${map.decor.map((item) => row('decor', item, '#b9a98a', item.kind === 'label' ? 'Etiqueta' : DECOR_LABEL[item.kind])).join('') || '<p class="me-empty">La herramienta «Decoración» coloca rosas de los vientos, barcos, ruinas y etiquetas de texto (mares, cordilleras…).</p>'}
+      <p class="me-note">Las conexiones entre lugares (carreteras, Northline, rutas marítimas…) están en la pestaña «Conexiones».</p>
       ${legacy.length ? `<h4>Provisionales</h4><p class="me-note">Hay ${legacy.length} lugares provisionales del juego sin colocar (${esc(legacy.join(', '))}).</p><button type="button" data-action="import-legacy">Importar lugares provisionales</button>` : ''}`;
+  } else if (state.tab === 'links') {
+    panel.innerHTML = linksPanel();
   } else if (state.tab === 'zones') {
-    panel.innerHTML = `<h3>${map.areas.length} áreas</h3>${[...map.areas].sort((a, b) => b.z - a.z).map((area) => row('area', area, AREA_COLOR[area.kind], AREA_LABEL[area.kind])).join('') || '<p class="me-empty">Usa «Área» para dibujar agua, tierra, bosque o zonas urbanas.</p>'}
+    panel.innerHTML = `<h3>${map.areas.length} áreas</h3>${[...map.areas].sort((a, b) => b.z - a.z).map((area) => row('area', area, area.color ?? AREA_COLOR[area.kind], AREA_LABEL[area.kind])).join('') || '<p class="me-empty">Usa «Área» para dibujar agua, tierra, bosque o zonas urbanas.</p>'}
       <h4>Distritos de juego (${map.districts.length})</h4>${map.districts.map((district) => row('district', district, district.color, DISCOVERY_LABEL[district.fog])).join('') || '<p class="me-empty">Usa «Distrito» para marcar las zonas con niebla.</p>'}`;
   } else if (state.tab === 'ways') {
     panel.innerHTML = `<h3>${map.ways.length} caminos</h3>${[...map.ways].sort((a, b) => b.z - a.z).map((way) => row('way', way, WAY_COLOR[way.kind], `${WAY_LABEL[way.kind]} · ${fmtMeters(polylineLength(way.points))}`)).join('') || '<p class="me-empty">Usa «Camino» para trazar calles, ríos, murallas…</p>'}`;
@@ -682,12 +916,13 @@ function fillFields(area) {
 }
 
 function renderMultiInspector() {
-  const items = state.multi; const names = { place: 'lugares', area: 'áreas', way: 'caminos', district: 'distritos' };
+  const items = state.multi; const names = { place: 'lugares', area: 'áreas', way: 'caminos', district: 'distritos', decor: 'adornos' };
   const tally = Object.keys(names).map((type) => [type, items.filter((entry) => entry.type === type).length]).filter(([, n]) => n).map(([type, n]) => `${n} ${names[type]}`).join(', ');
-  const locked = items.filter((entry) => frozenBy(find(entry.type, entry.id))).length;
+  const locked = items.filter((entry) => frozenBy(find(entry.type, entry.id), entry.type)).length;
   const groups = state.map.groups.filter((group) => !lockedBy(state.map, { group: group.id }));
   return `<h3>${items.length} elementos seleccionados</h3><p class="me-note">${tally}${locked ? ` · ${locked} bloqueado(s): se omiten al agrupar o borrar` : ''}</p>
     <div class="me-multi"><label class="me-field"><span>Mover todos al grupo</span><select data-multi="group"><option value="__keep__">— elige —</option><option value="">— sacarlos de su grupo —</option>${groups.map((group) => `<option value="${esc(group.id)}">${esc(group.name || group.id)}</option>`).join('')}</select></label>
+      <button type="button" data-action="multi-duplicate">Duplicar la selección (Ctrl+D)</button>
       <button type="button" data-action="multi-new-group">Nuevo grupo con la selección (Ctrl+G)</button>
       <button type="button" data-action="multi-clear">Deseleccionar</button>
       <button type="button" class="danger" data-action="multi-delete">Borrar la selección</button></div>
@@ -698,11 +933,11 @@ function renderInspector() {
   const box = $('#inspector'); const item = selected();
   if (!state.map) { box.innerHTML = ''; return; }
   if (state.multi.length > 1) { box.innerHTML = renderMultiInspector(); return; }
-  if (!item) { box.innerHTML = '<p class="me-empty">Selecciona un lugar, área, camino, distrito, enlace o grupo para editarlo.</p>'; return; }
+  if (!item) { box.innerHTML = '<p class="me-empty">Selecciona un lugar, área, camino, distrito, conexión, decoración o grupo para editarlo.</p><p class="me-note">Con la herramienta «Mover» (V) un clic selecciona; con «Selección» (S) puedes arrastrar un rectángulo. Ctrl+D duplica y Supr borra. El menú «Capas» oculta o bloquea clases enteras de elementos.</p>'; return; }
   const type = state.selection.type;
   const idField = field('Id (único en el mapa)', `<input data-f="id" value="${esc(item.id)}" maxlength="41" spellcheck="false">`);
   const nameField = field('Nombre', `<input data-f="name" value="${esc(item.name)}" maxlength="60">`);
-  let body = ''; let title = ''; let locked = type === 'group' ? null : frozenBy(item);
+  let body = ''; let title = ''; let locked = type === 'group' ? null : frozenBy(item, type);
   const remove = (label) => `<button type="button" class="danger" data-action="delete">${label}</button>`;
 
   if (type === 'place') {
@@ -710,12 +945,23 @@ function renderInspector() {
     const normalized = normalizeMap(state.map).places.find((place) => place.id === item.id);
     const district = normalized?.district ? state.map.districts.find((entry) => entry.id === normalized.district) : null;
     const owners = ['', ...[...state.context.npcIds].sort()]; const footprint = item.footprint;
+    const normalizedMap = normalizeMap(state.map); const index = placeIndex(normalizedMap);
+    const connections = normalizedMap.links.filter((link) => link.from === item.id || link.to === item.id);
+    const IMPORTANCE_LABEL = { 1: '1 · Menor', 2: '2 · Local', 3: '3 · Relevante', 4: '4 · Principal', 5: '5 · Dominante' };
+    const defaultIcon = PLACE_DEFAULT_ICON[item.kind];
+    const iconLabels = { '': defaultIcon ? `Por defecto (${PLACE_ICON_LABEL[defaultIcon]})` : 'Por defecto (sin símbolo)', ...PLACE_ICON_LABEL };
+    const dataText = Object.entries(item.data ?? {}).map(([key, value]) => `${key}: ${value}`).join('\n');
     body = `${field('Id (único en todo el juego)', `<input data-f="id" value="${esc(item.id)}" maxlength="41" spellcheck="false">`)}${nameField}
-      <div class="me-grid2">${field('Tipo', select('kind', PLACE_KINDS, item.kind, KIND_LABEL))}${field('Acceso', select('access', ACCESS, item.access, ACCESS_LABEL))}</div>
-      <div class="me-grid2">${field('Descubrimiento inicial', select('discovery', DISCOVERY, item.discovery, DISCOVERY_LABEL))}${field('Dueño', `<select data-f="owner">${owners.map((id) => `<option value="${esc(id)}" ${id === (item.owner ?? '') ? 'selected' : ''}>${esc(id || '— ninguno —')}</option>`).join('')}</select>`)}</div>
+      <div class="me-grid2">${field('Tipo', select('kind', PLACE_KINDS, item.kind, KIND_LABEL))}${field('Importancia (tamaño y etiqueta)', select('importance', ['1', '2', '3', '4', '5'], String(item.importance ?? 2), IMPORTANCE_LABEL))}</div>
+      <div class="me-grid2">${field('Icono en el mapa', select('icon', ['', ...PLACE_ICONS], item.icon ?? '', iconLabels))}${field('Región / facción', `<input data-f="faction" value="${esc(item.faction ?? '')}" maxlength="40" placeholder="p. ej. Northfortress">`)}</div>
+      <div class="me-grid2">${field('Acceso', select('access', ACCESS, item.access, ACCESS_LABEL))}${field('Descubrimiento inicial', select('discovery', DISCOVERY, item.discovery, DISCOVERY_LABEL))}</div>
+      ${field('Dueño', `<select data-f="owner">${owners.map((id) => `<option value="${esc(id)}" ${id === (item.owner ?? '') ? 'selected' : ''}>${esc(id || '— ninguno —')}</option>`).join('')}</select>`)}
       <div class="me-grid2">${field('x (m)', num('x', item.x))}${field('y (m)', num('y', item.y))}</div>
       <div class="me-field"><span>Distrito (se calcula solo)</span><code>${esc(district?.name ?? '— fuera de todo distrito —')}</code></div>
       ${field('Grupo', groupSelect(item))}
+      <div class="me-field"><span>Conexiones (${connections.length})</span>${connections.map((link) => { const other = link.from === item.id ? link.to : link.from; return `<button type="button" class="me-conn" data-select-link="${esc(link.id)}"><i style="background:${esc(linkColor(normalizedMap, link, themeFor(state.map)))}"></i>${esc(TRAVEL_MODES[link.mode]?.label ?? link.mode)} → ${esc(normalizedMap.places.find((place) => place.id === other)?.name ?? other)} <small>${formatKm(linkKm(normalizedMap, link, index))} · ${formatDuration(linkMinutes(normalizedMap, link, index))}</small></button>`; }).join('') || '<small class="me-note">Sin conexiones: usa la herramienta «Conexión» (C).</small>'}</div>
+      <div class="me-field"><span>Imagen o visual asociado</span>${item.image ? `<img class="me-thumb" alt="" src="/assets/maps/${esc(item.image)}?v=${state.loadedAt}">` : ''}<input type="file" id="place-image" accept="image/png,image/webp,image/jpeg">${item.image ? '<button type="button" data-action="remove-image">Quitar imagen</button>' : ''}</div>
+      ${field('Datos adicionales (una línea «clave: valor»; los usa el simulador)', `<textarea data-f="data" rows="3" spellcheck="false" placeholder="poblacion: 5000000&#10;funcion: capital">${esc(dataText)}</textarea>`)}
       <div class="me-field"><span><label class="me-inline"><input type="checkbox" data-f="hasFootprint" ${footprint ? 'checked' : ''}> Con huella de edificio</label></span>
         ${footprint ? `<div class="me-grid2">${num('footprint.width', footprint.width, 'min="1" placeholder="ancho m"')}${num('footprint.depth', footprint.depth, 'min="1" placeholder="fondo m"')}</div>${field('Rotación (°)', num('footprint.rotation', footprint.rotation ?? 0))}` : ''}</div>
       <div class="me-field"><span><label class="me-inline"><input type="checkbox" data-f="hasHours" ${item.hours ? 'checked' : ''}> Con horario</label></span>
@@ -723,21 +969,23 @@ function renderInspector() {
       ${field('Alias (separados por comas)', `<input data-f="aliases" value="${esc((item.aliases ?? []).join(', '))}">`)}
       ${field('Etiquetas (separadas por comas)', `<input data-f="tags" value="${esc((item.tags ?? []).join(', '))}">`)}
       ${field('Descripción', `<textarea data-f="description" maxlength="600">${esc(item.description)}</textarea>`)}
-      ${requirementRows(item)}${remove('Borrar lugar')}`;
+      ${requirementRows(item)}<div class="me-actions"><button type="button" data-action="duplicate">Duplicar</button>${remove('Borrar lugar')}</div>`;
   } else if (type === 'area') {
-    title = 'Área';
+    title = item.kind === 'region' ? 'Región / territorio' : 'Área';
+    const tint = `<div class="me-field"><span><label class="me-inline"><input type="checkbox" data-f="hasColor" ${item.color ? 'checked' : ''}> Color propio${item.kind === 'region' ? '' : ' (si no, el del estilo)'}</label></span>${item.color ? `<input data-f="color" type="color" value="${esc(item.color)}">` : ''}</div>`;
     body = `${idField}${nameField}
       <div class="me-grid2">${field('Tipo', select('kind', AREA_KINDS, item.kind, AREA_LABEL))}${field('Orden de dibujo', num('z', item.z, 'step="1"'))}</div>
-      ${field('Grupo', groupSelect(item))}${fillFields(item)}
+      ${item.kind === 'region' ? field('Facción / dueño del territorio', `<input data-f="faction" value="${esc(item.faction ?? '')}" maxlength="40">`) : ''}${tint}
+      ${field('Grupo', groupSelect(item))}${item.kind === 'region' ? '<p class="me-note">Una región política se pinta translúcida con borde discontinuo y su nombre en letras grandes sobre el territorio. No tapa lo demás: se selecciona por su borde.</p>' : fillFields(item)}
       <p class="me-note">${item.polygon.length} vértices · ${fmtArea(polygonArea(item.polygon))}. Arrastra los cuadrados; los círculos de las aristas añaden vértices; clic derecho en un vértice lo borra. Las áreas con mayor «orden» se dibujan encima.</p>
-      ${remove('Borrar área')}`;
+      <div class="me-actions"><button type="button" data-action="duplicate">Duplicar</button>${remove('Borrar área')}</div>`;
   } else if (type === 'way') {
     title = 'Camino';
     body = `${idField}${nameField}
       <div class="me-grid2">${field('Tipo', select('kind', WAY_KINDS, item.kind, WAY_LABEL))}${field('Ancho (m)', num('width', item.width, 'min="0.5" step="0.5"'))}</div>
       <div class="me-grid2">${field('Orden de dibujo', num('z', item.z, 'step="1"'))}${field('Grupo', groupSelect(item))}</div>
       <p class="me-note">${item.points.length} puntos · ${fmtMeters(polylineLength(item.points))} · ${minutesFor(polylineLength(item.points), WALK_METERS_PER_MIN)} min a pie. Arrastra los cuadrados; los círculos añaden puntos; clic derecho borra uno.</p>
-      ${remove('Borrar camino')}`;
+      <div class="me-actions"><button type="button" data-action="duplicate">Duplicar</button>${remove('Borrar camino')}</div>`;
   } else if (type === 'district') {
     title = 'Distrito';
     body = `${idField}${nameField}
@@ -745,20 +993,40 @@ function renderInspector() {
       ${field('Grupo', groupSelect(item))}
       <label class="me-inline"><input type="checkbox" data-f="allowPlayerPlaces" ${item.allowPlayerPlaces ? 'checked' : ''}> El jugador puede colocar aquí su casa y marcas</label>
       <p class="me-note">${item.polygon.length} vértices · ${fmtArea(polygonArea(item.polygon))}. Arrastra los cuadrados; los círculos añaden vértices; clic derecho borra uno.</p>
-      ${remove('Borrar distrito')}`;
+      <div class="me-actions"><button type="button" data-action="duplicate">Duplicar</button>${remove('Borrar distrito')}</div>`;
   } else if (type === 'link') {
-    title = 'Enlace';
-    const places = state.map.places;
+    title = 'Conexión';
+    const places = state.map.places; const map = normalizeMap(state.map); const index = placeIndex(map); const made = map.links.find((link) => link.id === item.id) ?? item;
     const endpoint = (name, value) => `<select data-f="${name}">${[...places.map((place) => place.id), ...[...state.context.takenIds].filter((id) => !places.some((place) => place.id === id))].map((id) => `<option value="${esc(id)}" ${id === value ? 'selected' : ''}>${esc(places.find((place) => place.id === id)?.name ?? id)}</option>`).join('')}</select>`;
+    const drawn = drawnKm(map, made, index); const used = linkKm(map, made, index); const minutes = linkMinutes(map, made, index);
+    const lineOptions = ['', ...state.map.lines.map((line) => line.id)]; const lineLabels = { '': '— ninguna —', ...Object.fromEntries(state.map.lines.map((line) => [line.id, line.name || line.id])) };
     body = `${idField}${nameField}
       <div class="me-grid2">${field('Desde', endpoint('from', item.from))}${field('Hasta', endpoint('to', item.to))}</div>
-      <div class="me-grid2">${field('Modo', select('mode', LINK_MODES, item.mode, LINK_LABEL))}${field('Minutos', num('minutes', item.minutes, 'min="1" step="1"'))}</div>
-      ${field('Costo', num('cost', item.cost, 'min="0" step="0.5"'))}${requirementRows(item)}${remove('Borrar enlace')}`;
+      <div class="me-grid2">${field('Modo', select('mode', LINK_MODES, item.mode, LINK_LABEL))}${field('Línea de transporte', select('line', lineOptions, item.line ?? '', lineLabels))}</div>
+      <div class="me-grid2">${field('Distancia (km)', num('distanceKm', item.distanceKm, `min="0.1" step="0.1" placeholder="${drawn === null ? 'sin dibujo' : `${drawn.toFixed(1)} (del dibujo)`}"`))}${field('Minutos', num('minutes', item.minutes, `min="1" step="1" placeholder="${minutes ?? '—'} (auto)"`))}</div>
+      <p class="me-note"><strong>${formatKm(used)} · ${formatDuration(minutes)}</strong>${item.minutes ? ' (tiempo escrito)' : ` (tiempo calculado a ${speedKmh(map, item.mode)} km/h)`}${item.distanceKm ? '' : ' · distancia del trazado'}. A pie serían ${used === null ? '—' : formatDuration(walkMinutes(map, used))}. Trazado: ${item.path.length} punto(s) intermedio(s); arrastra los cuadrados, los círculos añaden puntos y clic derecho borra uno.</p>
+      <div class="me-grid2">${field('Costo', num('cost', item.cost, 'min="0" step="0.5"'))}<label class="me-inline me-pad"><input type="checkbox" data-f="twoWay" ${item.twoWay !== false ? 'checked' : ''}> Se puede ir en los dos sentidos</label></div>
+      ${requirementRows(item)}<div class="me-actions"><button type="button" data-action="duplicate">Duplicar</button>${remove('Borrar conexión')}</div>`;
+  } else if (type === 'decor') {
+    title = item.kind === 'label' ? 'Etiqueta de texto' : 'Decoración';
+    body = `${idField}${item.kind === 'label' ? field('Texto', `<input data-f="name" value="${esc(item.name)}" maxlength="60">`) : nameField}
+      <div class="me-grid2">${field('Tipo', select('kind', DECOR_KINDS, item.kind, DECOR_LABEL))}${field('Grupo', groupSelect(item))}</div>
+      <div class="me-grid2">${field(item.kind === 'label' ? 'Tamaño del texto (m)' : 'Tamaño (m)', num('size', item.size, 'min="1" step="any"'))}${field('Rotación (°)', num('rotation', item.rotation ?? 0, 'step="1"'))}</div>
+      <div class="me-grid2">${field('x (m)', num('x', item.x))}${field('y (m)', num('y', item.y))}</div>
+      <p class="me-note">Es solo decorativo: no cambia ninguna regla. Su tamaño es del mundo (crece al acercar el zoom) con un mínimo y un máximo en pantalla.</p>
+      <div class="me-actions"><button type="button" data-action="duplicate">Duplicar</button>${remove('Borrar')}</div>`;
+  } else if (type === 'line') {
+    title = 'Línea de transporte';
+    const used = state.map.links.filter((link) => link.line === item.id);
+    body = `${idField}${nameField}
+      <div class="me-grid2">${field('Modo', select('mode', LINK_MODES, item.mode, LINK_LABEL))}${field('Color', `<input data-f="color" type="color" value="${esc(item.color)}">`)}</div>
+      <p class="me-note">${used.length ? `Enlaces en esta línea: ${used.map((link) => esc(link.name || link.id)).join('; ')}.` : 'Ningún enlace pertenece todavía a esta línea: elige la línea en el panel de una conexión (o en las opciones de la herramienta «Conexión»).'} Los enlaces de una línea se dibujan con su color y seguir en ella no cuenta como transbordo.</p>
+      <div class="me-actions"><button type="button" data-action="duplicate">Duplicar</button>${remove('Borrar línea')}</div>`;
   } else {
     title = 'Grupo';
     const ancestors = groupChain(state.map, item.parent); const ancestorLock = ancestors.find((group) => group.locked);
     const banned = descendantIds(item.id); const count = membersOf(item.id);
-    const tally = ['areas', 'ways', 'districts', 'places'].map((key) => [key, count.filter((entry) => entry.key === key).length]).filter(([, n]) => n).map(([key, n]) => `${n} ${{ areas: 'áreas', ways: 'caminos', districts: 'distritos', places: 'lugares' }[key]}`).join(', ');
+    const tally = ['areas', 'ways', 'districts', 'places', 'decor'].map((key) => [key, count.filter((entry) => entry.key === key).length]).filter(([, n]) => n).map(([key, n]) => `${n} ${{ areas: 'áreas', ways: 'caminos', districts: 'distritos', places: 'lugares', decor: 'adornos' }[key]}`).join(', ');
     locked = ancestorLock;
     const lockBox = ancestorLock ? '' : `<label class="me-inline"><input type="checkbox" data-f="locked" ${item.locked ? 'checked' : ''}> <strong>Bloqueado</strong> (no recibe cambios)</label>`;
     body = `${lockBox}<fieldset ${item.locked || ancestorLock ? 'disabled' : ''}>${idField}${nameField}
@@ -780,16 +1048,87 @@ function renderTheme() {
 function renderAll() {
   if (!state.drag) refreshGenerated();
   renderTheme();
-  renderTools(); renderTabs(); renderPanel(); renderInspector(); renderActiveGroup(); renderCanvas(); renderStatus();
+  renderTools(); renderTabs(); renderPanel(); renderInspector(); renderActiveGroup(); renderCanvas(); renderStatus(); renderPopovers(); renderContextBar();
   $('#undo').disabled = !state.history.length; $('#redo').disabled = !state.future.length; $('#save').disabled = !state.map;
 }
+
+// --- Capas, opciones de vista y barra contextual -------------------------------------------------------------------------------------------------------------
+function layerCounts() {
+  const counts = Object.fromEntries(LAYERS.map((layer) => [layer.id, 0])); const map = state.map;
+  for (const [type, items] of [['area', map.areas], ['way', map.ways], ['district', map.districts], ['place', map.places], ['link', map.links], ['decor', map.decor]]) for (const item of items) counts[layerOf(type, item, map)] += 1;
+  counts.terrain += state.terrain?.chunks.size ?? Object.keys(map.terrain?.chunks ?? {}).length;
+  return counts;
+}
+function renderPopovers() {
+  const layers = $('#layers-pop'); const viewPop = $('#view-pop');
+  $('#layers-btn').setAttribute('aria-expanded', String(state.layersOpen)); $('#view-btn').setAttribute('aria-expanded', String(state.viewOpen === true));
+  layers.hidden = !(state.layersOpen && state.map); viewPop.hidden = !(state.viewOpen && state.map);
+  $('#themed').checked = state.themed; $('#snap-grid').checked = state.snapGrid;
+  $('#layers-btn').textContent = state.layers.hidden.size || state.layers.locked.size ? `Capas (${state.layers.hidden.size ? `${state.layers.hidden.size} ocultas` : ''}${state.layers.hidden.size && state.layers.locked.size ? ' · ' : ''}${state.layers.locked.size ? `${state.layers.locked.size} 🔒` : ''}) ▾` : 'Capas ▾';
+  if (layers.hidden) return;
+  const counts = layerCounts();
+  layers.innerHTML = `<h4>Capas</h4>${LAYERS.map((layer) => {
+    const hidden = state.layers.hidden.has(layer.id); const locked = state.layers.locked.has(layer.id);
+    return `<div class="me-layer${hidden ? ' off' : ''}" title="${esc(layer.hint)}"><button type="button" class="eye" data-layer-eye="${layer.id}" aria-pressed="${!hidden}" aria-label="${hidden ? 'Mostrar' : 'Ocultar'} ${esc(layer.label)}" title="${hidden ? 'Mostrar' : 'Ocultar'}">${hidden ? '○' : '●'}</button><span>${esc(layer.label)}<small>${counts[layer.id] || ''}</small></span><button type="button" class="lock" data-layer-lock="${layer.id}" aria-pressed="${locked}" aria-label="${locked ? 'Desbloquear' : 'Bloquear'} ${esc(layer.label)}" title="${locked ? 'Desbloquear (se puede editar)' : 'Bloquear (no se puede editar)'}">${locked ? '🔒' : '🔓'}</button></div>`;
+  }).join('')}<div class="me-pop-actions"><button type="button" data-layer-all="show">Mostrar todas</button><button type="button" data-layer-all="unlock">Desbloquear todas</button></div><p class="me-note">Ocultar solo afecta a lo que ves y eliges; bloquear impide mover o editar esa clase de elementos. No se guardan en el mapa.</p>`;
+}
+const TYPE_NAME = { place: 'Lugar', area: 'Área', way: 'Camino', district: 'Distrito', link: 'Conexión', decor: 'Decoración', group: 'Grupo', line: 'Línea' };
+function renderContextBar() {
+  const bar = $('#ctx-bar'); const item = selected();
+  if (!state.map || state.final || (!item && state.multi.length < 2)) { bar.hidden = true; return; }
+  if (state.multi.length > 1) { bar.hidden = false; bar.innerHTML = `<strong>${state.multi.length} elementos</strong><button type="button" data-ctx="duplicate">Duplicar</button><button type="button" class="danger" data-ctx="delete">Borrar</button><button type="button" data-ctx="clear">Soltar</button>`; return; }
+  const type = state.selection.type; const frozen = type === 'group' ? null : frozenBy(item, type);
+  bar.hidden = false;
+  bar.innerHTML = `<strong title="${esc(item.name || item.id)}">${esc(item.name || item.id)}</strong><small>${TYPE_NAME[type] ?? type}${frozen ? ' · 🔒' : ''}</small>${type === 'group' ? '' : `<button type="button" data-ctx="duplicate" ${frozen ? 'disabled' : ''}>Duplicar</button>`}<button type="button" data-ctx="focus">Encuadrar</button><button type="button" class="danger" data-ctx="delete" ${frozen ? 'disabled' : ''}>Borrar</button>`;
+}
+$('#ctx-bar').addEventListener('click', (event) => {
+  const action = event.target.closest('button')?.dataset.ctx; if (!action) return;
+  if (action === 'duplicate') duplicateSelection();
+  else if (action === 'delete') removeSelected();
+  else if (action === 'clear') setSet([]);
+  else if (action === 'focus') { const item = selected(); if (item) centerOnItem(state.selection.type, item); }
+});
+$('#layers-btn').onclick = () => { state.layersOpen = !state.layersOpen; state.viewOpen = false; renderPopovers(); };
+$('#view-btn').onclick = () => { state.viewOpen = !state.viewOpen; state.layersOpen = false; renderPopovers(); };
+document.addEventListener('pointerdown', (event) => {
+  if (!state.layersOpen && !state.viewOpen) return;
+  if (event.target.closest('.me-pop, #layers-btn, #view-btn')) return;
+  state.layersOpen = false; state.viewOpen = false; renderPopovers();
+});
+$('#layers-pop').addEventListener('click', (event) => {
+  const button = event.target.closest('button'); if (!button) return;
+  if (button.dataset.layerEye) { const id = button.dataset.layerEye; if (state.layers.hidden.has(id)) state.layers.hidden.delete(id); else state.layers.hidden.add(id); }
+  else if (button.dataset.layerLock) { const id = button.dataset.layerLock; if (state.layers.locked.has(id)) state.layers.locked.delete(id); else state.layers.locked.add(id); }
+  else if (button.dataset.layerAll === 'show') state.layers.hidden.clear();
+  else if (button.dataset.layerAll === 'unlock') state.layers.locked.clear();
+  saveLayerPrefs();
+  const item = selected(); if (item && isHiddenItem(state.selection.type, item)) state.selection = null;   // lo que se oculta deja de estar seleccionado
+  state.multi = state.multi.filter((entry) => !isHiddenItem(entry.type, find(entry.type, entry.id)));
+  renderAll();
+});
+$('#themed').onchange = (event) => { state.themed = event.target.checked; saveLayerPrefs(); renderCanvas(); };
+$('#snap-grid').onchange = (event) => { state.snapGrid = event.target.checked; saveLayerPrefs(); };
+// En pantallas estrechas las listas y las propiedades son cajones que se abren con los botones de la barra superior.
+$('#toggle-left').onclick = () => { $('.me-main').classList.toggle('drawer-left'); $('.me-main').classList.remove('drawer-right'); };
+$('#toggle-right').onclick = () => { $('.me-main').classList.toggle('drawer-right'); $('.me-main').classList.remove('drawer-left'); };
+
+// Imagen asociada a un lugar: se sube como las imágenes de calco (assets/maps) y el lugar guarda el nombre del archivo.
+const shortHash = (value) => { let h = 2166136261; for (const ch of String(value)) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36).slice(0, 9); };
+$('#inspector').addEventListener('change', async (event) => {
+  if (event.target.id !== 'place-image' || !event.target.files[0]) return;
+  const item = selected(); if (!item || refuseIfFrozen(item, 'place')) return;
+  try {
+    setStatus('Subiendo imagen…'); const image = await uploadImage(state.map.id, event.target.files[0], true, `lugar${shortHash(item.id)}`);
+    state.loadedAt = Date.now(); mutate(() => { item.image = image.file; }); setStatus('Imagen asociada al lugar: guarda el mapa para conservarla.', 'dirty');
+  } catch (error) { setStatus(error.message, 'bad'); }
+});
 
 // --- Terreno ----------------------------------------------------------------------------------------------------------------------------------------
 // El terreno vive en state.map.terrain (datos comprimidos) y, mientras se edita, en una rejilla en memoria que se vuelve a volcar al terminar cada pincelada.
 // Círculo del pincel: se coloca sin repintar el mapa entero (solo sigue al ratón).
 function placeBrushCursor() {
   for (const node of view.top.querySelectorAll('.brush-cursor')) node.remove();
-  if (state.tool !== 'brush' || !state.mouse || state.final) return;
+  if (state.tool !== 'brush' || !state.mouse || state.final || state.brush.mode === 'shape') return;
   const p = view.toScreen(state.mouse.wx, state.mouse.wy); const erase = state.brush.kind === 'none' || state.mouse.alt; const r = Math.max(3, state.brush.radius * view.k);
   view.svgElement('circle', { class: 'brush-cursor', cx: p.x, cy: p.y, r, fill: erase ? '#ffffff22' : `${THEMES.default.areas[state.brush.kind] ?? '#ffffff'}66`, stroke: '#111', 'stroke-width': 1.5, 'stroke-dasharray': '4 3', 'pointer-events': 'none' }, view.top);
   view.svgElement('circle', { class: 'brush-cursor', cx: p.x, cy: p.y, r, fill: 'none', stroke: '#fff', 'stroke-width': 0.8, 'pointer-events': 'none' }, view.top);
@@ -813,6 +1152,29 @@ const brushOptions = (alt) => {
   const b = state.brush; const erase = alt || b.kind === 'none';
   return { mode: erase ? 'erase' : b.mode === 'smooth' ? 'smooth' : 'paint', rugged: b.rugged, protect: !erase && b.protectWater && b.kind !== 'water' ? ['water'] : [] };
 };
+// Rango del radio del pincel según la escala del mapa (celdas de 16 m: de 8 m a 3 km; de 1 km: de 500 m a 60 km).
+function brushRange() { const cell = state.map?.terrain?.cell ?? TERRAIN_DEFAULTS.cell; return [Math.max(8, cell / 2), Math.max(3000, cell * 60)]; }
+function fitBrush() {
+  const cell = state.map?.terrain?.cell ?? TERRAIN_DEFAULTS.cell; const [min, max] = brushRange();
+  state.brush.radius = Math.min(max, Math.max(min, cell > TERRAIN_DEFAULTS.cell ? cell * 6 : 120));
+  state.gen.scale = cell > TERRAIN_DEFAULTS.cell ? cell * 40 : 1800;
+}
+// Pintar con una FORMA: se dibuja un polígono (como un área) y se rellena de golpe con el material elegido (mares, desiertos, cordilleras…).
+function shapeClick(wx, wy, event) {
+  state.draft ??= { kind: 'terrain', points: [] };
+  const first = state.draft.points[0]; const [x, y] = snap(wx, wy, { off: event.altKey });
+  if (first && state.draft.points.length >= 3) { const a = view.toScreen(first[0], first[1]); const b = view.toScreen(x, y); if (Math.hypot(a.x - b.x, a.y - b.y) < 10) { finishShape(event.altKey); return; } }
+  state.draft.points.push([x, y]); renderCanvas();
+}
+function finishShape(erase = false) {
+  const draft = state.draft; state.draft = null;
+  if (!draft || draft.points.length < 3) { renderAll(); return; }
+  const b = state.brush; const terrain = getTerrain(); const wipe = erase || b.kind === 'none';
+  pushHistory();
+  const changed = paintPolygon(terrain, draft.points, wipe ? null : b.kind, { mode: wipe ? 'erase' : 'paint', rugged: b.rugged, protect: !wipe && b.protectWater && b.kind !== 'water' ? ['water'] : [] });
+  commitTerrain(); validate(); renderAll();
+  setStatus(`${changed.toLocaleString('es')} celdas ${wipe ? 'borradas' : 'pintadas'} con la forma.`, 'dirty');
+}
 function startStroke(wx, wy, event) {
   const terrain = getTerrain(); const b = state.brush; pushHistory();
   if (b.mode === 'fill') {
@@ -846,14 +1208,18 @@ function terrainPanel() {
   const slider = (key, label, min, max, step) => `<label><span>${label}</span><output>${g[key]}</output><input type="range" min="${min}" max="${max}" step="${step}" data-gen="${key}" value="${g[key]}"></label>`;
   return `<h3>Terreno</h3>
     <p class="me-note">Se pinta con el <strong>Pincel</strong> (B): agua, tierra, arena, campo, bosque, parque y montaña, con bordes naturales. Los polígonos de «Zonas» se reservan para las ciudades. ${cells ? `${cells.toLocaleString('es')} celdas pintadas (${((cells * terrain.cell * terrain.cell) / 1e6).toFixed(2)} km²) en ${terrain.chunks.size} trozos.` : 'Aún no hay terreno pintado.'}</p>
+    <h4>Escala del terreno</h4>
+    <p class="me-note">Cada celda del terreno mide ${fmtMeters(terrain.cell)}: ${terrain.cell > 100 ? 'es un mapa de región o continente (las coordenadas son metros del mundo, así que 300 km son 300 000).' : 'es un mapa de ciudad.'} ${cells ? 'Solo se puede cambiar con el terreno vacío.' : 'Elígela antes de pintar.'}</p>
+    <div class="me-grid2"><label class="me-field"><span>Perfil</span><select data-terrain="preset" ${cells ? 'disabled' : ''}>${Object.entries(TERRAIN_PRESETS).map(([id, preset]) => `<option value="${id}" ${preset.cell === terrain.cell ? 'selected' : ''}>${esc(preset.label)}</option>`).join('')}</select></label>
+      <label class="me-field"><span>Celda (m)</span><input type="number" min="4" max="5000" step="1" data-terrain="cell" value="${terrain.cell}" ${cells ? 'disabled' : ''}></label></div>
     <h4>Bosques</h4>
-    <div class="me-grid2"><label class="me-field"><span>Separación de copas (m)</span><input type="number" min="2" max="30" step="0.5" data-terrain="spacing" value="${terrain.forest.spacing}"></label>
+    <div class="me-grid2"><label class="me-field"><span>Separación de copas (m)</span><input type="number" min="2" max="2000" step="0.5" data-terrain="spacing" value="${terrain.forest.spacing}"></label>
       <label class="me-field"><span>Densidad (0–1)</span><input type="number" min="0" max="1" step="0.05" data-terrain="density" value="${terrain.forest.density}"></label></div>
     <div class="me-field"><span>Semilla del terreno (bordes y árboles)</span><div class="me-grid2"><input type="number" step="1" data-terrain="seed" value="${terrain.seed}"><button type="button" data-action="terrain-reseed">🎲 Nueva</button></div></div>
     <h4>Generar terreno natural</h4>
     <p class="me-note">Rellena la zona con mar, costas, tierra, campos, bosques y montañas a partir de ruido. Se puede deshacer; la misma semilla da siempre el mismo terreno.</p>
     <div class="me-style">${slider('sea', 'Mar', 0, 1, 0.05)}${slider('forest', 'Bosques', 0, 1, 0.05)}${slider('mountains', 'Montañas', 0, 1, 0.05)}${slider('fields', 'Campos', 0, 1, 0.05)}${slider('island', 'Isla (mar en los bordes)', 0, 1, 0.05)}</div>
-    <div class="me-grid2"><label class="me-field"><span>Tamaño de las formas (m)</span><input type="number" min="200" max="20000" step="100" data-gen="scale" value="${g.scale}"></label>
+    <div class="me-grid2"><label class="me-field"><span>Tamaño de las formas (m)</span><input type="number" min="200" max="400000" step="100" data-gen="scale" value="${g.scale}"></label>
       <label class="me-field"><span>Semilla</span><div class="me-grid2"><input type="number" step="1" data-gen="seed" value="${g.seed}"><button type="button" data-action="gen-reseed" title="Semilla nueva">🎲</button></div></label></div>
     <label class="me-field"><span>Zona</span><select data-gen="region"><option value="view" ${g.region === 'view' ? 'selected' : ''}>La vista actual</option><option value="map" ${g.region === 'map' ? 'selected' : ''}>Toda la extensión del mapa</option></select></label>
     <label class="me-inline"><input type="checkbox" data-gen="overwrite" ${g.overwrite ? 'checked' : ''}> Sobrescribir lo ya pintado</label>
@@ -875,7 +1241,8 @@ view.on('pointerdown', ({ wx, wy, event }) => {
   if (!state.map) return;
   $('#canvas').focus();
   if (state.final) { view.beginPan(event); return; }
-  if (state.tool === 'brush' && event.button === 0) { startStroke(wx, wy, event); return; }
+  if (state.tool === 'brush' && event.button === 0) { if (state.brush.mode === 'shape') shapeClick(wx, wy, event); else startStroke(wx, wy, event); return; }
+  if (event.button === 2 && state.draft?.kind === 'link' && !state.draft.points.length) { state.draft = null; renderAll(); return; }
   const target = targetOf(event);
   // clic derecho mientras se dibuja: quita el último punto (y cancela el dibujo si no queda ninguno)
   if (event.button === 2 && state.draft?.points.length) { state.draft.points.pop(); if (!state.draft.points.length) state.draft = null; renderAll(); return; }
@@ -887,13 +1254,18 @@ view.on('pointerdown', ({ wx, wy, event }) => {
   state.down = { x: event.clientX, y: event.clientY, wx, wy, target, moved: false, alt: event.altKey, handled: false };
   if ((state.tool === 'select' || state.tool === 'pick') && target) {
     const { type, id, index } = target.dataset;
-    if ((type === 'place' || type === 'district') && additive) { setSet(toggleItem(currentSet(), { type, id })); state.down.handled = true; }
+    if ((type === 'place' || type === 'district' || type === 'decor') && additive) { setSet(toggleItem(currentSet(), { type, id })); state.down.handled = true; }
     else if (state.tool === 'select') {
       if (type === 'place') {
         state.multi = []; state.selection = { type: 'place', id }; state.tab = 'places';
-        if (!frozenBy(find('place', id))) state.drag = { kind: 'place', id };
+        if (!frozenBy(find('place', id), 'place')) state.drag = { kind: 'place', id };
         renderAll();
-      } else if (type === 'district') { state.multi = []; state.selection = { type: 'district', id }; state.tab = 'zones'; renderAll(); }
+      } else if (type === 'decor') {
+        state.multi = []; state.selection = { type: 'decor', id }; state.tab = 'places';
+        if (!frozenBy(find('decor', id), 'decor')) state.drag = { kind: 'decor', id };
+        renderAll();
+      } else if (type === 'link') { state.multi = []; state.selection = { type: 'link', id }; state.tab = 'links'; renderAll(); }
+      else if (type === 'district') { state.multi = []; state.selection = { type: 'district', id }; state.tab = 'zones'; renderAll(); }
       else if (type === 'vertex') state.drag = { kind: 'vertex', index: Number(index) };
       else if (type === 'mid') { insertVertex(Number(index), wx, wy); }
     }
@@ -927,30 +1299,33 @@ view.on('pointerup', ({ wx, wy, event }) => {
 // Rectángulo de selección: de izquierda a derecha → lo que queda entero dentro; de derecha a izquierda → lo que toca.
 function finishMarquee(event) {
   const { a, b } = state.marquee; state.marquee = null;
-  const found = itemsInRect(state.map, { minX: Math.min(a.wx, b.wx), minY: Math.min(a.wy, b.wy), maxX: Math.max(a.wx, b.wx), maxY: Math.max(a.wy, b.wy) }, { mode: b.wx >= a.wx ? 'inside' : 'touch' });
+  const found = itemsInRect(state.map, { minX: Math.min(a.wx, b.wx), minY: Math.min(a.wy, b.wy), maxX: Math.max(a.wx, b.wx), maxY: Math.max(a.wy, b.wy) }, { mode: b.wx >= a.wx ? 'inside' : 'touch' })
+    .filter((entry) => !isHiddenItem(entry.type, find(entry.type, entry.id)));   // lo que está en una capa oculta no se selecciona
   setSet(event.ctrlKey || event.metaKey || event.shiftKey ? mergeItems(currentSet(), found) : found);
   setStatus(`${found.length} elemento(s) en el rectángulo${b.wx >= a.wx ? ' (enteros)' : ' (tocados)'}.`, 'ok');
 }
 view.on('dblclick', () => {
-  const draft = state.draft; if (!draft || state.final) return;
+  const draft = state.draft; if (!draft || state.final || draft.kind === 'link') return;
   if (draft.points.length > (draft.kind === 'way' ? 2 : 3)) draft.points.pop();   // el doble clic ya añadió el punto dos veces
   finishDraft();
 });
 
 function moveDragged(wx, wy, alt) {
   const drag = state.drag;
-  if (drag.kind === 'place') { const place = find('place', drag.id); const [x, y] = snap(wx, wy, { off: alt }); place.x = round(x); place.y = round(y); }
+  if (drag.kind === 'place' || drag.kind === 'decor') { const entry = find(drag.kind, drag.id); const [x, y] = snap(wx, wy, { off: alt }); entry.x = round(x); entry.y = round(y); }
   else if (drag.kind === 'vertex') { const item = selected(); const [x, y] = snap(wx, wy, { off: alt, except: state.selection }); pointsOf(state.selection.type, item)[drag.index] = [round(x), round(y)]; }
   renderCanvas(); renderInspector();
 }
 function insertVertex(index, wx, wy) {
-  mutate(() => { pointsOf(state.selection.type, selected()).splice(index + 1, 0, [round(wx), round(wy)]); });
-  state.drag = { kind: 'vertex', index: index + 1 }; if (state.down) state.down.moved = true;   // el arrastre sigue sin otra instantánea de deshacer
+  // en una conexión el trazado son solo los puntos INTERMEDIOS: la arista i va entre el punto i y el i+1 de [origen, …trazado, destino]
+  const at = state.selection.type === 'link' ? index : index + 1;
+  mutate(() => { pointsOf(state.selection.type, selected()).splice(at, 0, [round(wx), round(wy)]); });
+  state.drag = { kind: 'vertex', index: at }; if (state.down) state.down.moved = true;   // el arrastre sigue sin otra instantánea de deshacer
 }
 function removeVertex(index) {
-  const item = selected(); if (!item || !['area', 'district', 'way'].includes(state.selection.type) || frozenBy(item)) return;
+  const item = selected(); if (!item || !['area', 'district', 'way', 'link'].includes(state.selection.type) || frozenBy(item, state.selection.type)) return;
   const points = pointsOf(state.selection.type, item);
-  if (points.length <= (state.selection.type === 'way' ? 2 : 3)) return;
+  if (points.length <= ({ way: 2, link: 0 }[state.selection.type] ?? 3)) return;
   mutate(() => { points.splice(index, 1); });
 }
 
@@ -959,14 +1334,16 @@ function click(wx, wy, target, event, down = {}) {
   if (tool === 'select' || tool === 'pick') {
     if (down.handled) return;
     let hit = null;
-    if (target) {   // los asas de vértice son de la herramienta Mover; un lugar o el borde de un distrito se eligen con Selección
-      if (tool === 'select' || !['place', 'district'].includes(target.dataset.type)) return;
+    if (target) {   // los asas de vértice son de la herramienta Mover; un lugar, una conexión, un adorno o el borde de un distrito se eligen con Selección
+      if (tool === 'select' || !['place', 'district', 'decor', 'link'].includes(target.dataset.type)) return;
       hit = { type: target.dataset.type, id: target.dataset.id };
     }
     hit ??= pick(wx, wy, { preferDistrict: event.altKey });
-    if (event.ctrlKey || event.metaKey || event.shiftKey) { if (hit) setSet(toggleItem(currentSet(), hit)); return; }
+    if (event.ctrlKey || event.metaKey || event.shiftKey) { if (hit && SELECTABLE.includes(hit.type)) setSet(toggleItem(currentSet(), hit)); return; }
     if (hit) chooseSelection(hit.type, hit.id); else setSet([]);
   } else if (tool === 'place') addPlace(...snap(wx, wy, { off: event.altKey }));
+  else if (tool === 'link') linkClick(wx, wy, target, event);
+  else if (tool === 'decor') addDecor(...snap(wx, wy, { off: event.altKey }));
   else if (DRAW_TOOLS[tool]) {
     state.draft ??= { kind: DRAW_TOOLS[tool], points: [] };
     const [x, y] = snap(wx, wy, { off: event.altKey }); const first = state.draft.points[0];
@@ -1012,12 +1389,29 @@ function setPattern(area, pattern) {
   area.fill = pattern === 'none' ? { pattern } : { ...structuredClone(FILL_DEFAULTS[pattern]), seed };
   if (pattern === 'radial') { const c = polygonCentroid(area.polygon); area.fill.center = [round(c.x), round(c.y)]; }
 }
+// «clave: valor» por línea → objeto (números y sí/no se reconocen; lo demás es texto).
+function parseDataLines(textValue) {
+  const out = {};
+  for (const line of String(textValue).split('\n')) {
+    const at = line.indexOf(':'); if (at < 1) continue;
+    const key = line.slice(0, at).trim(); const raw = line.slice(at + 1).trim(); if (!key) continue;
+    out[key] = raw === 'true' ? true : raw === 'false' ? false : raw !== '' && Number.isFinite(Number(raw)) ? Number(raw) : raw;
+  }
+  return out;
+}
 function applyField(item, name, value, input) {
   const type = state.selection.type;
   if (name === 'aliases' || name === 'tags') item[name] = String(value).split(',').map((part) => part.trim()).filter(Boolean);
   else if (name === 'hasHours') item.hours = value ? { open: 8, close: 20 } : null;
   else if (name === 'hasFootprint') item.footprint = value ? { width: 12, depth: 16, rotation: 0 } : null;
   else if (name === 'owner') item.owner = value || null;
+  else if (name === 'importance') item.importance = Number(value);
+  else if (name === 'icon') item.icon = value || null;
+  else if (name === 'faction') item.faction = String(value).trim() || null;
+  else if (name === 'data') item.data = parseDataLines(value);
+  else if (name === 'hasColor') item.color = value ? '#c9a45c' : null;
+  else if (name === 'distanceKm' || name === 'minutes') item[name] = value === '' ? null : Number(value);
+  else if (name === 'line') item.line = value || null;
   else if (name === 'group' || name === 'parent') item[name] = value || null;
   else if (name === 'pattern') setPattern(item, value);
   else if (name === 'kind' && type === 'area') { item.kind = value; item.z = AREA_Z[value] ?? item.z; }
@@ -1051,7 +1445,10 @@ $('#inspector').addEventListener('change', (event) => {
 $('#inspector').addEventListener('click', (event) => {
   const button = event.target.closest('button'); if (!button) return;
   const item = selected(); const action = button.dataset.action;
-  if (action === 'multi-new-group') newGroupFromSelection();
+  if (button.dataset.selectLink) { chooseSelection('link', button.dataset.selectLink); centerOnItem('link', find('link', button.dataset.selectLink)); return; }
+  if (action === 'duplicate' || action === 'multi-duplicate') duplicateSelection();
+  else if (action === 'remove-image' && item && !refuseIfFrozen(item, 'place')) mutate(() => { item.image = null; });
+  else if (action === 'multi-new-group') newGroupFromSelection();
   else if (action === 'multi-clear') setSet([]);
   else if (action === 'multi-delete') removeMulti();
   else if (action === 'delete') removeSelected();
@@ -1093,9 +1490,12 @@ $('#panel').addEventListener('click', (event) => {
   else if (action === 'terrain-reseed') { pushHistory(); getTerrain().seed = Math.floor(Math.random() * 100000); commitTerrain({ rebuild: true }); validate(); renderAll(); }
   else if (action === 'clear-terrain') { if (confirm('¿Borrar todo el terreno pintado de este mapa?')) { pushHistory(); state.map.terrain = null; state.terrainFor = null; state.terrain = null; validate(); renderAll(); } }
   else if (action === 'add-link') {
-    const id = uniqueId('enlace', takenPlaceIds());
-    mutate((map) => map.links.push({ id, name: 'Nuevo enlace', mode: 'metro', from: map.places[0].id, to: map.places[1].id, minutes: 20, cost: 0, requires: [] }));
-    autoIds.add(id); chooseSelection('link', id);
+    const id = uniqueId('conexion', takenPlaceIds());
+    mutate((map) => map.links.push({ id, name: 'Nueva conexión', mode: 'road', from: map.places[0].id, to: map.places[1].id, minutes: null, cost: 0, requires: [], distanceKm: null, path: [], line: null, twoWay: true }));
+    chooseSelection('link', id);
+  } else if (action === 'add-line') {
+    const name = prompt('Nombre de la línea (p. ej. «Línea Este»):', '')?.trim();
+    if (name) { const id = newId(name); mutate((map) => map.lines.push({ id, name, mode: 'northline', color: PALETTE[map.lines.length % PALETTE.length] })); chooseSelection('line', id); }
   } else if (action === 'add-group') {
     const name = prompt('Nombre del grupo (p. ej. «Northfortress», «Casco antiguo»):', '')?.trim();
     if (name) { const id = createGroup(name, state.selection?.type === 'group' ? state.selection.id : null); chooseSelection('group', id); }
@@ -1111,8 +1511,25 @@ $('#panel').addEventListener('change', async (event) => {
   else if (target.dataset.gen) { const key = target.dataset.gen; state.gen[key] = target.type === 'checkbox' ? target.checked : target.tagName === 'SELECT' ? target.value : Number(target.value); }
   else if (target.dataset.terrain) {
     const terrain = getTerrain(); const key = target.dataset.terrain; const value = Number(target.value); pushHistory();
-    if (key === 'seed') terrain.seed = Math.round(value) || 1; else terrain.forest[key] = key === 'spacing' ? Math.min(30, Math.max(2, value || 4.5)) : Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0.9));
-    commitTerrain({ rebuild: true }); validate(); renderAll();
+    const spacingMax = Math.max(30, terrain.cell * 2);
+    if (key === 'seed') terrain.seed = Math.round(value) || 1;
+    else if (key === 'cell' || key === 'preset') {
+      if (terrain.isEmpty()) {
+        const preset = TERRAIN_PRESETS[target.value];
+        if (key === 'preset' && preset) { terrain.cell = preset.cell; terrain.forest = { ...preset.forest }; }
+        else if (key === 'cell') { terrain.cell = Math.min(5000, Math.max(4, Math.round(value) || TERRAIN_DEFAULTS.cell)); terrain.forest.spacing = Math.max(2, Math.min(spacingMax, terrain.cell * 0.4)); }
+        // el borrado de «terreno vacío» deja el terreno sin trozos; los parámetros se guardan igualmente
+      }
+    } else terrain.forest[key] = key === 'spacing' ? Math.min(spacingMax, Math.max(2, value || 4.5)) : Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0.9));
+    commitTerrain({ rebuild: true }); if (key === 'cell' || key === 'preset') fitBrush(); validate(); renderAll();
+  }
+  else if (target.dataset.route) { state.route[target.dataset.route] = target.value; renderPanel(); }
+  else if (target.dataset.speed) {
+    mutate((map) => {
+      const speeds = { ...(map.travel?.speedsKmh ?? {}) }; const value = Number(target.value);
+      if (target.value === '' || !(value > 0)) delete speeds[target.dataset.speed]; else speeds[target.dataset.speed] = value;
+      map.travel = Object.keys(speeds).length ? { speedsKmh: speeds } : null;
+    });
   }
   else if (target.dataset.m === 'name') mutate((map) => { map.name = target.value.trim(); });
   else if (target.dataset.u !== undefined) {
@@ -1133,13 +1550,17 @@ $('#panel').addEventListener('input', (event) => {   // los deslizadores se ven 
 $('#options').addEventListener('change', (event) => {
   const option = event.target.dataset.opt;
   if (option === 'area-kind') state.newArea = event.target.value;
+  else if (option === 'place-kind') state.newPlace.kind = event.target.value;
+  else if (option === 'link-mode') state.newLink.mode = event.target.value;
+  else if (option === 'link-line') { state.newLink.line = event.target.value; const line = state.map.lines.find((item) => item.id === event.target.value); if (line) { state.newLink.mode = line.mode; renderTools(); } }
+  else if (option === 'decor-kind') state.newDecor.kind = event.target.value;
   else if (option === 'way-kind') { state.newWay = { kind: event.target.value, width: WAY_WIDTH[event.target.value] }; renderTools(); }
   else if (option === 'way-width') state.newWay.width = Math.max(0.5, Number(event.target.value) || WAY_WIDTH[state.newWay.kind]);
 });
 $('#options').addEventListener('click', (event) => { const chip = event.target.closest('[data-brush-kind]'); if (chip) { state.brush.kind = chip.dataset.brushKind; renderTools(); } });
 $('#options').addEventListener('input', (event) => {
   const option = event.target.dataset.opt;
-  if (option === 'brush-size') { state.brush.radius = Math.round(8 * 375 ** (Number(event.target.value) / 100)); event.target.nextElementSibling.textContent = fmtMeters(state.brush.radius); placeBrushCursor(); }
+  if (option === 'brush-size') { const [rMin, rMax] = brushRange(); state.brush.radius = Math.round(rMin * (rMax / rMin) ** (Number(event.target.value) / 100)); event.target.nextElementSibling.textContent = fmtMeters(state.brush.radius); placeBrushCursor(); }
   else if (option === 'brush-rugged') state.brush.rugged = Number(event.target.value);
 });
 $('#options').addEventListener('change', (event) => {
@@ -1185,12 +1606,13 @@ window.addEventListener('keydown', (event) => {
   if (state.final) { if (event.key === 'Escape') { state.final = false; renderAll(); } return; }
   const ctrl = event.ctrlKey || event.metaKey;
   if (ctrl && event.key.toLowerCase() === 'g') { event.preventDefault(); newGroupFromSelection(); return; }
+  if (ctrl && event.key.toLowerCase() === 'd') { event.preventDefault(); duplicateSelection(); return; }
   if (ctrl && event.key.toLowerCase() === 'a') { event.preventDefault(); selectAll(); return; }
   if (event.key === 'Escape') { if (state.marquee) { state.marquee = null; renderCanvas(); } else if (state.draft || state.measure || state.calib) { state.draft = null; state.measure = null; state.calib = null; renderAll(); } else if (state.tool !== 'select') setTool('select'); else if (state.selection || state.multi.length) setSet([]); return; }
   if (event.key === 'Enter' && state.draft) { finishDraft(); return; }
   if (event.key === 'Backspace' && state.draft) { state.draft.points.pop(); if (!state.draft.points.length) state.draft = null; renderAll(); return; }
   if ((event.key === 'Delete' || event.key === 'Backspace') && (state.selection || state.multi.length)) { removeSelected(); return; }
-  if (state.tool === 'brush' && (event.key === '[' || event.key === ']')) { state.brush.radius = Math.min(3000, Math.max(8, Math.round(state.brush.radius * (event.key === ']' ? 1.2 : 1 / 1.2)))); renderTools(); renderCanvas(); return; }
+  if (state.tool === 'brush' && (event.key === '[' || event.key === ']')) { const [rMin, rMax] = brushRange(); state.brush.radius = Math.min(rMax, Math.max(rMin, Math.round(state.brush.radius * (event.key === ']' ? 1.2 : 1 / 1.2)))); renderTools(); renderCanvas(); return; }
   const tool = TOOLS.find(([, , key]) => key.toLowerCase() === event.key.toLowerCase());
   if (tool && !ctrl) setTool(tool[0]);
 });
@@ -1201,7 +1623,9 @@ window.addEventListener('beforeunload', (event) => { if (dirty()) { event.preven
   try {
     const wanted = new URLSearchParams(location.search).get('mapa');
     await refreshList(wanted);
-    const initial = wanted ?? (state.maps.length === 1 ? state.maps[0].id : '');
+    let last = null; try { last = localStorage.getItem('hom-map-last'); } catch { /* sin almacenamiento */ }
+    const has = (id) => state.maps.some((item) => item.id === id);
+    const initial = wanted ?? (has(last) ? last : has('northfortress_territory') ? 'northfortress_territory' : state.maps.length === 1 ? state.maps[0].id : '');
     if (initial) await openMap(initial);
   } catch (error) { setStatus(error.message === 'Las herramientas de desarrollo están desactivadas.' ? error.message : `No se pudo cargar: ${error.message}`, 'bad'); }
   renderAll();

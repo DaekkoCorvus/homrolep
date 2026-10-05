@@ -24,6 +24,7 @@ import { randomUUID } from 'node:crypto';
 import { createMapStore } from './game/maps.js';
 import { createGeography } from './game/geography.js';
 import { validateMap } from '../shared/mapSchema.js';
+import { planTrip, placeIndex } from '../shared/mapTravel.js';
 import { ensureChatIds, typingMs, readMs, quoteText, MAX_UNANSWERED } from './game/chatpace.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -46,10 +47,10 @@ const port = Number(process.env.PORT) || 3000;
 // HOM_DEBUG=1 (lo activa scripts/dev-local.mjs): registra en consola las peticiones /api y los errores del servidor.
 const debug = process.env.HOM_DEBUG === '1';
 
-const clientFiles = new Set(['/index.html', '/app.js', '/core.js', '/game.js', '/devtools.js', '/prompteditor.js', '/aitrace.js', '/northlife.js', '/chat.js', '/scenes.js', '/styles.css', '/game.css', '/mapeditor.html', '/mapeditor.js', '/mapeditor.css', '/mapview.js', '/maprender.js', '/worldmap.js']);
+const clientFiles = new Set(['/index.html', '/app.js', '/core.js', '/game.js', '/devtools.js', '/prompteditor.js', '/aitrace.js', '/northlife.js', '/chat.js', '/scenes.js', '/base.css', '/umbral.css', '/mundo.css', '/objetos.css', '/desarrollo.css', '/mapeditor.html', '/mapeditor.js', '/mapeditor.css', '/mapview.js', '/maprender.js', '/mapatlas.js', '/worldmap.js', '/textbox.js', '/actionbar.js', '/dialogs.js', '/settings.js', '/saves.js']);
 // Módulos que comparten el navegador y el motor (geometría y esquema del mapa): se sirven tal cual para que el editor valide igual que el servidor.
-const sharedFiles = new Set(['geo.js', 'mapSchema.js', 'mapDefaults.js', 'mapGen.js', 'mapSelect.js', 'mapStyle.js', 'mapTerrain.js', 'polygonClipping.js']);
-const mimeTypes = { '.png':'image/png', '.webp':'image/webp', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.json':'application/json; charset=utf-8', '.svg':'image/svg+xml' };
+const sharedFiles = new Set(['geo.js', 'mapSchema.js', 'mapDefaults.js', 'mapGen.js', 'mapSelect.js', 'mapStyle.js', 'mapTerrain.js', 'mapTravel.js', 'mapLayers.js', 'polygonClipping.js']);
+const mimeTypes = { '.png':'image/png', '.webp':'image/webp', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.json':'application/json; charset=utf-8', '.svg':'image/svg+xml', '.woff2':'font/woff2', '.txt':'text/plain; charset=utf-8' };
 
 function sendJson(response, status, body) {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
@@ -714,6 +715,17 @@ async function api(request, response, pathname) {
   if (request.method === 'GET' && pathname === '/api/world') return sendJson(response, 200, world().view(geography.version()));
   // El mapa para dibujarlo en el juego (solo lectura). `version` cambia cada vez que el autor guarda el mapa.
   if (request.method === 'GET' && pathname === '/api/world/map') return sendJson(response, 200, { version: geography.version(), map: geography.map() });
+  // Atlas (solo lectura): los mapas de región del canon (p. ej. el territorio de Northfortress) y las opciones de viaje entre sus lugares, calculadas con el mismo módulo
+  // que usa el editor (src/shared/mapTravel.js) a partir de las conexiones del mapa. Todavía no mueve al jugador: es la base para el viaje entre ciudades.
+  if (request.method === 'GET' && pathname === '/api/atlas') return sendJson(response, 200, { gameMap: world().mapId, maps: await maps.list() });
+  const atlas = request.method === 'GET' ? pathname.match(/^\/api\/atlas\/([a-z][a-z0-9_]{1,40})(\/route)?$/) : null;
+  if (atlas) {
+    const map = await maps.read(atlas[1]);
+    if (!atlas[2]) return sendJson(response, 200, { map });
+    const query = new URL(request.url, 'http://localhost').searchParams; const index = placeIndex(map);
+    if (!index.has(query.get('from')) || !index.has(query.get('to'))) return sendJson(response, 400, { error: 'Indica «from» y «to» con ids de lugares de ese mapa.', code: 'INVALID_PLACE' });
+    return sendJson(response, 200, planTrip(map, query.get('from'), query.get('to')));
+  }
   if (request.method === 'POST' && pathname === '/api/creation/whispers') {
     const input=await readBody(request);
     const profile={

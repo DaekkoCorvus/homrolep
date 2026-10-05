@@ -6,18 +6,36 @@
 // Los POLÍGONOS siguen sirviendo para las zonas urbanas (src/shared/mapGen.js); el terreno es el fondo natural sobre el que se colocan.
 import { mulberry32 } from './mapGen.js';
 
-export const TERRAIN_KINDS = ['water', 'land', 'sand', 'field', 'forest', 'park', 'mountain'];
-export const TERRAIN_CODE = { none: 0, water: 1, land: 2, sand: 3, field: 4, forest: 5, park: 6, mountain: 7 };
+// Los códigos 1–7 son los de siempre (los mapas guardados siguen valiendo); del 8 en adelante son los materiales de los mapas regionales.
+export const TERRAIN_KINDS = ['water', 'land', 'sand', 'field', 'forest', 'park', 'mountain', 'snow', 'desert', 'arid', 'urban', 'industrial'];
+export const TERRAIN_CODE = { none: 0, water: 1, land: 2, sand: 3, field: 4, forest: 5, park: 6, mountain: 7, snow: 8, desert: 9, arid: 10, urban: 11, industrial: 12 };
 export const CODE_KIND = [null, ...TERRAIN_KINDS];
-export const TERRAIN_LABEL = { water: 'Agua', land: 'Tierra', sand: 'Arena', field: 'Campo', forest: 'Bosque', park: 'Parque', mountain: 'Montaña' };
+export const MAX_CODE = TERRAIN_KINDS.length;
+export const TERRAIN_LABEL = { water: 'Agua', land: 'Tierra', sand: 'Arena', field: 'Campo', forest: 'Bosque', park: 'Parque', mountain: 'Montaña', snow: 'Nieve', desert: 'Desierto', arid: 'Zona árida', urban: 'Zona urbanizada', industrial: 'Industrial / degradado' };
 export const CHUNK = 32;                                   // celdas por lado de un trozo
 export const CHUNK_CELLS = CHUNK * CHUNK;
-export const TERRAIN_LIMITS = { chunks: 6000, cell: [4, 64], spacing: [2, 30] };
+// `cell` es el lado de una celda en metros: 16 m para una ciudad, ~1 km para una región de cientos de kilómetros.
+export const TERRAIN_LIMITS = { chunks: 6000, cell: [4, 5000], spacing: [2, 2000] };
 export const TERRAIN_DEFAULTS = { cell: 16, seed: 1, forest: { spacing: 4.5, density: 0.9 } };
+// Perfiles por escala para crear un mapa nuevo (el tamaño de celda y la separación de los árboles escalan juntos).
+export const TERRAIN_PRESETS = {
+  city: { label: 'Ciudad (celdas de 16 m)', cell: 16, forest: { spacing: 4.5, density: 0.9 } },
+  region: { label: 'Región de cientos de km (celdas de 1 km)', cell: 1000, forest: { spacing: 400, density: 0.95 } },
+  continent: { label: 'Continente (celdas de 5 km)', cell: 5000, forest: { spacing: 1800, density: 0.95 } }
+};
 // Orden de pintado de los materiales (la tierra es la base de todo lo pintado; el resto va encima).
-export const PAINT_ORDER = ['water', 'sand', 'field', 'park', 'forest', 'mountain'];
-const MOUNTAIN_SPACING = 40;
+export const PAINT_ORDER = ['water', 'sand', 'desert', 'arid', 'field', 'park', 'industrial', 'urban', 'forest', 'mountain', 'snow'];
 const MAX_SCATTER = 60000;
+// Lo que se dispersa por trozos con semilla: copas (bosque), cumbres (montaña, nieve) y manzanas de edificios (zonas urbanas e industriales).
+// `spacing(terrain)` es la separación base en metros; con 16 m de celda sale lo de siempre (40 m entre cumbres).
+const SCATTER = {
+  forest: { code: 'forest', salt: 11, spacing: (t) => t.forest.spacing, density: (t) => t.forest.density, radius: (spacing, g) => spacing * (0.5 + g * 0.4), reach: 0.7, minPixels: 2.5 },
+  mountain: { code: 'mountain', salt: 23, spacing: (t) => Math.max(40, t.cell * 2.5), density: () => 0.8, radius: (spacing, g) => spacing * (0.32 + g * 0.3), reach: 0.5, minPixels: 2.5 },
+  snow: { code: 'snow', salt: 29, spacing: (t) => Math.max(40, t.cell * 2.5), density: () => 0.8, radius: (spacing, g) => spacing * (0.32 + g * 0.3), reach: 0.5, minPixels: 2.5 },
+  urban: { code: 'urban', salt: 37, spacing: (t) => Math.max(8, t.cell * 0.32), density: () => 0.92, radius: (spacing, g) => spacing * (0.2 + g * 0.2), reach: 0.3, minPixels: 1.4 },
+  industrial: { code: 'industrial', salt: 41, spacing: (t) => Math.max(8, t.cell * 0.4), density: () => 0.7, radius: (spacing, g) => spacing * (0.2 + g * 0.26), reach: 0.3, minPixels: 1.4 }
+};
+export const SCATTER_KINDS = Object.keys(SCATTER);
 const EDGE_MARGINS = [2, 4, 8, 16, 32];
 
 // --- Ruido determinista -----------------------------------------------------------------------------------------------------------------------------
@@ -53,7 +71,7 @@ export function decodeChunk(text) {
   if (typeof text !== 'string' || !text || text.length > 40000) return null;
   const out = new Uint8Array(CHUNK_CELLS); let n = 0;
   for (const part of text.split(',')) {
-    const match = /^([0-7])(?:\*(\d{1,4}))?$/.exec(part); if (!match) return null;
+    const match = /^(\d{1,2})(?:\*(\d{1,4}))?$/.exec(part); if (!match || Number(match[1]) > MAX_CODE) return null;
     const run = match[2] ? Number(match[2]) : 1;
     if (run < 1 || n + run > CHUNK_CELLS) return null;
     out.fill(Number(match[1]), n, n + run); n += run;
@@ -303,13 +321,15 @@ export function contourChunk(terrain, cx, cy, code, stride = 1) {
 // Zoom → paso de contorno: el más fino cuyas celdas se ven de al menos ~3 píxeles.
 export function strideFor(cell, k) { let s = 1; while (s < CHUNK && cell * s * k < 3) s *= 2; return s; }
 
-// --- Árboles y montañas dibujadas por trozos ------------------------------------------------------------------------------------------------------------
+// --- Árboles, cumbres y manzanas dibujadas por trozos ----------------------------------------------------------------------------------------------------
 // `lod` ≥ 0 agranda el espaciado ×2^lod (al alejar el zoom, menos copas pero más grandes, para que el bosque siga viéndose tupido).
 // Devuelve [{ x, y, r, tone }] ordenado por y (se pintan de atrás hacia delante). El reparto no cambia si se pinta otro trozo.
+// `kind`: 'forest' | 'mountain' | 'snow' | 'urban' | 'industrial' (ver SCATTER).
 export function scatterChunk(terrain, cx, cy, kind, lod = 0) {
-  const code = TERRAIN_CODE[kind]; const cell = terrain.cell; const size = CHUNK * cell;
-  const base = kind === 'forest' ? terrain.forest.spacing : MOUNTAIN_SPACING; const spacing = base * 2 ** lod;
-  const density = kind === 'forest' ? terrain.forest.density : 0.8;
+  const spec = SCATTER[kind]; if (!spec) return [];
+  const code = TERRAIN_CODE[spec.code]; const cell = terrain.cell; const size = CHUNK * cell;
+  const spacing = Math.max(spec.spacing(terrain) * 2 ** lod, size / 600);   // tope de puntos por trozo: un separado absurdo no cuelga el editor
+  const density = spec.density(terrain);
   const x0 = cx * size; const y0 = cy * size;
   const m = CHUNK + 5; const raw = new Float32Array(m * m); const tmp = new Float32Array(m * m); const blurred = new Float32Array(m * m);
   let any = false;
@@ -323,20 +343,58 @@ export function scatterChunk(terrain, cx, cy, kind, lod = 0) {
     const u = fx - ix; const v = fy - iy;
     return blurred[iy * m + ix] * (1 - u) * (1 - v) + blurred[iy * m + ix + 1] * u * (1 - v) + blurred[(iy + 1) * m + ix] * (1 - u) * v + blurred[(iy + 1) * m + ix + 1] * u * v;
   };
-  const rng = chunkRng(terrain.seed, cx, cy, lod, kind === 'forest' ? 11 : 23); const steps = Math.ceil(size / spacing); const out = [];
+  const rng = chunkRng(terrain.seed, cx, cy, lod, spec.salt); const steps = Math.ceil(size / spacing); const out = [];
   for (let gj = 0; gj < steps; gj++) for (let gi = 0; gi < steps; gi++) {
     const x = x0 + (gi + 0.5 + (rng() - 0.5) * 0.9) * spacing; const y = y0 + (gj + 0.5 + (rng() - 0.5) * 0.9) * spacing;
     const keep = rng(); const grow = rng(); const tone = rng();
     if (x >= x0 + size || y >= y0 + size || keep > density || sample(x, y) < 0.58) continue;
-    out.push({ x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, r: Math.round((kind === 'forest' ? spacing * (0.5 + grow * 0.4) : spacing * (0.32 + grow * 0.3)) * 10) / 10, tone: Math.round(tone * 100) / 100 });
+    out.push({ x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, r: Math.round(spec.radius(spacing, grow) * 10) / 10, tone: Math.round(tone * 100) / 100 });
     if (out.length >= MAX_SCATTER) break;
   }
   return out.sort((a, b) => a.y - b.y);
 }
 
-// Nivel de detalle de los árboles para un zoom: las copas de ~radio·0,7 m deben verse de al menos ~2,5 píxeles.
-export function lodFor(terrain, k) {
-  const radius = terrain.forest.spacing * 0.7; let lod = 0;
-  while (lod < 6 && radius * 2 ** lod * k < 2.5) lod++;
+// Nivel de detalle para un zoom: lo que se dibuja (copas, cumbres, manzanas) debe verse de al menos ~minPixels píxeles.
+// Sin `kind` es el de los árboles, como siempre.
+export function lodFor(terrain, k, kind = 'forest') {
+  const spec = SCATTER[kind] ?? SCATTER.forest;
+  const radius = spec.spacing(terrain) * spec.reach; let lod = 0;
+  while (lod < 6 && radius * 2 ** lod * k < spec.minPixels) lod++;
   return lod;
+}
+
+// --- Formas ---------------------------------------------------------------------------------------------------------------------------------------
+// Pinta (o borra) las celdas cuyo centro cae dentro de un polígono [[x, y]…] (metros). El borde se deforma con ruido (`rugged` 0–1, en celdas) para que
+// no salga recto. `protect`: materiales que no se pisan. Devuelve cuántas celdas cambió. Sirve para trazar mares, desiertos o cordilleras de una vez.
+export function paintPolygon(terrain, polygon, kind, { mode = 'paint', rugged = 0.5, protect = [] } = {}) {
+  if (polygon.length < 3) return 0;
+  const code = mode === 'erase' || !kind || kind === 'none' ? 0 : TERRAIN_CODE[kind];
+  if (code === undefined) return 0;
+  const guarded = new Set(protect.map((name) => TERRAIN_CODE[name]).filter((value) => value));
+  const cell = terrain.cell; const box = boundsFromPoints(polygon);
+  const i0 = Math.floor(box.minX / cell) - 2; const i1 = Math.floor(box.maxX / cell) + 2; const j0 = Math.floor(box.minY / cell) - 2; const j1 = Math.floor(box.maxY / cell) + 2;
+  if ((i1 - i0 + 1) * (j1 - j0 + 1) > 4_000_000) return 0;
+  let changed = 0;
+  for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+    let x = (i + 0.5) * cell; let y = (j + 0.5) * cell;
+    if (rugged > 0) { x += (valueNoise(terrain.seed + 211, i * 0.37, j * 0.37) - 0.5) * 2 * rugged * cell * 1.6; y += (valueNoise(terrain.seed + 317, i * 0.37, j * 0.37) - 0.5) * 2 * rugged * cell * 1.6; }
+    if (!insidePolygon(x, y, polygon)) continue;
+    const current = terrain.get(i, j);
+    if (current === code || (guarded.has(current) && code !== current)) continue;
+    if (terrain.set(i, j, code)) changed++;
+  }
+  return changed;
+}
+function boundsFromPoints(points) {
+  let minX = Infinity; let minY = Infinity; let maxX = -Infinity; let maxY = -Infinity;
+  for (const [x, y] of points) { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+  return { minX, minY, maxX, maxY };
+}
+function insidePolygon(x, y, polygon) {   // trazado de rayos
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const [xi, yi] = polygon[i]; const [xj, yj] = polygon[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
 }

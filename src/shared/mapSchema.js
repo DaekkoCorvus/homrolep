@@ -7,13 +7,13 @@
 import { ID_PATTERN, round, districtAt, polygonArea, polygonSelfIntersects, polygonsOverlap, polylineLength, boundsOf, mergeBounds, growBounds } from './geo.js';
 import { THEME_IDS, sanitizePost } from './mapStyle.js';
 import { decodeChunk, encodeChunk, terrainBoundsOf, TERRAIN_LIMITS, TERRAIN_DEFAULTS } from './mapTerrain.js';
-import { AREA_KINDS, WAY_KINDS, FILL_PATTERNS, AREA_Z, WAY_Z, WAY_WIDTH, WAY_WIDTH_RANGE, FILL_DEFAULTS, FILL_RANGE, MAP_LIMITS } from './mapDefaults.js';
+import { AREA_KINDS, WAY_KINDS, FILL_PATTERNS, AREA_Z, WAY_Z, WAY_WIDTH, WAY_WIDTH_RANGE, FILL_DEFAULTS, FILL_RANGE, MAP_LIMITS, PLACE_KINDS, PLACE_IMPORTANCE, PLACE_ICONS, DECOR_KINDS, DECOR_SIZE } from './mapDefaults.js';
+import { LINK_MODES, TRAVEL_MODES, MAX_LINK_MINUTES, placeIndex, linkMinutes } from './mapTravel.js';
 
 export const SCHEMA_VERSION = 2;
-export const PLACE_KINDS = ['home', 'food', 'shop', 'poi', 'transport', 'gateway', 'other'];
+export { PLACE_KINDS, LINK_MODES };
 export const ACCESS = ['public', 'private', 'restricted'];
 export const DISCOVERY = ['hidden', 'rumor', 'known'];
-export const LINK_MODES = ['metro', 'ferry', 'train', 'other'];
 // Requisitos de acceso: tipos cerrados que valida el motor. El modelo nunca concede uno.
 export const REQUIREMENT_TYPES = ['escort', 'invitation', 'story_flag', 'knows_place', 'money'];
 
@@ -34,7 +34,7 @@ const optionalText = (value, max) => text(value, max) || null;
 
 export function emptyMap(id, name = '') {
   return {
-    schemaVersion: SCHEMA_VERSION, id, name, units: 'm', style: { theme: 'default' }, underlays: [], areas: [], ways: [], districts: [], places: [], links: [], groups: [], terrain: null, publish: null
+    schemaVersion: SCHEMA_VERSION, id, name, units: 'm', style: { theme: 'default' }, underlays: [], areas: [], ways: [], districts: [], places: [], links: [], lines: [], decor: [], groups: [], terrain: null, travel: null, publish: null
   };
 }
 
@@ -71,6 +71,13 @@ function normalizeTerrain(input) {
   };
 }
 
+// Velocidades de viaje de ESTE mapa (km/h por modo; las que falten salen de TRAVEL_MODES). null si no hay ninguna propia.
+function normalizeTravel(input) {
+  const speeds = {};
+  for (const mode of Object.keys(TRAVEL_MODES)) { const value = number(input.speedsKmh?.[mode]); if (Number.isFinite(value)) speeds[mode] = round(value, 2); }
+  return Object.keys(speeds).length ? { speedsKmh: speeds } : null;
+}
+
 // --- Normalización -------------------------------------------------------------------------------------------------------------------------------
 function normalizeFill(fill) {
   if (!fill || typeof fill !== 'object') return null;
@@ -91,6 +98,19 @@ function normalizeFill(fill) {
     out.rings = Math.round(pick(fill.rings, base.rings)); out.spokes = Math.round(pick(fill.spokes, base.spokes));
   }
   return out;
+}
+
+// Datos adicionales de un lugar (población, producción…): pares clave → texto, número o sí/no, ordenados por clave para que el archivo sea estable.
+function placeData(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const name = text(key, 40); if (!name) continue;
+    if (typeof raw === 'number' && Number.isFinite(raw)) out[name] = round(raw, 4);
+    else if (typeof raw === 'boolean') out[name] = raw;
+    else if (typeof raw === 'string') out[name] = raw.trim().slice(0, 200);
+  }
+  return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b, 'en')).slice(0, LIMITS.placeData));
 }
 
 function requirement(item) {
@@ -118,7 +138,8 @@ export function normalizeMap(source = {}) {
     const kind = text(area?.kind, 12) || 'land';
     return {
       id: text(area?.id, 41), name: text(area?.name, 60), kind, polygon: polygon(area?.polygon),
-      z: Number.isFinite(number(area?.z)) ? Math.round(number(area.z)) : (AREA_Z[kind] ?? 0), fill: normalizeFill(area?.fill), group: optionalText(area?.group, 41)
+      z: Number.isFinite(number(area?.z)) ? Math.round(number(area.z)) : (AREA_Z[kind] ?? 0), fill: normalizeFill(area?.fill), group: optionalText(area?.group, 41),
+      color: /^#[0-9a-f]{6}$/i.test(area?.color ?? '') ? area.color.toLowerCase() : null, faction: optionalText(area?.faction, 40)
     };
   });
   const ways = array(input.ways, LIMITS.ways).map((way) => {
@@ -142,13 +163,24 @@ export function normalizeMap(source = {}) {
       district: Number.isFinite(x) && Number.isFinite(y) ? districtAt({ x, y }, districts)?.id ?? null : null, // derivado: lo calcula el motor, no se edita
       access: text(place?.access, 12) || 'public', hours, tags: list(place?.tags, 12, 30), description: longText(place?.description, 600),
       discovery: text(place?.discovery, 10) || 'known', owner: optionalText(place?.owner, 41), footprint, group: optionalText(place?.group, 41),
-      requires: array(place?.requires, 6).map(requirement)
+      requires: array(place?.requires, 6).map(requirement),
+      importance: Number.isFinite(number(place?.importance)) ? Math.round(number(place.importance)) : (PLACE_IMPORTANCE[text(place?.kind, 20) || 'other'] ?? 2),
+      icon: optionalText(place?.icon, 20), faction: optionalText(place?.faction, 40), image: optionalText(place?.image, 80), data: placeData(place?.data)
     };
   });
+  // Enlace: trayecto escrito a mano entre dos lugares. `minutes` y `distanceKm` vacíos (null) se calculan del trazado y de la velocidad del modo (mapTravel.js).
   const links = array(input.links, LIMITS.links).map((link) => ({
     id: text(link?.id, 41), name: text(link?.name, 60), mode: text(link?.mode, 12) || 'other', from: text(link?.from, 41), to: text(link?.to, 41),
-    minutes: Math.round(number(link?.minutes)), cost: round(Number.isFinite(number(link?.cost)) ? number(link.cost) : 0, 2), requires: array(link?.requires, 6).map(requirement)
+    minutes: Number.isFinite(number(link?.minutes)) ? Math.round(number(link.minutes)) : null, cost: round(Number.isFinite(number(link?.cost)) ? number(link.cost) : 0, 2), requires: array(link?.requires, 6).map(requirement),
+    distanceKm: Number.isFinite(number(link?.distanceKm)) ? round(number(link.distanceKm), 2) : null, path: array(link?.path, LIMITS.linkVertices).map(point),
+    line: optionalText(link?.line, 41), twoWay: link?.twoWay !== false
   }));
+  const lines = array(input.lines, LIMITS.lines).map((line) => ({ id: text(line?.id, 41), name: text(line?.name, 60), mode: text(line?.mode, 12) || 'northline', color: /^#[0-9a-f]{6}$/i.test(line?.color ?? '') ? line.color.toLowerCase() : '#4aa3ff' }));
+  const decor = array(input.decor, LIMITS.decor).map((item) => {
+    const kind = text(item?.kind, 12) || 'compass';
+    return { id: text(item?.id, 41), name: text(item?.name, 60), kind, x: coord(item?.x), y: coord(item?.y), size: Number.isFinite(number(item?.size)) ? round(number(item.size), 1) : (DECOR_SIZE[kind] ?? 5000), rotation: round(Number.isFinite(number(item?.rotation)) ? number(item.rotation) : 0, 1), group: optionalText(item?.group, 41) };
+  });
+  const travel = input.travel && typeof input.travel === 'object' ? normalizeTravel(input.travel) : null;
   const groups = array(input.groups, LIMITS.groups).map((group) => ({ id: text(group?.id, 41), name: text(group?.name, 60), parent: optionalText(group?.parent, 41), locked: group?.locked === true, baked: optionalText(group?.baked, 80) }));
   const publish = input.publish && typeof input.publish === 'object' ? {
     version: Math.round(number(input.publish.version)), builtAt: text(input.publish.builtAt, 40), sourceHash: text(input.publish.sourceHash, 80), format: text(input.publish.format, 8) || 'webp',
@@ -157,7 +189,7 @@ export function normalizeMap(source = {}) {
   } : null;
   return {
     schemaVersion: SCHEMA_VERSION, id: text(input.id, 41), name: text(input.name, 60), units: 'm', style: { theme: text(input.style?.theme, 32) || 'default', ...(sanitizePost(input.style?.post) ? { post: sanitizePost(input.style.post) } : {}) },
-    underlays, areas, ways, districts, places, links, groups, terrain: normalizeTerrain(input.terrain), publish
+    underlays, areas, ways, districts, places, links, lines, decor, groups, terrain: normalizeTerrain(input.terrain), travel, publish
   };
 }
 
@@ -174,6 +206,8 @@ export const lockedBy = (map, element) => groupChain(map, element?.group).find((
 // Caja que contiene todo el mapa (con un margen que cubre la anchura de las líneas y de las capas de calco). null si está vacío.
 export function mapBounds(map) {
   let box = null;
+  for (const item of map.decor ?? []) if (Number.isFinite(item.x) && Number.isFinite(item.y)) box = mergeBounds(box, growBounds({ minX: item.x, minY: item.y, maxX: item.x, maxY: item.y }, (item.size || 0) / 2));
+  for (const link of map.links ?? []) { const pts = (link.path ?? []).filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y)); if (pts.length) box = mergeBounds(box, boundsOf(pts)); }
   for (const area of map.areas) box = mergeBounds(box, boundsOf(area.polygon.filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))));
   for (const district of map.districts) box = mergeBounds(box, boundsOf(district.polygon.filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))));
   const widest = map.ways.reduce((max, way) => Math.max(max, Number.isFinite(way.width) ? way.width : 0), 0);
@@ -301,6 +335,9 @@ export function validateMap(map, context = {}) {
     if (!PLACE_KINDS.includes(place.kind)) error('place_kind', `El lugar «${place.id}» tiene un tipo desconocido («${place.kind}»).`, ref);
     if (!ACCESS.includes(place.access)) error('place_access', `El lugar «${place.id}» tiene un acceso desconocido («${place.access}»).`, ref);
     if (!DISCOVERY.includes(place.discovery)) error('place_discovery', `El lugar «${place.id}» tiene un estado de descubrimiento desconocido.`, ref);
+    if (!(Number.isInteger(place.importance) && place.importance >= 1 && place.importance <= 5)) error('place_importance', `La importancia de «${place.id}» debe ser un entero de 1 a 5.`, ref);
+    if (place.icon && !PLACE_ICONS.includes(place.icon)) error('place_icon', `El lugar «${place.id}» tiene un icono desconocido («${place.icon}»).`, ref);
+    if (place.image && !IMAGE_FILE.test(place.image)) error('place_image', `La imagen de «${place.id}» no es válida (png, webp o jpg).`, ref);
     if (place.hours && !(Number.isInteger(place.hours.open) && Number.isInteger(place.hours.close) && place.hours.open >= 0 && place.hours.close <= 24 && place.hours.open < place.hours.close)) error('place_hours', `El horario de «${place.id}» no es válido (abre < cierra, de 0 a 24).`, ref);
     if (place.footprint && !(place.footprint.width > 0 && place.footprint.width <= 200 && place.footprint.depth > 0 && place.footprint.depth <= 200 && finite(place.footprint.rotation))) error('place_footprint', `La parcela de «${place.id}» no es válida (ancho y fondo entre 0 y 200 m).`, ref);
     if (map.districts.length && !place.district && inRange(place.x) && inRange(place.y)) warn('place_outside', `El lugar «${place.id}» no está dentro de ningún distrito.`, ref);
@@ -312,6 +349,14 @@ export function validateMap(map, context = {}) {
     if (Math.hypot(placed[i].x - placed[j].x, placed[i].y - placed[j].y) < MIN_PLACE_GAP) warn('places_overlap', `Los lugares «${placed[i].id}» y «${placed[j].id}» están en el mismo punto.`, { type: 'place', id: placed[i].id });
   }
 
+  const lineIds = new Set(); const seenLines = new Set();
+  for (const line of map.lines) lineIds.add(line.id);
+  map.lines.forEach((line, index) => {
+    const ref = { type: 'line', id: line.id || `#${index + 1}`, name: line.name };
+    unique(seenLines, line.id, 'line', 'La línea', ref);
+    if (!line.name) error('line_name', `La línea «${line.id}» necesita un nombre.`, ref);
+    if (!LINK_MODES.includes(line.mode)) error('line_mode', `La línea «${line.id}» tiene un modo desconocido («${line.mode}»).`, ref);
+  });
   const linkIds = new Set();
   map.links.forEach((link, index) => {
     const ref = { type: 'link', id: link.id || `#${index + 1}`, name: link.name };
@@ -320,7 +365,16 @@ export function validateMap(map, context = {}) {
     linkIds.add(link.id);
     if (!LINK_MODES.includes(link.mode)) error('link_mode', `El enlace «${link.id}» tiene un modo desconocido.`, ref);
     if (!knownPlace(link.from) || !knownPlace(link.to)) error('link_endpoint', `El enlace «${link.id}» une lugares que no existen («${link.from}» → «${link.to}»).`, ref);
-    if (!Number.isInteger(link.minutes) || link.minutes < 1 || link.minutes > 10080) error('link_minutes', `La duración del enlace «${link.id}» debe estar entre 1 minuto y 7 días.`, ref);
+    if (link.minutes !== null && (!Number.isInteger(link.minutes) || link.minutes < 1 || link.minutes > MAX_LINK_MINUTES)) error('link_minutes', `La duración del enlace «${link.id}» debe estar entre 1 minuto y 7 días.`, ref);
+    else if (link.minutes === null) {
+      const derived = linkMinutes(map, link, placeIndex(map));
+      if (derived === null) error('link_minutes', `El enlace «${link.id}» necesita minutos o una distancia: sus extremos no están en este mapa, así que no se puede calcular.`, ref);
+      else if (derived > MAX_LINK_MINUTES) error('link_minutes', `El tiempo calculado del enlace «${link.id}» pasa de 7 días: revisa su distancia.`, ref);
+    }
+    if (link.distanceKm !== null && !(link.distanceKm > 0 && link.distanceKm <= 5000)) error('link_distance', `La distancia del enlace «${link.id}» debe estar entre 0 y 5000 km.`, ref);
+    if (link.path.length && !pointsOk(link.path)) error('link_path', `El trazado del enlace «${link.id}» tiene puntos con coordenadas no válidas.`, ref);
+    if (link.from === link.to) error('link_loop', `El enlace «${link.id}» une un lugar consigo mismo.`, ref);
+    if (link.line && !lineIds.has(link.line)) error('link_line', `El enlace «${link.id}» pertenece a una línea que no existe («${link.line}»).`, ref);
     if (!(link.cost >= 0)) error('link_cost', `El costo del enlace «${link.id}» no puede ser negativo.`, ref);
     for (const need of link.requires) requirementIssues(need, `enlace «${link.id}»`, ref);
   });
@@ -333,6 +387,16 @@ export function validateMap(map, context = {}) {
     if (need.type === 'knows_place' && !knownPlace(need.place)) error('requirement_place', `El requisito «knows_place» del ${where} apunta a un lugar que no existe.`, ref);
     if (need.type === 'money' && !(need.amount >= 1)) error('requirement_money', `El requisito «money» del ${where} necesita una cantidad mayor que 0.`, ref);
   }
+
+  const decorIds = new Set();
+  map.decor.forEach((item, index) => {
+    const ref = { type: 'decor', id: item.id || `#${index + 1}`, name: item.name };
+    unique(decorIds, item.id, 'decor', 'El elemento decorativo', ref);
+    if (!DECOR_KINDS.includes(item.kind)) error('decor_kind', `El elemento decorativo «${item.id}» tiene un tipo desconocido («${item.kind}»).`, ref);
+    if (!inRange(item.x) || !inRange(item.y)) error('decor_position', `El elemento decorativo «${item.id}» tiene una posición no válida.`, ref);
+    if (!(item.size > 0 && item.size <= 1_000_000)) error('decor_size', `El tamaño de «${item.id}» debe ser mayor que 0.`, ref);
+    if (!finite(item.rotation)) error('decor_rotation', `La rotación de «${item.id}» no es válida.`, ref);
+  });
 
   // Grupos: ids únicos, padres que existen, sin ciclos, y elementos que apuntan a un grupo real.
   const groupIds = new Set(map.groups.map((group) => group.id));
@@ -350,10 +414,10 @@ export function validateMap(map, context = {}) {
     if (group.baked && !/^[a-z0-9_.-]+\.json$/.test(group.baked)) error('group_baked', `El archivo de edificios congelados de «${group.id}» no es válido.`, ref);
   });
   const members = new Map();
-  for (const [type, items] of [['area', map.areas], ['way', map.ways], ['district', map.districts], ['place', map.places]]) {
+  for (const [type, items] of [['area', map.areas], ['way', map.ways], ['district', map.districts], ['place', map.places], ['decor', map.decor]]) {
     for (const item of items) {
       if (!item.group) continue;
-      if (!groupIds.has(item.group)) error('group_missing', `${type === 'place' ? 'El lugar' : type === 'area' ? 'El área' : type === 'way' ? 'El camino' : 'El distrito'} «${item.id}» pertenece a un grupo que no existe («${item.group}»).`, { type, id: item.id });
+      if (!groupIds.has(item.group)) error('group_missing', `${type === 'place' ? 'El lugar' : type === 'area' ? 'El área' : type === 'way' ? 'El camino' : type === 'decor' ? 'La decoración' : 'El distrito'} «${item.id}» pertenece a un grupo que no existe («${item.group}»).`, { type, id: item.id });
       members.set(item.group, (members.get(item.group) ?? 0) + 1);
     }
   }
@@ -371,6 +435,8 @@ export function validateMap(map, context = {}) {
     const broken = keys.filter((key) => !decodeChunk(t.chunks[key]));
     if (broken.length) error('terrain_chunk', `El terreno tiene ${broken.length} trozo(s) dañado(s) (${broken.slice(0, 3).join('; ')}${broken.length > 3 ? '…' : ''}).`, where);
   }
+
+  if (map.travel) for (const [mode, kmh] of Object.entries(map.travel.speedsKmh)) if (!(kmh > 0 && kmh <= 2000)) error('travel_speed', `La velocidad de «${mode}» (${kmh} km/h) debe estar entre 0 y 2000.`, { type: 'map', id: map.id });
 
   if (map.publish) {
     const p = map.publish;

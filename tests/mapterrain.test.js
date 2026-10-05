@@ -21,7 +21,7 @@ test('a chunk is stored as runs and decodes back exactly; broken text is refused
   assert.ok(text.length < 60, text);
   assert.deepEqual(decodeChunk(text), cells);
   assert.equal(encodeChunk(new Uint8Array(CHUNK_CELLS)), '0*1024');
-  for (const bad of ['', 'x', '9*1024', '2*1023', '2*1025', '2*0,0*1024', '2*1024,1', '1,1,1', null, 5, '2*1024 ']) assert.equal(decodeChunk(bad), null, String(bad));
+  for (const bad of ['', 'x', '13*1024', '99*1024', '2*1023', '2*1025', '2*0,0*1024', '2*1024,1', '1,1,1', null, 5, '2*1024 ']) assert.equal(decodeChunk(bad), null, String(bad));
 });
 
 test('the grid reads and writes cells across chunks and negative coordinates', () => {
@@ -212,7 +212,8 @@ test('validation: damaged chunks, absurd cells and forests, and oversize terrain
   assert.deepEqual(check({ chunks: { '0,0': '2*1024' } }), []);
   assert.deepEqual(check({ chunks: { '0,0': '2*500' } }), ['terrain_chunk'], 'un trozo dañado no se pierde en silencio: se avisa');
   assert.deepEqual(check({ cell: 2, chunks: {} }), ['terrain_cell']);
-  assert.deepEqual(check({ cell: 100, chunks: {} }), ['terrain_cell']);
+  assert.deepEqual(check({ cell: 6000, chunks: {} }), ['terrain_cell']);
+  assert.deepEqual(check({ cell: 1000, forest: { spacing: 400, density: 0.9 }, chunks: {} }), [], 'una región de cientos de km usa celdas de ~1 km');
   assert.deepEqual(check({ forest: { spacing: 1, density: 0.5 }, chunks: {} }), ['terrain_forest']);
   assert.deepEqual(check({ forest: { spacing: 5, density: 2 }, chunks: {} }), ['terrain_forest']);
   const many = {}; for (let i = 0; i < 6001; i++) many[`${i},0`] = '2*1024';

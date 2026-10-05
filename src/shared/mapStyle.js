@@ -26,9 +26,9 @@ export const THEMES = {
   },
   parchment: {
     title: 'Pergamino', background: '#e9dcb8',
-    areas: { water: '#8fb4b8', land: '#e6d7a8', sand: '#ecdcae', field: '#d8cf8c', forest: '#9bb072', park: '#a9c27f', mountain: '#b8a58b', urban: '#d9c6a0', plaza: '#efe2bd' },
+    areas: { water: '#8fb4b8', land: '#e6d7a8', sand: '#ecdcae', field: '#d8cf8c', forest: '#9bb072', park: '#a9c27f', mountain: '#b8a58b', urban: '#d9c6a0', plaza: '#efe2bd', desert: '#e2c487', arid: '#c9a374', snow: '#f4f1e8', industrial: '#9b8a76', region: '#b8863f' },
     areaEdge: '#7a6a4a55', waterGlow: '#c7dcdc99',
-    ways: { avenue: '#f5ead0', street: '#f5ead0', path: '#cdb27f', river: '#8fb4b8', stream: '#9fc0c2', wall: '#5e5446', rail: '#6d6d70', bridge: '#e5d6b0' },
+    ways: { avenue: '#f5ead0', street: '#f5ead0', path: '#cdb27f', river: '#8fb4b8', stream: '#9fc0c2', wall: '#5e5446', rail: '#6d6d70', bridge: '#e5d6b0', border: '#a2432f' },
     casing: { ...casings('#8c7a5a'), river: '#5f8f96', stream: '#5f8f96' }, block: '#e3d2ac',
     buildings: { colors: ['#c58f6a', '#b97d58', '#d0a07a', '#a8714f'], cumulative: [0.25, 0.5, 0.8, 1], edge: '#6d4a35', shadow: { dx: 2.2, dy: 3, color: '#3a2a18', alpha: 0.3 }, ridge: true },
     trees: { colors: ['#6f8f4a', '#62823f', '#7d9d54', '#547538'], rim: '#34502a', shadow: { dx: 1.6, dy: 2.2, color: '#3a2a18', alpha: 0.25 }, highlight: '#b9cc8a77' },
@@ -38,9 +38,9 @@ export const THEMES = {
   },
   flat: {
     title: 'Plano limpio', background: '#f3f1ea',
-    areas: { water: '#a8d1ea', land: '#eae6d6', sand: '#f1e7c4', field: '#e3e6bd', forest: '#bfdcae', park: '#cbe8b6', mountain: '#d3cdc3', urban: '#e3dccd', plaza: '#f6f1e2' },
+    areas: { water: '#a8d1ea', land: '#eae6d6', sand: '#f1e7c4', field: '#e3e6bd', forest: '#bfdcae', park: '#cbe8b6', mountain: '#d3cdc3', urban: '#e3dccd', plaza: '#f6f1e2', desert: '#efdfae', arid: '#ddc7a0', snow: '#fbfcfd', industrial: '#c2b8aa', region: '#e0b04c' },
     areaEdge: '#00000014', waterGlow: null,
-    ways: { avenue: '#ffffff', street: '#ffffff', path: '#e6d9b8', river: '#a8d1ea', stream: '#b9dcf0', wall: '#8f887c', rail: '#a5a5ad', bridge: '#f1ece0' },
+    ways: { avenue: '#ffffff', street: '#ffffff', path: '#e6d9b8', river: '#a8d1ea', stream: '#b9dcf0', wall: '#8f887c', rail: '#a5a5ad', bridge: '#f1ece0', border: '#c0583f' },
     casing: { ...casings('#c9c2b2'), river: '#86b5d4', stream: '#86b5d4' }, block: '#ece6d8',
     buildings: { colors: ['#d6d0c4', '#cfc8ba', '#dcd6cb', '#c8c1b3'], cumulative: [0.25, 0.5, 0.75, 1], edge: '#b7b0a2', shadow: null, ridge: false },
     trees: { colors: ['#9fca88', '#92c07b', '#abd596', '#86b671'], rim: '#6d9a5c', shadow: null, highlight: '#c9e8b866' },
@@ -49,9 +49,9 @@ export const THEMES = {
   },
   night: {
     title: 'Noche', background: '#0f1626',
-    areas: { water: '#16314f', land: '#1b2434', sand: '#262a36', field: '#1e2a2a', forest: '#14281c', park: '#183221', mountain: '#2a2e3a', urban: '#222b3d', plaza: '#2f3850' },
+    areas: { water: '#16314f', land: '#1b2434', sand: '#262a36', field: '#1e2a2a', forest: '#14281c', park: '#183221', mountain: '#2a2e3a', urban: '#222b3d', plaza: '#2f3850', desert: '#3a3426', arid: '#33291f', snow: '#cfd8e8', industrial: '#2a2523', region: '#3b5a9a' },
     areaEdge: '#00000066', waterGlow: '#2a5a8a55',
-    ways: { avenue: '#4a587a', street: '#3f4b69', path: '#34405a', river: '#16314f', stream: '#1b3a5c', wall: '#0b0f18', rail: '#59607a', bridge: '#55638a' },
+    ways: { avenue: '#4a587a', street: '#3f4b69', path: '#34405a', river: '#16314f', stream: '#1b3a5c', wall: '#0b0f18', rail: '#59607a', bridge: '#55638a', border: '#d9684f' },
     casing: { ...casings('#0b0f18'), river: '#0c1e33', stream: '#0c1e33' }, block: '#2a3550',
     buildings: { colors: ['#2b3550', '#323d5a', '#273049', '#f0c36a'], cumulative: [0.3, 0.6, 0.9, 1], edge: '#0d121c', shadow: { dx: 2, dy: 3, color: '#000000', alpha: 0.4 }, ridge: true },
     trees: { colors: ['#17321f', '#1b3a25', '#122a1a', '#1f4128'], rim: '#08140c', shadow: { dx: 1.5, dy: 2, color: '#000000', alpha: 0.35 }, highlight: '#2f6a4488' },
@@ -59,11 +59,23 @@ export const THEMES = {
     label: { color: '#d8e0f0', halo: '#0f1626cc' },
     post: { grain: 0.35, mottle: 0.3, vignette: 0.55, saturation: 0.8, contrast: 1.1, warmth: -0.2, edge: 0.2, tint: [0.78, 0.86, 1.08] }
   },
+  atlas: {
+    title: 'Atlas oscuro', background: '#0a1626',
+    areas: { water: '#0f3556', land: '#506a39', sand: '#b8a06a', field: '#7c8c46', forest: '#2c5a2b', park: '#5c8c3f', mountain: '#6d675f', urban: '#555a66', plaza: '#6b7080', desert: '#c28f57', arid: '#9c6c45', snow: '#eef3f8', industrial: '#463a35', region: '#4aa3ff' },
+    areaEdge: '#00000055', waterGlow: '#3b86b866',
+    ways: { avenue: '#7a86a8', street: '#66728f', path: '#9a8458', river: '#2a6fa3', stream: '#2f78ad', wall: '#2a2622', rail: '#8a90a6', bridge: '#9ea8c8', border: '#e0624a' },
+    casing: { ...casings('#101521'), river: '#0b2d4a', stream: '#0b2d4a' }, block: '#3b4357',
+    buildings: { colors: ['#3a4660', '#46547a', '#2f3a52', '#f3c76e'], cumulative: [0.3, 0.62, 0.9, 1], edge: '#0d121c', shadow: { dx: 2, dy: 3, color: '#000000', alpha: 0.4 }, ridge: true },
+    trees: { colors: ['#27522a', '#2e6030', '#214a25', '#356b36'], rim: '#0f2a14', shadow: { dx: 1.5, dy: 2, color: '#000000', alpha: 0.3 }, highlight: '#5f9a4c66' },
+    mountain: { light: '#9a948a', dark: '#4b463f' }, snow: { light: '#ffffff', dark: '#aebfd6' },
+    label: { color: '#f1f5fb', halo: '#0a1626dd' },
+    post: { grain: 0.22, mottle: 0.2, vignette: 0.5, saturation: 1.08, contrast: 1.08, warmth: 0.05, edge: 0.3, tint: [0.96, 0.99, 1.06] }
+  },
   watercolor: {
     title: 'Acuarela', background: '#f6efe0',
-    areas: { water: '#9ec9dc', land: '#efe6c8', sand: '#f2e6c0', field: '#e6e3a8', forest: '#a8c98a', park: '#b9d99b', mountain: '#cdbfae', urban: '#e8d7bd', plaza: '#f7efd8' },
+    areas: { water: '#9ec9dc', land: '#efe6c8', sand: '#f2e6c0', field: '#e6e3a8', forest: '#a8c98a', park: '#b9d99b', mountain: '#cdbfae', urban: '#e8d7bd', plaza: '#f7efd8', desert: '#f0dcae', arid: '#e0c4a0', snow: '#fcfbf8', industrial: '#c9b9a8', region: '#d8a35a' },
     areaEdge: '#8a6b5a40', waterGlow: '#d7eef799',
-    ways: { avenue: '#fffaf0', street: '#fffaf0', path: '#dcc59a', river: '#9ec9dc', stream: '#b2d8e8', wall: '#8d7a6b', rail: '#8f8f98', bridge: '#f0e6cf' },
+    ways: { avenue: '#fffaf0', street: '#fffaf0', path: '#dcc59a', river: '#9ec9dc', stream: '#b2d8e8', wall: '#8d7a6b', rail: '#8f8f98', bridge: '#f0e6cf', border: '#b85c48' },
     casing: { ...casings('#b29a82'), river: '#6fa6bf', stream: '#6fa6bf' }, block: '#efe0c8',
     buildings: { colors: ['#e0aa90', '#d99a80', '#e8bba2', '#cf8e76'], cumulative: [0.25, 0.5, 0.8, 1], edge: '#a47c68', shadow: { dx: 1.8, dy: 2.4, color: '#6a4a3a', alpha: 0.16 }, ridge: false },
     trees: { colors: ['#92bb74', '#83ad66', '#a1c885', '#779f5b'], rim: '#5e8a4a', shadow: { dx: 1.4, dy: 2, color: '#6a4a3a', alpha: 0.14 }, highlight: '#cfe6b388' },
@@ -99,5 +111,8 @@ export function sanitizePost(input) {
   }
   return Object.keys(out).length ? out : null;
 }
+
+// Colores de las líneas de transporte y de los símbolos que no dependen del tema (la red Northline es luminosa en los estilos oscuros).
+export const SNOW_DEFAULT = { light: '#f7f9fc', dark: '#b9c6d8' };
 
 export const COVERED_KINDS = { areas: AREA_KINDS, ways: WAY_KINDS };
