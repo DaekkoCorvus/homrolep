@@ -1,5 +1,5 @@
-const CACHE = 'hom-rpg-v22';
-const ASSETS = ['/', '/styles.css', '/app.js', '/core.js', '/game.js', '/devtools.js', '/prompteditor.js', '/aitrace.js', '/northlife.js', '/chat.js', '/scenes.js', '/game.css', '/manifest.json', '/assets/V%C3%B3rtice%20liminal.html'];
+const CACHE = 'hom-rpg-v23';
+const ASSETS = ['/', '/styles.css', '/app.js', '/core.js', '/game.js', '/devtools.js', '/prompteditor.js', '/aitrace.js', '/northlife.js', '/chat.js', '/scenes.js', '/worldmap.js', '/mapview.js', '/maprender.js', '/shared/geo.js', '/shared/mapDefaults.js', '/shared/mapStyle.js', '/shared/mapTerrain.js', '/shared/mapGen.js', '/shared/polygonClipping.js', '/game.css', '/manifest.json', '/assets/V%C3%B3rtice%20liminal.html'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));

@@ -12,7 +12,7 @@ import { loadNpcs, presentNpcs } from '../src/server/game/npcs.js';
 
 const npcs = await loadNpcs(path.resolve('data/canon/npcs'));
 const luna = npcs.get('luna_serp');
-const worldData = JSON.parse(await readFile(path.resolve('data/canon/locations/porta_magna.json'), 'utf8'));
+import { worldData, fixtureGeography } from './support/world.js';
 const profile = { name: 'Mara', age: 24, gender: 'woman', race: 'human', appearance: '', origin: '' };
 const newRun = () => createRun(profile);
 const ctxOf = (run, extra = {}) => ({ run, worldData, npcs, present: (current) => presentNpcs(npcs, current.player.locationId, current.world), ...extra });
@@ -165,7 +165,7 @@ test('native transport: the model calls a tool, the engine runs it, and the mode
   assert.equal(second.at(-2).role, 'assistant');
   assert.equal(second.at(-1).role, 'tool');
   assert.equal(second.at(-1).tool_call_id, 'call_travel');
-  assert.deepEqual(JSON.parse(second.at(-1).content), { ok: true, place: 'cafe', name: "Luna's Coffee", minutes: 20, from: 'DAY_1_08:00', to: 'DAY_1_08:20' });
+  assert.deepEqual(JSON.parse(second.at(-1).content), { ok: true, place: 'cafe', name: "Luna's Coffee", distance: 1600, minutes: 20, from: 'DAY_1_08:00', to: 'DAY_1_08:20' });
 });
 
 test('a rejection goes back to the model as information, and bad or unknown calls never change the game', async () => {

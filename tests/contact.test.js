@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createAppServer } from '../src/server/index.js';
+import { fixtureGeography } from './support/world.js';
 
 test('contacts can be shared mid-conversation, only with every condition met, and regenerating undoes it', async (t) => {
   const runs = new Map();
@@ -12,7 +13,7 @@ test('contacts can be shared mid-conversation, only with every condition met, an
     evaluateEncounter: async () => ({ notes: [], summary: '' }),
     prologue: async () => ({ text: 'x', locationId: 'station' })
   };
-  const server = createAppServer({ ai, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
+  const server = createAppServer({ geography: fixtureGeography(), ai, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}`;

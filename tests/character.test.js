@@ -10,6 +10,7 @@ import { validateAgreements, addCommitments } from '../src/server/game/commitmen
 import { createRun, startEncounter, endEncounter } from '../src/server/game/run.js';
 import { loadNpcs, emptyRelationship, temporalContext } from '../src/server/game/npcs.js';
 import { createAppServer } from '../src/server/index.js';
+import { fixtureGeography } from './support/world.js';
 
 const npcs = await loadNpcs(path.resolve('data/canon/npcs'));
 const luna = npcs.get('luna_serp');
@@ -128,7 +129,7 @@ test('the JSON fallback codec and the old JSON reply format still work for model
 // --- Servidor: efectos validados, cierre en segundo plano ----------------------------------------------------------------------------
 async function boot(t, ai, { store, keep } = {}) {
   const runs = store ?? new Map();
-  const server = createAppServer({
+  const server = createAppServer({ geography: fixtureGeography(),
     ai: { prologue: async () => ({ text: 'x', locationId: 'station' }), narrate: async () => 'Pasa el tiempo.', ...ai },
     settings: { require: async () => ({ apiKey: 'k', model: 'm' }) },
     store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] }

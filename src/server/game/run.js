@@ -35,7 +35,8 @@ export function createRun(input = {}) {
 
 export function setPrologue(run, proposal, worldData) {
   const next = structuredClone(run);
-  const allowed = worldData.locations.find((location) => location.id === 'station')
+  // La partida empieza en el lugar de inicio del mundo (`spawn`); la propuesta del modelo solo cuenta si el mundo no lo define.
+  const allowed = worldData.locations.find((location) => location.id === worldData.spawn)
     ?? worldData.locations.find((location) => location.id === proposal.locationId);
   const locationId = allowed?.id ?? 'apartment';
   const text = String(proposal.text ?? '').trim().slice(0, 3000);
@@ -44,6 +45,18 @@ export function setPrologue(run, proposal, worldData) {
   next.prologue = { text, locationId, source: proposal.source === 'ai' ? 'ai' : 'local' };
   next.eventLog.push({ time: timeKey(next.world), type: 'prologue_created', data: { locationId } });
   next.updatedAt = new Date().toISOString();
+  return next;
+}
+
+// El mapa puede cambiar (el autor borra o renombra un lugar): una partida que está en un lugar que ya no existe vuelve al lugar de inicio, con un aviso
+// en el registro. Nunca se cae. Si el lugar existe (o el mundo no tiene lugar de inicio) devuelve la misma partida.
+export function relocateIfMissing(run, worldData) {
+  const missing = run?.player?.locationId;
+  if (!run?.player || !worldData?.spawn || worldData.place?.(missing)) return run;
+  const next = structuredClone(run);
+  next.player.locationId = worldData.spawn;
+  if (next.encounter) next.encounter.locationId = worldData.spawn;
+  next.eventLog.push({ time: timeKey(next.world), type: 'location_missing', data: { from: missing, to: worldData.spawn } });
   return next;
 }
 

@@ -18,7 +18,7 @@ import { createAppServer } from '../src/server/index.js';
 
 const npcs = await loadNpcs(path.resolve('data/canon/npcs'));
 const luna = npcs.get('luna_serp');
-const worldData = JSON.parse(await readFile(path.resolve('data/canon/locations/porta_magna.json'), 'utf8'));
+import { worldData, fixtureGeography } from './support/world.js';
 const tokens = (messages) => Math.round(messages.reduce((total, message) => total + message.content.length, 0) / 3.6);
 
 // --- Ficha en dos capas ----------------------------------------------------------------------------------------------------------------------
@@ -174,7 +174,7 @@ test('API: the free-world GM is told what changed since its last intervention, a
   };
   const ai = createNanoGPT(fetchImpl, { prompts: factory });
   ai.prologue = async () => ({ text: 'Llegas.', locationId: 'station' });
-  const server = createAppServer({ ai, prompts: factory, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
+  const server = createAppServer({ geography: fixtureGeography(), ai, prompts: factory, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const base = `http://127.0.0.1:${server.address().port}`;
   try {

@@ -7,6 +7,7 @@ import { applyAction } from '../src/server/ai/tools/game.js';
 import { createRun, startEncounter, addExchange, endEncounter, addContact, grantContact, leaveEncounter } from '../src/server/game/run.js';
 import { createNanoGPT } from '../src/server/ai/provider.js';
 import { createAppServer } from '../src/server/index.js';
+import { fixtureGeography } from './support/world.js';
 
 const npcs = await loadNpcs(path.resolve('data/canon/npcs'));
 const luna = npcs.get('luna_serp');
@@ -153,7 +154,7 @@ test('talk API: hidden notes stay hidden, failures keep the run intact, contact 
     evaluateEncounter: async () => ({ notes: [{ text: 'Me cae bien.', valence: 2, evidence: 'qué tal', tags: ['amabilidad'] }, { text: 'Simpática.', valence: 1, evidence: 'qué tal' }], summary: 'Charla breve.' }),
     prologue: async () => ({ text: 'Llegas.', locationId: 'station' })
   };
-  const server = createAppServer({
+  const server = createAppServer({ geography: fixtureGeography(),
     ai, settings: { require: async () => ({ apiKey: 'k', model: 'm' }), status: async () => ({}) },
     store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] }
   });

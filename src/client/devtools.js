@@ -18,6 +18,7 @@ const COMMANDS = [
   ['/prompts [personaje|texto|gm|social]', 'Abre el editor de prompts (módulos, orden, vista previa)'],
   ['/sonda [modelo …]', 'Prueba herramientas nativas, protocolo JSON y tiempos de uno o varios modelos'],
   ['/herramientas [auto|nativo|json]', 'Protocolo con el que el modelo guardado usa las herramientas del motor (sin argumento, muestra el actual)'],
+  ['/mapa', 'Abre el editor de mapas en otra pestaña (solo PC)'],
   ['/stats', 'Tiempos y tokens medios de las llamadas a la IA, por tipo'],
   ['/intenciones', 'Lista lo que el GM intentó hacer y el juego aún no resuelve (qué mecánicas construir)'],
   ['/contacto id', 'Desbloquea el contacto de un NPC (como si lo hubiera compartido)'],
@@ -81,6 +82,7 @@ export async function runCommand(text) {
   else if (command === '/feed') { try { await hooks.runDev({ op: 'social' }); await hooks.reload(); notify('Feed generado.'); } catch (error) { notify(error.message); } }
   else if (command === '/sonda' || command === '/probe') openProbe(argument.split(/[\s,]+/).filter(Boolean));
   else if (command === '/herramientas' || command === '/tools') await toolMode(argument);
+  else if (command === '/mapa' || command === '/map') window.open('/mapeditor.html', '_blank');
   else if (command === '/stats') openStats();
   else if (command === '/intenciones' || command === '/intents') openIntents();
   else if (command === '/prompts' || command === '/prompt') {
@@ -103,6 +105,7 @@ export async function openPanel() {
       <p class="dev-hint">Edita los módulos que se envían al modelo, su orden y su vista previa.</p></section>
     <section><h3>Modelos y medición</h3><div class="dev-buttons"><button type="button" data-probe>Sonda de modelos</button><button type="button" data-stats>Estadísticas de llamadas</button><button type="button" data-intents>Intenciones sin mecánica</button></div>
       <p class="dev-hint">Compara modelos (herramientas nativas, JSON, tiempos) y mira cuántos tokens y segundos cuesta cada tipo de llamada. El modelo se cambia en Ajustes sin necesidad de comprobarlo.</p></section>
+    <section><h3>Mapas</h3><div class="dev-buttons"><a class="dev-link" href="/mapeditor.html" target="_blank" rel="noopener">Abrir el editor de mapas</a></div><p class="dev-hint">Sube la imagen del mapa, calibra la escala, dibuja distritos y coloca lugares. Es una herramienta de PC; guarda en <code>data/canon/maps/</code>.</p></section>
     <section><h3>Fichas de NPC</h3><div class="dev-list">${cards.map((card) => `<div class="dev-row"><span><strong>${escapeHtml(card.name)}</strong><small>${escapeHtml(card.id)} · ${escapeHtml(card.role || 'sin rol')}</small></span><button type="button" data-edit="${escapeHtml(card.id)}">Editar</button><button type="button" data-export="${escapeHtml(card.id)}">Exportar</button></div>`).join('')}</div>
       <div class="dev-buttons"><button type="button" data-new>Nuevo NPC</button><label class="file-button">Importar ficha<input type="file" accept=".json,.png,application/json,image/png" hidden data-import></label></div>
       <p class="dev-hint">Importa JSON propio, fichas «character card» v1/v2/v3 (JSON o PNG). También puedes dejar archivos en <code>data/canon/npcs/</code> y <code>assets/portraits/&lt;id&gt;/default.png</code> y reiniciar el servidor.</p></section>

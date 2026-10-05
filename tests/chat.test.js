@@ -8,6 +8,7 @@ import { characterPlan } from '../src/server/ai/plans.js';
 import { compose, defaultPreset } from '../src/server/ai/composer.js';
 import { loadNpcs, emptyRelationship, temporalContext } from '../src/server/game/npcs.js';
 import { createAppServer } from '../src/server/index.js';
+import { fixtureGeography } from './support/world.js';
 
 const npcs = await loadNpcs(path.resolve('data/canon/npcs'));
 const luna = npcs.get('luna_serp');
@@ -73,7 +74,7 @@ test('in chat the character writes one message per line in a single call, and re
 // --- Servidor --------------------------------------------------------------------------------------------------------------------------
 async function boot(t, ai) {
   const runs = new Map(); const turns = [];
-  const server = createAppServer({
+  const server = createAppServer({ geography: fixtureGeography(),
     ai: { prologue: async () => ({ text: 'x', locationId: 'station' }), narrate: async () => 'Pasa el tiempo.', npcReply: async (context) => { turns.push(context); return { say: 'ok' }; }, ...ai },
     settings: { require: async () => ({ apiKey: 'k', model: 'm' }) },
     store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] }

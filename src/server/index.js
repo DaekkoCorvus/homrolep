@@ -2,7 +2,7 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createRun, setPrologue, startEncounter, addExchange, endEncounter, rewindEncounter, replaceLastNpcLine, reapplyEnding, setWorldTime, addContact, grantContact, leaveEncounter, MAX_PLAYER_TEXT } from './game/run.js';
+import { createRun, setPrologue, relocateIfMissing, startEncounter, addExchange, endEncounter, rewindEncounter, replaceLastNpcLine, reapplyEnding, setWorldTime, addContact, grantContact, leaveEncounter, MAX_PLAYER_TEXT } from './game/run.js';
 import { advanceTime, timeKey } from './game/clock.js';
 import { validateAgreements, addCommitments, applyUpdates, settleCommitments, keepMeetings, meetingNpcIds, commitmentsFor } from './game/commitments.js';
 import { validateNpcCard, fromForeignCard, parsePngCard, savePortrait, listPortraits, saveNpcCard, imageKind, removePortrait, renamePortrait, normalizeEmotion } from './game/cards.js';
@@ -21,14 +21,22 @@ import { noticesSince } from './ai/context/notices.js';
 import { feedDue, applyGeneratedPosts, applyReactions, wipeFeed, publishPlayerPost, publishPlayerReply, toggleLike, toggleRepost, saveProfile, profileMedia, markNotificationsRead, socialView, socialInput, threadFor, migrateSocial, expectedReplies, playerPopularity, keyOfMinutes, withAvatars, REFRESH_GAP } from './game/social.js';
 import { saveRun, loadRun, listRuns, deleteRun } from './saves/store.js';
 import { randomUUID } from 'node:crypto';
+import { createMapStore } from './game/maps.js';
+import { createGeography } from './game/geography.js';
+import { validateMap } from '../shared/mapSchema.js';
 import { ensureChatIds, typingMs, readMs, quoteText, MAX_UNANSWERED } from './game/chatpace.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const publicDir = path.join(root, 'public');
 const assetDir = path.join(root, 'assets');
 const clientDir = path.join(root, 'src/client');
-const worldData = JSON.parse(await readFile(path.join(root, 'data/canon/locations/porta_magna.json'), 'utf8'));
 const npcDir = path.join(root, 'data/canon/npcs');
+const sharedDir = path.join(root, 'src/shared');
+// Editor de mapas (modo desarrollo): los mapas del canon viven en data/canon/maps y sus imágenes en assets/maps.
+const defaultMapStore = createMapStore({ dir: path.join(root, 'data/canon/maps'), assetDir: path.join(assetDir, 'maps') });
+// Lugares, distancias y tiempos de viaje: UNA sola fuente (el mapa que designa data/canon/world.json), con recarga en caliente al guardarlo en el editor.
+const defaultGeography = createGeography({ worldFile: path.join(root, 'data/canon/world.json'), mapsDir: path.join(root, 'data/canon/maps'), warn: (message) => console.warn(`[mapa] ${message}`) });
+await defaultGeography.refresh(true);
 const npcs = await loadNpcs(npcDir);
 // Datos locales de la red social: cuentas canónicas (popularidad e imagen fijas, p. ej. @RexNova) y catálogo de avatares https para las
 // cuentas aleatorias. Todo lo demás lo inventa el modelo y lo valida el motor. Se relee solo si cambian los archivos.
@@ -38,7 +46,9 @@ const port = Number(process.env.PORT) || 3000;
 // HOM_DEBUG=1 (lo activa scripts/dev-local.mjs): registra en consola las peticiones /api y los errores del servidor.
 const debug = process.env.HOM_DEBUG === '1';
 
-const clientFiles = new Set(['/index.html', '/app.js', '/core.js', '/game.js', '/devtools.js', '/prompteditor.js', '/aitrace.js', '/northlife.js', '/chat.js', '/scenes.js', '/styles.css', '/game.css']);
+const clientFiles = new Set(['/index.html', '/app.js', '/core.js', '/game.js', '/devtools.js', '/prompteditor.js', '/aitrace.js', '/northlife.js', '/chat.js', '/scenes.js', '/styles.css', '/game.css', '/mapeditor.html', '/mapeditor.js', '/mapeditor.css', '/mapview.js', '/maprender.js', '/worldmap.js']);
+// Módulos que comparten el navegador y el motor (geometría y esquema del mapa): se sirven tal cual para que el editor valide igual que el servidor.
+const sharedFiles = new Set(['geo.js', 'mapSchema.js', 'mapDefaults.js', 'mapGen.js', 'mapSelect.js', 'mapStyle.js', 'mapTerrain.js', 'polygonClipping.js']);
 const mimeTypes = { '.png':'image/png', '.webp':'image/webp', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.json':'application/json; charset=utf-8', '.svg':'image/svg+xml' };
 
 function sendJson(response, status, body) {
@@ -55,7 +65,7 @@ async function readBody(request, limit = 32_000) {
   return raw ? JSON.parse(raw) : {};
 }
 
-export function createAppServer({ socialCatalog = defaultSocialCatalog, prompts = createPromptStore(), ai = createNanoGPT(fetch, { prompts }), settings = createSettingsStore(), store = { saveRun, loadRun, listRuns, deleteRun } } = {}) {
+export function createAppServer({ maps = defaultMapStore, geography = defaultGeography, socialCatalog = defaultSocialCatalog, prompts = createPromptStore(), ai = createNanoGPT(fetch, { prompts }), settings = createSettingsStore(), store = { saveRun, loadRun, listRuns, deleteRun } } = {}) {
 // Una partida solo admite una operación a la vez. Las del jugador se rechazan si hay otra en curso; el trabajo de fondo (evaluar una
 // conversación, generar el feed) hace su llamada al modelo SIN tener la partida y solo espera su turno para aplicar el resultado
 // (cargar, aplicar, guardar: milisegundos), así que nunca pisa lo que el jugador hizo mientras tanto ni lo bloquea.
@@ -83,6 +93,8 @@ function enqueue(runId, label, task) {
   return next;
 }
 
+const world = () => geography.world();
+
 // Lo que el cliente ve de una Run: las impresiones ocultas de los NPC solo salen en modo desarrollador.
 async function publicRun(run, dev = false) {
   const toPublic = async (npc) => ({ ...publicNpc(npc), portraits: await listPortraits(assetDir, npc.id) });
@@ -99,9 +111,10 @@ async function publicRun(run, dev = false) {
 }
 
 // Datos para el prompt social (cuentas, contactos, publicaciones recientes) y opciones de validación del motor.
-const loadGame = async (id) => withAvatars(ensureChatIds(await store.loadRun(id)), socialCatalog.current().avatars, socialCatalog.current().seeds);
+// Una partida que está en un lugar que el mapa ya no tiene (el autor lo borró o renombró) vuelve al lugar de inicio, con un aviso en el registro.
+const loadGame = async (id) => withAvatars(ensureChatIds(relocateIfMissing(await store.loadRun(id), world())), socialCatalog.current().avatars, socialCatalog.current().seeds);
 const socialOptions = () => ({ npcs, seeds: socialCatalog.current().seeds, avatars: socialCatalog.current().avatars });
-const socialContext = (run, mode, extra = {}) => socialInput(run, mode, { npcs, seeds: socialCatalog.current().seeds, places: worldData.locations.map(({ name }) => name), ahora: temporalContext({ encounters: 0, notes: [], history: [] }, run.world).ahora, extra });
+const socialContext = (run, mode, extra = {}) => socialInput(run, mode, { npcs, seeds: socialCatalog.current().seeds, places: world().locations.map(({ name }) => name), ahora: temporalContext({ encounters: 0, notes: [], history: [] }, run.world).ahora, extra });
 
 // Quién está aquí ahora: su horario, más quien espera al jugador en una cita acordada.
 function presentFor(run) {
@@ -114,7 +127,7 @@ function presentFor(run) {
 // Contexto completo para el GM: lugar, hora, relación, recuerdos, sucesos recientes, contacto y emociones disponibles
 // (las que existan como imagen del NPC). `speak` convierte las marcas [\\emoción] de la respuesta en tramos.
 async function contextFor(run, npc) {
-  const location = worldData.locations.find(({ id }) => id === run.player.locationId);
+  const location = world().locations.find(({ id }) => id === run.player.locationId);
   const emotions = Object.keys(await listPortraits(assetDir, npc.id)).filter((name) => name !== 'default');
   const build = (relationship, transcript, extra = {}) => ({
     npc, player: run.player, world: run.world, location, relationship, attitude: attitudeOf(affinityOf(relationship.notes)), transcript,
@@ -123,7 +136,7 @@ async function contextFor(run, npc) {
   });
   // Si una expresión «que se mantiene» sigue activa, una respuesta sin marcas la conserva (empieza con ella).
   build.gmCommitments = commitmentsFor(run, npc.id, { withIds: true });
-  build.locations = worldData.locations.map(({ id, name }) => ({ id, nombre: name }));
+  build.locations = world().locations.map(({ id, name }) => ({ id, nombre: name }));
   build.speak = (reply, linesBefore = run.encounter?.lines) => ({ ...reply, gesture: stripMarks(reply.gesture), intent: stripMarks(reply.intent), ...parseSpeech(reply.say, emotions, stickyFrom(linesBefore, npc) ?? 'default') });
   build.farewell = (text) => parseSpeech(text, emotions, stickyFrom(run.encounter?.lines, npc) ?? 'default');
   return build;
@@ -141,7 +154,7 @@ async function evaluateAndClose(run, npc, relationship, lines, startedAt, config
   const farewell = context.speak(farewellRaw, lines);
   return {
     relationship: updated, farewell, contactGranted: contactAllowed(npc, updated, farewell.contact),
-    agreements: validateAgreements(raw?.agreements, lines, run.world, worldData.locations.map(({ id }) => id)), updates: raw?.updates, lines
+    agreements: validateAgreements(raw?.agreements, lines, run.world, world().locations.map(({ id }) => id)), updates: raw?.updates, lines
   };
 }
 
@@ -161,7 +174,7 @@ const factsClaim = (items) => ({
 async function applyReply(run, npc, reply, lines, config) {
   let next = await applyContactClaim(run, reply.contact, config);
   if (reply.agreements?.length) {
-    const agreements = validateAgreements(reply.agreements, lines.slice(-6), next.world, worldData.locations.map(({ id }) => id), { npcAccepts: true });
+    const agreements = validateAgreements(reply.agreements, lines.slice(-6), next.world, world().locations.map(({ id }) => id), { npcAccepts: true });
     if (agreements.length) { next = structuredClone(next); addCommitments(next, npc.id, agreements); }
   }
   if (reply.facts?.length) {
@@ -208,7 +221,7 @@ async function runEvaluation(runId) {
     await settle((next) => {
       const { relationship } = applyEvaluation(relationshipOf(next, npc.id), validateEvaluation(raw, pending.lines), pending.startedAt);
       next.relationships[npc.id] = relationship;
-      recordOutcome(next, npc.id, { agreements: validateAgreements(raw?.agreements, pending.lines, pending.world, worldData.locations.map(({ id }) => id)), updates: raw?.updates, lines: pending.lines });
+      recordOutcome(next, npc.id, { agreements: validateAgreements(raw?.agreements, pending.lines, pending.world, world().locations.map(({ id }) => id)), updates: raw?.updates, lines: pending.lines });
       delete next.pendingEvaluation;
     });
   } catch (error) {
@@ -282,7 +295,7 @@ async function devOperation(run, body, config) {
     }
     if (last?.data?.response && !String(last.type).startsWith('conversation')) {
       const before = { ...run, eventLog: run.eventLog.slice(0, -1), player: { ...run.player, locationId: last.from ?? run.player.locationId } };
-      const narrative = await ai.narrate(before, run, worldData, config, npcs);
+      const narrative = await ai.narrate(before, run, world(), config, npcs);
       const next = structuredClone(run);
       next.eventLog.at(-1).data.response = narrative;
       next.narrative = { text: narrative, time: last.time };
@@ -304,7 +317,7 @@ async function devOperation(run, body, config) {
   }
   if (body.op === 'teleport') {
     if (run.encounter) throw new Error('Termina la conversación antes de moverte.');
-    if (!worldData.locations.some(({ id }) => id === body.locationId)) throw new Error('Lugar desconocido.');
+    if (!world().locations.some(({ id }) => id === body.locationId)) throw new Error('Lugar desconocido.');
     const next = structuredClone(run);
     next.player.locationId = body.locationId;
     next.updatedAt = new Date().toISOString();
@@ -337,8 +350,8 @@ async function previewPlan(kind, mode, run, npcId) {
     return characterPlan(context(relationship, mode === 'open' ? [] : withPlayer(lines), { mode }));
   }
   if (kind === 'gm') {
-    if (mode === 'free') return worldPlan(run, worldData, ambientHeader({ run, worldData, present: here, npcs }));
-    if (mode === 'action') return narrationPlan(mode, run, run, worldData);
+    if (mode === 'free') return worldPlan(run, world(), ambientHeader({ run, worldData: world(), present: here, npcs }));
+    if (mode === 'action') return narrationPlan(mode, run, run, world());
     const context = await contextFor(run, npc);
     return evaluationPlan(context(relationshipOf(run, npc.id), withPlayer(run.encounter?.lines ?? run.lastEncounter?.lines), { commitments: context.gmCommitments, locations: context.locations }));
   }
@@ -380,11 +393,46 @@ async function promptRoutes(request, response, pathname) {
   return sendJson(response, 405, { error: 'Método no permitido.' });
 }
 
+// Contexto con el que se valida un mapa: ids de otros mapas, personajes y los lugares que usan sus fichas (home y horarios).
+async function mapContext(exceptId) {
+  const refs = [];
+  for (const npc of npcs.values()) {
+    if (npc.home) refs.push({ npcId: npc.id, placeId: npc.home, where: `${npc.name} (su casa)` });
+    for (const slot of npc.schedule ?? []) refs.push({ npcId: npc.id, placeId: slot.locationId, where: `${npc.name} (horario)` });
+  }
+  return { takenIds: await maps.takenIds(exceptId), npcIds: new Set(npcs.keys()), legacyIds: new Set(), refs };
+}
+const mapContextView = (context) => ({ takenIds: [...context.takenIds], npcIds: [...context.npcIds], legacyIds: [...context.legacyIds], refs: context.refs });
+
+async function mapRoutes(request, response, pathname) {
+  if (request.method === 'GET' && pathname === '/api/dev/maps') return sendJson(response, 200, { maps: await maps.list(), ...mapContextView(await mapContext(null)) });
+  const match = pathname.match(/^\/api\/dev\/maps\/([a-z][a-z0-9_]{1,40})(\/image)?$/);
+  if (!match) return sendJson(response, 404, { error: 'Ruta de mapas no encontrada.' });
+  const [, id, image] = match;
+  if (request.method === 'GET' && !image) {
+    const map = await maps.read(id);
+    const context = await mapContext(id);
+    return sendJson(response, 200, { map, context: mapContextView(context), issues: (({ errors, warnings }) => ({ errors, warnings }))(validateMap(map, context)) });
+  }
+  if (request.method === 'PUT' && !image) {
+    const body = await readBody(request, 12_000_000);   // un terreno pintado grande pesa más que el resto del mapa junto
+    const saved = await maps.save(id, body.map ?? {}, await mapContext(id));
+    await geography.refresh(true);   // el juego usa el mapa recién guardado sin reiniciar
+    return sendJson(response, 200, { map: saved.map, issues: { errors: [], warnings: saved.warnings } });
+  }
+  if (request.method === 'POST' && image) {
+    const body = await readBody(request, 34_000_000);
+    return sendJson(response, 200, { image: await maps.saveImage(id, Buffer.from(String(body.data ?? ''), 'base64'), String(body.name ?? 'base')) });
+  }
+  return sendJson(response, 405, { error: 'Método no permitido.' });
+}
+
 async function devRoutes(request, response, pathname) {
   if (request.headers['x-hom-dev'] !== '1') throw new AIError('Las herramientas de desarrollo están desactivadas.', 'DEV_DISABLED', 403);
-  const locationIds = worldData.locations.map(({ id }) => id);
+  const locationIds = world().locations.map(({ id }) => id);
   const withPortraits = async (npc) => ({ ...npc, portraits: await listPortraits(assetDir, npc.id) });
   if (pathname.startsWith('/api/dev/prompts')) return promptRoutes(request, response, pathname);
+  if (pathname.startsWith('/api/dev/maps')) return mapRoutes(request, response, pathname);
   if (request.method === 'GET' && pathname === '/api/dev/npcs') return sendJson(response, 200, await Promise.all([...npcs.values()].map(withPortraits)));
   if (request.method === 'POST' && pathname === '/api/dev/npcs/import') {
     const body = await readBody(request, 12_000_000);
@@ -431,7 +479,7 @@ async function devRoutes(request, response, pathname) {
 }
 
 // Contexto de las herramientas del motor: la partida, el mundo y lo que hace falta para conversar. Los botones y el modelo comparten handlers.
-const toolContext = (run, config) => ({ run, worldData, npcs, present: presentFor, openConversation: (current, npc) => openConversation(current, npc, config) });
+const toolContext = (run, config) => ({ run, worldData: world(), npcs, present: presentFor, openConversation: (current, npc) => openConversation(current, npc, config) });
 
 // El personaje declara `contact` en su respuesta; eso equivale a llamar a `share_contact`, y el motor decide con las mismas reglas.
 async function applyContactClaim(run, claim, config) {
@@ -484,13 +532,13 @@ async function talk(run, body, config) {
 // Acción libre: el motor anota lo escrito y el GM, con la cabecera ambiente, actúa con herramientas (viajar, esperar, conversar con alguien
 // presente, `attempt` para lo que aún no tiene mecánica…). Cada herramienta pasa por el mismo handler que los botones; si algo falla, no se guarda nada.
 async function performAction(before, input, config) {
-  let run = applyAction(before, input, worldData);
+  let run = applyAction(before, input, world());
   const event = run.eventLog.at(-1);
   if (input.type === 'freeform' && typeof ai.act === 'function') {
     const state = toolContext(run, config);
-    const notices = noticesSince(run, { worldData, npcs, from: run.cursors?.gm ?? null, skipLast: 1, max: 8 });
-    const header = ambientHeader({ run, worldData, present: presentFor(run), npcs, notices });
-    const result = await ai.act(worldPlan(run, worldData, header), { registry: gameRegistry, state }, config);
+    const notices = noticesSince(run, { worldData: world(), npcs, from: run.cursors?.gm ?? null, skipLast: 1, max: 8 });
+    const header = ambientHeader({ run, worldData: world(), present: presentFor(run), npcs, notices });
+    const result = await ai.act(worldPlan(run, world(), header), { registry: gameRegistry, state }, config);
     if (!result.text) throw new AIError('El GM no devolvió una narración. Tu partida no ha cambiado; puedes reintentar.', 'AI_RESPONSE');
     run = result.run;
     run.cursors = { ...run.cursors, gm: run.eventLog.length }; // lo siguiente que el GM sabrá por avisos es lo que ocurra después de esta llamada
@@ -501,7 +549,7 @@ async function performAction(before, input, config) {
     if (run.encounter && !before.encounter) run.encounter.lines.unshift({ who: 'narrator', text: result.text });
     return run;
   }
-  const narrative = await ai.narrate(before, run, worldData, config, npcs);
+  const narrative = await ai.narrate(before, run, world(), config, npcs);
   event.data = { ...event.data, response: narrative };
   run.narrative = { text: narrative, time: event.time };
   return run;
@@ -616,6 +664,7 @@ async function runReaction(runId, itemId) {
 
 async function api(request, response, pathname) {
   if (pathname.startsWith('/api/runs')) await socialCatalog.refresh();
+  await geography.refresh();   // si el autor guardó el mapa en el editor, este mismo juego ya usa el nuevo (como mucho 2 s de retraso)
   // Si el cliente cancela (botón detener) o se desconecta, se aborta la llamada a la IA y no se guarda nada.
   const controller = new AbortController();
   response.on('close', () => { if (!response.writableEnded) controller.abort(); });
@@ -661,7 +710,10 @@ async function api(request, response, pathname) {
     return sendJson(response, 200, request.method === 'POST' ? await settings.setToolMode(model, String(body.mode)) : await settings.toolMode(model));
   }
   if (pathname.startsWith('/api/dev/')) return devRoutes(request, response, pathname);
-  if (request.method === 'GET' && pathname === '/api/world') return sendJson(response, 200, worldData);
+  // El mundo que ve el cliente: lugares con los nombres del mapa, SIN tiempos de viaje fijos (dependen del origen: /api/runs/:id/map).
+  if (request.method === 'GET' && pathname === '/api/world') return sendJson(response, 200, world().view(geography.version()));
+  // El mapa para dibujarlo en el juego (solo lectura). `version` cambia cada vez que el autor guarda el mapa.
+  if (request.method === 'GET' && pathname === '/api/world/map') return sendJson(response, 200, { version: geography.version(), map: geography.map() });
   if (request.method === 'POST' && pathname === '/api/creation/whispers') {
     const input=await readBody(request);
     const profile={
@@ -684,7 +736,7 @@ async function api(request, response, pathname) {
     return exclusive('creation', async () => {
       const config = await requireConfig();
       const draft = createRun(input);
-      const run = setPrologue(draft, await ai.prologue(draft.player, worldData, config), worldData);
+      const run = setPrologue(draft, await ai.prologue(draft.player, world(), config), world());
       await save(run);
       return sendRun(201, run);
     });
@@ -696,7 +748,7 @@ async function api(request, response, pathname) {
     response.writeHead(200, { 'content-type': file.mime, 'cache-control': 'private, max-age=31536000, immutable' });
     return response.end(file.buffer);
   }
-  const match = pathname.match(/^\/api\/runs\/([0-9a-f-]{36})(?:\/(action|posts|social|talk|dev|contacts|chat|slot))?$/i);
+  const match = pathname.match(/^\/api\/runs\/([0-9a-f-]{36})(?:\/(action|posts|social|talk|dev|contacts|chat|slot|map))?$/i);
   if (!match) return sendJson(response, 404, { error: 'Ruta no encontrada.' });
   const [, id, operation] = match;
   if (request.method === 'DELETE' && !operation) {
@@ -729,6 +781,14 @@ async function api(request, response, pathname) {
     });
   }
   if (request.method === 'GET' && !operation) return sendRun(200, await loadGame(id));
+  // Mapa jugable: cómo está cada lugar respecto a donde está el jugador (metros y minutos a pie que calcula el motor) y quién suele estar allí
+  // entre las personas que el jugador ya conoce. Es solo lectura: viajar sigue siendo la acción `travel` del motor.
+  if (request.method === 'GET' && operation === 'map') {
+    const run = await loadGame(id);
+    const current = world();
+    const usual = (placeId) => [...npcs.values()].filter((npc) => run.relationships?.[npc.id]?.met && npc.schedule.some((slot) => slot.locationId === placeId)).map(({ id: npcId, name }) => ({ id: npcId, name }));
+    return sendJson(response, 200, { version: geography.version(), from: run.player.locationId, spawn: current.spawn, places: current.travelTable(run.player.locationId).map((row) => ({ ...row, usual: usual(row.id) })), world: current.view(geography.version()) });
+  }
   if (request.method === 'POST' && operation === 'action') {
     const input = await readBody(request);
     return exclusive(id, async () => {
@@ -817,8 +877,9 @@ async function staticFile(response, pathname) {
   const route = decodeURIComponent(pathname === '/' ? '/index.html' : pathname);
   const isAsset = route.startsWith('/assets/');
   if (route.startsWith('/assets/portraits/') && route.split('/').includes('source')) throw Object.assign(new Error('Ruta no encontrada.'), { code: 'ENOENT' });
-  const base = isAsset ? assetDir : clientFiles.has(route) ? clientDir : publicDir;
-  const filePath = isAsset ? route.slice('/assets'.length) : route;
+  const isShared = route.startsWith('/shared/') && sharedFiles.has(route.slice('/shared/'.length));
+  const base = isAsset ? assetDir : isShared ? sharedDir : clientFiles.has(route) ? clientDir : publicDir;
+  const filePath = isAsset ? route.slice('/assets'.length) : isShared ? route.slice('/shared'.length) : route;
   const target = path.resolve(base, `.${filePath}`);
   if (!target.startsWith(base + path.sep)) throw Object.assign(new Error('Ruta inválida.'), { code: 'ENOENT' });
   const content = await readFile(target);
@@ -846,7 +907,7 @@ const server = http.createServer(async (request, response) => {
     const status = error.status || (error.code === 'ENOENT' ? 404 : 400);
     const message = error instanceof SyntaxError ? 'Solicitud JSON inválida.' : error.message;
     if (debug && status !== 404) console.error(`[error] ${request.method} ${request.url} -> ${status} ${error.code || ''} ${error.message}`);
-    if (!response.headersSent) sendJson(response, status, { error:message, code:error.code || 'INVALID_REQUEST' });
+    if (!response.headersSent) sendJson(response, status, { error:message, code:error.code || 'INVALID_REQUEST', ...(error.issues ? { issues:error.issues } : {}) });
   }
 });
 server.idle = async () => { while (jobs.size) await Promise.all([...jobs.values()]); };

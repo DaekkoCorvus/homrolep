@@ -7,6 +7,7 @@ import { once } from 'node:events';
 import { createNanoGPT, NANOGPT_HOSTS } from '../src/server/ai/provider.js';
 import { createSettingsStore } from '../src/server/ai/settings.js';
 import { createAppServer } from '../src/server/index.js';
+import { fixtureGeography } from './support/world.js';
 
 const profile = { name:'Mara', age:24, gender:'woman', race:'human', origin:'Viajé en tren en busca de mi hermana.' };
 const completion = (content, finish_reason='stop') => ({ ok:true, json:async()=>({ choices:[{ message:{ content }, finish_reason }] }) });
@@ -44,7 +45,7 @@ test('settings gate, generation, persistence, failures and concurrent requests w
     if(body.messages[0].content.includes('prólogo de 2 a 4 frases')) return completion(JSON.stringify({text:'La estación te recibe entre murmullos.',locationId:badPrologue?'unknown':'station'}));
     return completion('Una viajera levanta la mirada y responde a tu saludo.');
   });
-  const server=createAppServer({ai,settings,store:{
+  const server=createAppServer({geography:fixtureGeography(),ai,settings,store:{
     saveRun:async(run)=>runs.set(run.id,structuredClone(run)),
     loadRun:async(id)=>structuredClone(runs.get(id)),
     listRuns:async()=>[...runs.values()]

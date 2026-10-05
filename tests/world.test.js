@@ -14,7 +14,7 @@ import { loadNpcs, presentNpcs } from '../src/server/game/npcs.js';
 import { addCommitments } from '../src/server/game/commitments.js';
 
 const npcs = await loadNpcs(path.resolve('data/canon/npcs'));
-const worldData = JSON.parse(await readFile(path.resolve('data/canon/locations/porta_magna.json'), 'utf8'));
+import { worldData, fixtureGeography } from './support/world.js';
 const profile = { name: 'Mara', age: 24, gender: 'woman', race: 'human', appearance: '', origin: '' };
 const ctxOf = (run) => ({ run, worldData, npcs, present: (current) => presentNpcs(npcs, current.player.locationId, current.world) });
 const atCafe = () => { const run = createRun(profile); run.player.locationId = 'cafe'; run.world.hour = 9; return run; };
@@ -28,8 +28,8 @@ test('the ambient header is compact text computed by the engine: time, place, wh
   assert.match(header, /Lugar: Luna's Coffee \(Central\), abierto de 06:00 a 22:00\./);
   assert.match(header, /Presentes: Luna Serp \(.+\) \[id: luna_serp\]\./);
   assert.match(header, /Pendientes: Verse en el parque con Luna Serp — día 2 \(martes\), 15:00 en park\./);
-  assert.match(header, /Mapa \(id: minutos de viaje\): apartment: 0, .*park: \d+/);
-  assert.doesNotMatch(header, /^Mapa.*cafe: 20/m, 'el lugar actual no aparece en el mapa de destinos');
+  assert.match(header, /Mapa \(id — nombre: minutos a pie desde aquí\): apartment — Apartamento: 20, .*park — Parque: 25/, 'los minutos son relativos al lugar actual (café)');
+  assert.doesNotMatch(header, /^Mapa.*cafe — /m, 'el lugar actual no aparece en el mapa de destinos');
   assert.ok(header.length < 900, `cabecera corta (${header.length} caracteres)`);
   assert.doesNotMatch(header, /[{}"]/, 'texto, no JSON');
   const empty = ambientHeader({ run: createRun(profile), worldData, present: [], npcs });
@@ -120,7 +120,7 @@ async function boot(t, script, other = () => ({ content: '{"posts":[]}' })) {
   const factory = { get: (kind) => defaultPreset(kind), isCustom: () => false, record() {}, log: () => [], stats: () => [] };
   const ai = createNanoGPT(fetchImpl, { prompts: factory });
   ai.prologue = async () => ({ text: 'Llegas.', locationId: 'station' });
-  const server = createAppServer({ ai, prompts: factory, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
+  const server = createAppServer({ geography: fixtureGeography(), ai, prompts: factory, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -138,7 +138,7 @@ test('free action: the GM travels with a tool, the engine applies it, and the sa
   assert.equal(response.status, 200);
   assert.equal(response.body.player.locationId, 'park');
   assert.equal(response.body.narrative.text, 'Sales del café y llegas al parque.');
-  assert.deepEqual(response.body.world, { day: 1, hour: 9, minute: 25, cityId: 'porta_magna' }, '10 min de la acción libre + el viaje que calcula el motor');
+  assert.deepEqual(response.body.world, { day: 1, hour: 9, minute: 35, cityId: 'porta_magna' }, '10 min de la acción libre + el viaje (café → parque, 25 min) que calcula el motor');
   assert.deepEqual(response.body.eventLog.slice(-2).map((event) => event.type), ['player_action', 'location_changed']);
   assert.equal(response.body.eventLog.at(-2).data.response, 'Sales del café y llegas al parque.');
   assert.deepEqual(runs.get(id).player.locationId, 'park');
@@ -149,7 +149,7 @@ test('free action: the GM travels with a tool, the engine applies it, and the sa
   assert.match(system, /Presentes: Luna Serp/);
   const toolMessage = worlds[1].messages.at(-1);
   assert.equal(toolMessage.role, 'tool');
-  assert.equal(JSON.parse(toolMessage.content).minutes, 15);
+  assert.equal(JSON.parse(toolMessage.content).minutes, 25, 'café → parque: 2000 m a 80 m/min');
 });
 
 test('free action: start_conversation opens the encounter through the same path as the button, with the narration first', async (t) => {

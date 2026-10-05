@@ -83,7 +83,7 @@ const SCENES = {
       <rect y="0" width="400" height="86" fill="#0a0e1c" opacity=".85"/>${ribs}
       <path d="M0 86 H400" stroke="#1d2547" stroke-width="3"/>
       <g class="beams" style="opacity:calc(.25 + var(--night)*.55)"><path d="M70 90 L20 470 H130Z" fill="url(#coolGlow)" opacity=".28"/><path d="M330 90 L270 470 H390Z" fill="url(#coolGlow)" opacity=".28"/></g>
-      <g transform="translate(200 128)"><rect x="-118" y="-26" width="236" height="46" rx="4" fill="#0b1226" stroke="#7fa4d8" stroke-opacity=".55"/><text class="sign" x="0" y="6" text-anchor="middle" font-family="Georgia,serif" font-size="19" letter-spacing="3" fill="#dcecff">PORTA MAGNA</text><path d="M-90 -26 V-70 M90 -26 V-70" stroke="#2b3559" stroke-width="2"/></g>
+      <g class="sign-wrap" transform="translate(200 128)"><rect x="-118" y="-26" width="236" height="46" rx="4" fill="#0b1226" stroke="#7fa4d8" stroke-opacity=".55"/><text class="sign" x="0" y="6" text-anchor="middle" font-family="Georgia,serif" font-size="19" letter-spacing="3" fill="#dcecff">PORTA MAGNA</text><path d="M-90 -26 V-70 M90 -26 V-70" stroke="#2b3559" stroke-width="2"/></g>
       <g class="train-wrap"><g class="train">${[0, 1, 2, 3, 4, 5].map((i) => `<g transform="translate(${i * 128} 0)"><rect y="366" width="122" height="66" rx="9" fill="#232c4c"/><rect y="366" width="122" height="7" rx="3" fill="#7d95d0" opacity=".5"/>${[0, 1, 2, 3].map((k) => `<rect x="${10 + k * 28}" y="380" width="20" height="24" rx="3" fill="#ffe3a0" opacity=".9"/>`).join('')}</g>`).join('')}</g></g>
       <rect y="432" width="400" height="368" fill="#111830"/>
       <rect y="432" width="400" height="9" fill="#e8c86a" opacity=".55"/>
@@ -117,7 +117,7 @@ const SCENES = {
       <g><rect x="230" y="120" width="140" height="210" fill="#0b0e20"/><clipPath id="cw"><rect x="234" y="124" width="132" height="202"/></clipPath>
         <g clip-path="url(#cw)"><g transform="translate(-60 20) scale(1.2)">${skyRect(0,0,400,400)}${skyline({ seed: 44, y: 240, minH: 40, maxH: 120, fill: '#1a2246' })}</g></g>
         <path d="M300 120 V330 M230 225 H370" stroke="#4a2f22" stroke-width="5"/></g>
-      <g><rect x="30" y="110" width="150" height="90" rx="4" fill="#1b100d" stroke="#6d4a35"/><text x="105" y="145" text-anchor="middle" font-family="Georgia,serif" font-size="17" fill="#f1d9b0">Luna's Coffee</text><text x="105" y="172" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="#c2a07a" opacity=".85">café · té · pan · dulces</text></g>
+      <g class="sign-wrap"><rect x="30" y="110" width="150" height="90" rx="4" fill="#1b100d" stroke="#6d4a35"/><text x="105" y="145" text-anchor="middle" font-family="Georgia,serif" font-size="17" fill="#f1d9b0">Luna's Coffee</text><text x="105" y="172" text-anchor="middle" font-family="Georgia,serif" font-size="11" fill="#c2a07a" opacity=".85">café · té · pan · dulces</text></g>
       ${[70, 175, 330].map((x, i) => `<g class="pendant" style="animation-delay:${i * .9}s"><path d="M${x} 0 V${64 + i * 6}" stroke="#12090a" stroke-width="2"/>${lamp(x, 78 + i * 6, 1.15)}<path d="M${x - 15} ${82 + i * 6} Q${x} ${62 + i * 6} ${x + 15} ${82 + i * 6}Z" fill="#c98f4c"/></g>`).join('')}
       <rect y="440" width="400" height="360" fill="#2a1a13"/>
       <rect y="400" width="400" height="60" fill="#4a2f22"/><rect y="400" width="400" height="7" fill="#7a5238"/>
@@ -153,8 +153,8 @@ const SCENES = {
       <g class="far">${skyline({ seed: 88, y: 330, minH: 40, maxH: 110, fill: '#151c38', alpha: .7 })}</g>
       <rect x="10" y="150" width="380" height="330" fill="#1c2340"/>
       <rect x="10" y="150" width="380" height="18" fill="#12172e"/>
-      <rect x="40" y="90" width="320" height="56" rx="6" fill="#0a0d1c" stroke="#8fd9ff" stroke-opacity=".6"/>
-      <text class="neon" x="200" y="128" text-anchor="middle" font-family="Georgia,serif" font-size="30" letter-spacing="8" fill="#9fe6ff">TIENDA</text>
+      <rect class="sign-wrap" x="40" y="90" width="320" height="56" rx="6" fill="#0a0d1c" stroke="#8fd9ff" stroke-opacity=".6"/>
+      <text class="neon sign-wrap" x="200" y="128" text-anchor="middle" font-family="Georgia,serif" font-size="30" letter-spacing="8" fill="#9fe6ff">TIENDA</text>
       <path d="M22 168 H378 L390 218 H10Z" fill="#8c3b4a"/><path d="M22 168 H378 L384 190 H16Z" fill="#a34556"/>
       ${[0, 1, 2, 3, 4, 5, 6].map((i) => `<path d="M${10 + i * 54} 218 q27 16 54 0" fill="#f2e4d0" opacity=".85"/>`).join('')}
       <rect x="34" y="236" width="222" height="212" fill="#f7deb0" opacity=".9"/>
@@ -176,8 +176,12 @@ export const SCENE_META = {
   store:     { label:'Pasillos de la tienda', interactions:['Mirar los productos', 'Hablar con el dependiente'], ambient:null }
 };
 
-export function sceneMarkup(locationId, world) {
-  const build = SCENES[locationId] ?? SCENES.station;
+// El mapa manda: un lugar nuevo del editor sin arte propio usa la escena genérica de su tipo (casa, comida, tienda, transporte, exterior).
+const SCENE_BY_KIND = { home: 'apartment', food: 'cafe', shop: 'store', transport: 'station', gateway: 'station', poi: 'park', other: 'park' };
+export const sceneFor = (loc) => (SCENES[loc?.id] ? loc.id : SCENE_BY_KIND[loc?.kind] ?? 'station');
+
+export function sceneMarkup(sceneKey, world) {
+  const build = SCENES[sceneKey] ?? SCENES.station;
   return `<svg class="scene-svg" viewBox="0 0 400 800" preserveAspectRatio="xMidYMin slice" aria-hidden="true">${defs}${build(world)}</svg>`;
 }
 

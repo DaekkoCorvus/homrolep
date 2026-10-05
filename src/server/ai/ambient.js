@@ -24,7 +24,7 @@ export function ambientHeader({ run, worldData, present = [], npcs = new Map(), 
     `Jugador: ${player.name}, ${player.money} de dinero, ${player.occupation ? `trabaja como ${player.occupation}` : 'sin trabajo'}.`,
     pending.length ? `Pendientes: ${pending.join('; ')}.` : 'Pendientes: ninguno.',
     ...(notices.length ? ['Desde tu última intervención:', ...notices.map((line) => `- ${line}`)] : []),
-    `Mapa (id: minutos de viaje): ${worldData.locations.filter(({ id }) => id !== player.locationId).map(({ id, travelMinutes }) => `${id}: ${travelMinutes}`).join(', ')}.`
+    `Mapa (id — nombre: minutos a pie desde aquí): ${worldData.locations.filter(({ id }) => id !== player.locationId).map(({ id, name }) => `${id} — ${name}: ${worldData.travelMinutes(player.locationId, id)}`).join(', ')}.`
   ];
   return lines.join('\n');
 }

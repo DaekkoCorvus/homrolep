@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Editor de mapas · Heroes of Misery</title>
+  <link rel="stylesheet" href="/mapeditor.css">
+</head>
+<body>
+  <header class="me-top">
+    <strong class="me-brand">Editor de mapas</strong>
+    <label class="me-inline">Mapa <select id="map-select"></select></label>
+    <button type="button" id="new-map">Nuevo mapa…</button>
+    <label class="me-inline" title="Lo que dibujes se añade a este grupo">Grupo activo <select id="active-group"></select></label>
+    <span class="me-spacer"></span>
+    <span id="status" class="me-status" role="status"></span>
+    <button type="button" id="undo" title="Deshacer (Ctrl+Z)">Deshacer</button>
+    <button type="button" id="redo" title="Rehacer (Ctrl+Y)">Rehacer</button>
+    <button type="button" id="save" class="primary" title="Guardar en el proyecto (Ctrl+S)">Guardar</button>
+    <a class="me-back" href="/">Volver al juego</a>
+  </header>
+  <main class="me-main">
+    <aside class="me-left">
+      <nav class="me-tools" aria-label="Herramientas" id="tools"></nav>
+      <div class="me-options" id="options"></div>
+      <nav class="me-tabs" id="tabs"></nav>
+      <div class="me-panel" id="panel"></div>
+    </aside>
+    <section class="me-stage">
+      <div id="canvas" class="me-canvas" tabindex="0" aria-label="Mapa"></div>
+      <div class="me-hud">
+        <span id="coords">—</span>
+        <span id="hint" class="me-hint"></span>
+        <label class="me-inline"><input type="checkbox" id="grid" checked> Cuadrícula</label>
+        <label class="me-inline" title="Casas, manzanas y árboles generados con la receta de cada área"><input type="checkbox" id="fill-preview" checked> Relleno</label>
+        <label class="me-inline" title="Terreno pintado con el pincel"><input type="checkbox" id="terrain-view" checked> Terreno</label>
+        <label class="me-inline"><input type="checkbox" id="fog-preview"> Niebla</label>
+        <label class="me-inline" title="Estilo del mapa (se ve en la vista final)">Estilo <select id="theme"></select></label>
+        <label class="me-inline" title="Vista previa del render final con el estilo y el shader (solo lectura)"><input type="checkbox" id="final-view"> Vista final</label>
+        <label class="me-inline"><input type="checkbox" id="labels" checked> Nombres</label>
+        <button type="button" id="fit">Encajar</button>
+      </div>
+    </section>
+    <aside class="me-right" id="inspector"></aside>
+  </main>
+  <script type="module" src="/mapeditor.js"></script>
+</body>
+</html>

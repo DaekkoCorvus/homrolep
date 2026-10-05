@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { loadNpcs } from '../src/server/game/npcs.js';
 import { createRun } from '../src/server/game/run.js';
 import { createAppServer } from '../src/server/index.js';
+import { fixtureGeography } from './support/world.js';
 import {
   applyGeneratedPosts, applyReactions, publishPlayerPost, publishPlayerReply, toggleLike, markNotificationsRead, socialView, feedDue, maxLikes,
   resolveWhen, playerHandle, GENERATION_GAP, saveProfile, toggleRepost, profileMedia, expectedReplies, POST_MINUTES
@@ -144,7 +145,7 @@ test('API: the feed fills itself in the background, posts are saved at once and 
       return { respuestas: [{ usuario: '@amable', nombre: 'Amable', hora: '09:20', texto: 'Bienvenida', a: input.jugador.usuario }], likes: 3 };
     }
   };
-  const server = createAppServer({ ai, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
+  const server = createAppServer({ geography: fixtureGeography(), ai, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}`;

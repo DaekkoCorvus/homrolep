@@ -6,3 +6,6 @@ saves/*
 npm-debug.log*
 .DS_Store
 coverage/
+data/canon/maps/.backup/
+# Playwright CLI output (may contain credentials)
+.playwright-cli/

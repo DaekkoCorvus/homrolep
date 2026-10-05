@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createNanoGPT } from '../src/server/ai/provider.js';
 import { createAppServer } from '../src/server/index.js';
+import { fixtureGeography } from './support/world.js';
 import { createRun } from '../src/server/game/run.js';
 
 const completion = (content) => ({ ok: true, json: async () => ({ choices: [{ message: { content }, finish_reason: 'stop' }] }) });
@@ -20,7 +21,7 @@ test('slow models are never cut off, and stopping aborts the upstream call witho
     await new Promise((resolve) => setTimeout(resolve, 400)); // un modelo lento: sin límite de tiempo propio
     return completion('{"say":"Buenos días.","gesture":"sonríe"}');
   };
-  const server = createAppServer({
+  const server = createAppServer({ geography: fixtureGeography(),
     ai: createNanoGPT(fetchImpl), settings: { require: async () => ({ apiKey: 'k', model: 'm' }) },
     store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] }
   });

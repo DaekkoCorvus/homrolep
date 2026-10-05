@@ -47,14 +47,15 @@ export const gameTools = [
   },
   {
     name: 'place_info',
-    description: 'Datos de un lugar: descripción, horario, viaje y quién está.',
+    description: 'Datos de un lugar: descripción, horario, minutos de viaje desde donde está el jugador y quién está.',
     kind: 'query', roles: ['gm'],
     params: { type: 'object', properties: { place: { type: 'string', description: 'id; por defecto el actual' } }, additionalProperties: false },
     handler({ run, worldData, npcs }, { place }) {
       const location = worldData.locations.find((item) => item.id === (place ?? run.player.locationId));
       if (!location) return reject('Ubicación desconocida.', { code: 'unknown_place', hint: `Lugares válidos: ${worldData.locations.map(({ id }) => id).join(', ')}.` });
       const here = [...npcs.values()].filter((npc) => scheduleFor(npc, run.world)?.locationId === location.id).map((npc) => personView(run, npcs, npc));
-      return { ok: true, result: { id: location.id, name: location.name, district: location.district, description: location.description, hours: location.hours ?? 'siempre accesible', travelMinutes: location.travelMinutes, people: here } };
+      const trip = worldData.trip(run.player.locationId, location.id);
+      return { ok: true, result: { id: location.id, name: location.name, district: location.district, description: location.description, hours: location.hours ?? 'siempre accesible', travelMinutes: trip.minutes, distanceMeters: trip.meters, people: here } };
     }
   },
 
@@ -89,7 +90,7 @@ export const gameTools = [
 
   {
     name: 'travel',
-    description: 'Mueve al jugador a otro lugar; el motor calcula el tiempo.',
+    description: 'Mueve al jugador a otro lugar a pie; el motor calcula el tiempo según la distancia desde donde está.',
     roles: ['gm', 'player'],
     params: { type: 'object', properties: { place: { type: 'string', description: 'id del destino' } }, required: ['place'], additionalProperties: false },
     handler({ run, worldData }, { place }) {
@@ -98,8 +99,11 @@ export const gameTools = [
       if (!destination) return reject('Ubicación desconocida.', { code: 'unknown_place', hint: `Lugares válidos: ${worldData.locations.map(({ id }) => id).join(', ')}.` });
       if (destination.id === run.player.locationId) return reject('Ya estás en esa ubicación.', { code: 'already_there' });
       const from = run.player.locationId;
-      const next = commit(run, destination.travelMinutes, { type: 'location_changed', from, to: destination.id }, (draft) => { draft.player.locationId = destination.id; });
-      return { ok: true, run: next, result: { place: destination.id, name: destination.name, ...spent(run, next, destination.travelMinutes) } };
+      const trip = worldData.trip(from, destination.id);
+      // Tope de un tramo a pie (configurable en world.json). El taxi llegará con su propio hito.
+      if (trip.tooFar) return reject(`A pie son ${trip.minutes} minutos (${trip.meters} m): demasiado lejos para un solo tramo.`, { code: 'too_far', hint: `El máximo a pie es ${worldData.maxWalkMinutes} minutos.` });
+      const next = commit(run, trip.minutes, { type: 'location_changed', from, to: destination.id }, (draft) => { draft.player.locationId = destination.id; });
+      return { ok: true, run: next, result: { place: destination.id, name: destination.name, distance: trip.meters, ...spent(run, next, trip.minutes) } };
     }
   },
   {
