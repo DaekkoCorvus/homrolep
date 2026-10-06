@@ -3,6 +3,7 @@ import { state, request, notify, escapeHtml, isDev, setDev, place, dreq, layer }
 import { setTextSpeed } from './game.js';
 import { openPromptEditor } from './prompteditor.js';
 import { openProbe, openStats, openIntents } from './aitrace.js';
+import { askConfirm, askText } from './dialogs.js';
 
 const COMMANDS = [
   ['/dev', 'Activa o desactiva las herramientas de desarrollo'],
@@ -136,7 +137,7 @@ async function toolMode(argument) {
 
 // Restablece el feed de NorthLife: publicaciones, cuentas generadas y notificaciones. Conserva tu cuenta y el resto de la partida.
 async function wipeFeed() {
-  if (!confirm('¿Limpiar el feed de NorthLife? Se borran todas las publicaciones, las cuentas generadas (con sus avatares) y las notificaciones. Tu cuenta, tus contactos y el resto de la partida no cambian.')) return;
+  if (!await askConfirm({ title: '¿Limpiar el feed de NorthLife?', text: 'Se borran todas las publicaciones, las cuentas generadas (con sus avatares) y las notificaciones. Tu cuenta, tus contactos y el resto de la partida no cambian.', confirmLabel: 'Limpiar', danger: true })) return;
   try { await hooks.runDev({ op: 'social_wipe' }); await hooks.reload(); notify('Feed limpiado. La próxima acción (o /feed) lo genera de nuevo.'); }
   catch (error) { notify(error.message); }
 }
@@ -185,7 +186,7 @@ async function importFile(file, overwrite = false) {
     hooks.reload();
     openEditor(card);
   } catch (error) {
-    if (error.code === 'NPC_EXISTS' && confirm(`${error.message}`)) return importFile(file, true);
+    if (error.code === 'NPC_EXISTS' && await askConfirm({ title: 'La ficha ya existe', text: error.message, confirmLabel: 'Reemplazar', danger: true })) return importFile(file, true);
     notify(error.message);
   }
 }
@@ -373,10 +374,10 @@ export async function openEditor(card) {
     const input = body.querySelector('[data-new-emotion]');
     if (!input) return;
     input.oninput = () => { const clean = normalizeEmotion(input.value); if (clean !== input.value) input.value = clean; };
-    body.querySelector('[data-new-file]').onchange = (event) => {
+    body.querySelector('[data-new-file]').onchange = async (event) => {
       const file = event.target.files[0]; event.target.value = ''; if (!file) return;
       const name = normalizeEmotion(input.value);
-      if (model.portraits?.[name] && !confirm(`Ya existe «${name}». ¿Reemplazarla?`)) return;
+      if (model.portraits?.[name] && !await askConfirm({ title: `Ya existe «${name}»`, text: '¿Quieres reemplazarla?', confirmLabel: 'Reemplazar' })) return;
       sendPortrait(name, file);
     };
     const replaceInput = body.querySelector('[data-replace-file]');
@@ -387,13 +388,13 @@ export async function openEditor(card) {
       card.querySelector('[data-stay]').onchange = (event) => { const stay = new Set(model.emotionsStay ?? []); if (event.target.checked) stay.add(name); else stay.delete(name); model.emotionsStay = [...stay]; };
       card.querySelector('[data-replace]').onclick = () => { target = name; replaceInput.click(); };
       card.querySelector('[data-rename]')?.addEventListener('click', async () => {
-        const to = normalizeEmotion(prompt('Nuevo nombre (solo letras):', name));
+        const to = normalizeEmotion(await askText({ title: 'Nuevo nombre', text: 'Solo letras.', value: name, confirmLabel: 'Renombrar' }) ?? '');
         if (!to || to === name) return;
         try { const saved = await dreq(`/api/dev/npcs/${model.id}/portrait/${name}/rename`, { method: 'POST', body: JSON.stringify({ to }) }); model.portraits = saved.portraits; model.emotionsStay = (model.emotionsStay ?? []).map((item) => (item === name ? to : item)); show('emotions'); hooks.reload(); notify(`«${name}» ahora es «${to}». Pulsa Guardar para conservar los cambios.`); }
         catch (failure) { notify(failure.message); }
       });
       card.querySelector('[data-delete]')?.addEventListener('click', async () => {
-        if (!confirm(`¿Eliminar la emoción «${name}»?`)) return;
+        if (!await askConfirm({ title: `¿Eliminar la emoción «${name}»?`, confirmLabel: 'Eliminar', danger: true })) return;
         try { const saved = await dreq(`/api/dev/npcs/${model.id}/portrait/${name}`, { method: 'DELETE' }); model.portraits = saved.portraits; model.emotionsStay = (model.emotionsStay ?? []).filter((item) => item !== name); show('emotions'); hooks.reload(); notify(`«${name}» eliminada.`); }
         catch (failure) { notify(failure.message); }
       });

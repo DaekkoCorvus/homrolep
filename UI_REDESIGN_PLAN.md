@@ -297,7 +297,7 @@ Si hay una conversación abierta, "Ir" muestra "Despídete antes de irte" en la 
 
 ## 7. Plan de implementación por etapas
 
-**Estado (2026-10-04): la etapa 1 está implementada** (ver «El mapa en el juego» en el README); las demás siguen pendientes.
+**Estado (2026-10-04): las etapas 1 (mapa), 2 (arreglos inmediatos), 3 (base visual), 4 (cuadro de texto y narración), 5 (acciones y barra superior), 6 (pantallas del Umbral: Partidas, Ajustes y pausa), 7 (teléfono a pantalla completa, widgets y arreglos de NorthLife) y 8 (escritorio, accesibilidad y pulido) están implementadas** (ver «El mapa en el juego» y «Estilo visual» en el README y [DESIGN.md](DESIGN.md)); las demás siguen pendientes. Fuentes elegidas: Spectral + Inter.
 
 Al cerrar cada etapa: `npm test`, arranque verificado, capturas con Playwright a **360×600, 360×800, 412×915 y 1280×800**, y una partida completa (llegar → hablar → despedirse → ir a otro lugar por el mapa). Una partida de prueba nunca debe sobrescribir guardados reales (duplicar antes o usar un directorio aparte).
 

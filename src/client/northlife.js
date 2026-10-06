@@ -219,7 +219,7 @@ export function bindFeed(screen, ctx) {
         const creating = !profile().created;
         state.run = await api(payload);
         ui.pfp = undefined; ui.banner = undefined; ui.draftHandle = undefined; ui.draftBio = undefined; ui.accountError = ''; ui.editingProfile = false;
-        if (creating) { ui.nlTab = 'feed'; enterFeed(ui); notify('¡Cuenta creada! Bienvenida a NorthLife.'); }
+        if (creating) { ui.nlTab = 'feed'; enterFeed(ui); notify('¡Cuenta creada! Ya estás en NorthLife.'); }
         ctx.rerender(); ctx.refresh();
       } catch (error) { ui.accountError = error.message; const slot = account.querySelector('[data-account-error]'); if (slot) slot.textContent = error.message; }
     };

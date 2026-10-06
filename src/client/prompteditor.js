@@ -3,6 +3,7 @@
 // nada cambia hasta pulsar «Guardar».
 import { state, notify, escapeHtml, dreq, layer } from './core.js';
 import { describeMeta, openStats } from './aitrace.js';
+import { askConfirm } from './dialogs.js';
 
 const ROLES = [['system', 'Sistema'], ['user', 'Usuario'], ['assistant', 'Asistente']];
 const roleLabel = Object.fromEntries(ROLES);
@@ -59,9 +60,10 @@ export async function openPromptEditor(startKind = 'character') {
   const sheet = node.querySelector('.dev-sheet'); const body = node.querySelector('.pe-body'); const tabs = node.querySelector('.tabs'); const error = node.querySelector('[data-error]');
 
   // Cerrar (× o tocar fuera) pregunta si hay cambios sin guardar.
-  const guard = () => !infos.some((item) => dirty(item.kind)) || confirm('Hay cambios sin guardar en los prompts. ¿Cerrar sin guardarlos?');
-  node.querySelectorAll('[data-close]').forEach((button) => { button.onclick = () => { if (guard()) node.remove(); }; });
-  node.addEventListener('click', (event) => { if (event.target === node && !guard()) event.stopImmediatePropagation(); }, true);
+  const unsaved = () => infos.some((item) => dirty(item.kind));
+  const guard = async () => !unsaved() || askConfirm({ title: '¿Cerrar sin guardar?', text: 'Hay cambios sin guardar en los prompts.', confirmLabel: 'Cerrar sin guardar', cancelLabel: 'Seguir editando', danger: true });
+  node.querySelectorAll('[data-close]').forEach((button) => { button.onclick = async () => { if (await guard()) node.remove(); }; });
+  node.addEventListener('click', async (event) => { if (event.target !== node || !unsaved()) return; event.stopImmediatePropagation(); if (await guard()) node.remove(); }, true);
 
   const modeLabel = (id) => info[kind].modes.find((mode) => mode.id === id)?.label ?? id;
   const autoOf = (module) => info[kind].autos.find(({ key }) => key === module.auto);
@@ -188,10 +190,10 @@ export async function openPromptEditor(startKind = 'character') {
       draft.modules.splice(draft.modules.indexOf(module) + 1, 0, copy); opened.add(copy.id); touch(); draw();
     } else if (button.dataset.act === 'restore') {
       const module = moduleOf(button); const original = info[kind].defaults.modules.find((item) => item.id === module.id);
-      if (original && confirm('¿Restaurar el texto de fábrica de este módulo? Se pierde tu edición no guardada.')) { module.content = original.content; touch(); draw(); }
+      if (original && await askConfirm({ title: '¿Restaurar el texto de fábrica?', text: 'Se pierde tu edición no guardada de este módulo.', confirmLabel: 'Restaurar' })) { module.content = original.content; touch(); draw(); }
     } else if (button.dataset.act === 'delete') {
       const module = moduleOf(button);
-      if (module.type === 'text' && module.content.trim() && !confirm(`¿Quitar «${module.name}»?`)) return;
+      if (module.type === 'text' && module.content.trim() && !await askConfirm({ title: `¿Quitar «${module.name}»?`, confirmLabel: 'Quitar', danger: true })) return;
       draft.modules.splice(draft.modules.indexOf(module), 1); opened.delete(module.id); touch(); draw();
     } else if (button.dataset.restoreTask) {
       draft.tasks[button.dataset.restoreTask] = info[kind].defaults.tasks[button.dataset.restoreTask]; touch(); draw();
@@ -232,7 +234,7 @@ export async function openPromptEditor(startKind = 'character') {
     } catch (failure) { error.textContent = failure.message; }
   };
   node.querySelector('[data-reset]').onclick = async () => {
-    if (!confirm(`¿Restablecer el prompt «${info[kind].label}» a los valores de fábrica? Se pierden tus módulos guardados.`)) return;
+    if (!await askConfirm({ title: `¿Restablecer «${info[kind].label}»?`, text: 'Vuelve a los valores de fábrica y se pierden tus módulos guardados.', confirmLabel: 'Restablecer', danger: true })) return;
     try {
       const result = await dreq(`/api/dev/prompts/${kind}`, { method: 'DELETE' });
       info[kind] = result; drafts[kind] = structuredClone(result.preset); saved[kind] = JSON.stringify(result.preset); report = []; opened.clear();
@@ -252,7 +254,7 @@ export async function openPromptEditor(startKind = 'character') {
       const text = await file.text(); let json;
       try { json = JSON.parse(text); } catch { throw new Error('El archivo no es un JSON válido.'); }
       if (Array.isArray(json?.prompts)) {
-        if (!confirm(`Se reemplazarán los módulos del borrador «${info[kind].label}» por los del preset de SillyTavern (aún sin guardar). ¿Continuar?`)) return;
+        if (!await askConfirm({ title: '¿Importar el preset?', text: `Se reemplazarán los módulos del borrador «${info[kind].label}» por los del preset de SillyTavern (aún sin guardar).`, confirmLabel: 'Importar' })) return;
         const result = await dreq(`/api/dev/prompts/${kind}/import`, { method: 'POST', body: JSON.stringify({ text }) });
         drafts[kind] = result.preset; report = result.report; opened.clear();
       } else if (Array.isArray(json?.modules)) {

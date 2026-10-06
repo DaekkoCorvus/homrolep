@@ -213,6 +213,10 @@ El juego ya no usa `confirm()` ni `prompt()` nativos: `src/client/dialogs.js` of
 
 Por debajo de unos 420 px el teléfono ocupa **toda la pantalla**, sin marco ni muesca (respeta las zonas seguras del móvil); en pantallas anchas conserva su marco. El inicio muestra tres **widgets** con datos del motor: la **siguiente cita** (abre la Agenda), el **dinero** (abre Perfil) y los **avisos** de NorthLife (abre Notificaciones y los marca como leídos). En NorthLife las cuatro pestañas caben siempre (Feed · Avisos · Chats · Agenda), el botón «+» queda abajo a la derecha aunque el feed esté vacío y todo el color principal de la app es el azul de NorthLife. La app Mapa abre el mismo mapa que «Ir».
 
+## Escritorio y accesibilidad (etapa 8)
+
+A partir de 900 px de ancho la escena ocupa toda la pantalla; el cuadro de texto, los verbos, la acción libre y las hojas viven en una **columna de lectura** centrada (660 px), el **teléfono** es un panel lateral y el **mapa** usa todo el ancho. En móvil nada cambia. Los diálogos (teléfono, mapa, pausa y confirmaciones) son modales: lo de detrás queda inerte, Tab da la vuelta dentro y el foco vuelve a su sitio al cerrar. El texto del Umbral cumple contraste AA (medido contra el fondo real, también sobre el vórtice). La creación del personaje tiene un botón **Saltar intro** (acorta las pausas y muestra el texto de golpe; las preguntas nunca se saltan) y una preferencia **Intro del personaje: Completa / Rápida** en Ajustes → Juego. El texto largo de la llegada va alineado a la izquierda.
+
 ## Arquitectura
 
 ```text
