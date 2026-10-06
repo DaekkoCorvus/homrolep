@@ -113,21 +113,21 @@ body:has(#app .threshold) #app { position:relative; z-index:1; }
 .umb-empty { margin:.4rem 0 1rem; color:var(--ink-soft); font:italic 400 1.05rem/1.5 var(--serif); }
 
 /* Libro de historias */
-.story-book { list-style:none; margin:0; padding:0; display:grid; gap:.9rem; }
-.story { padding:1rem 1.1rem 1rem; border-radius:16px; background:rgb(255 255 255 / .42); border:1px solid rgb(var(--abyss-rgb) / .14); }
-.story.current { border-color:rgb(var(--abyss-rgb) / .5); }
-.story-head { display:flex; align-items:baseline; flex-wrap:wrap; gap:.3rem .6rem; }
-.story h2 { margin:0; font:italic 400 1.5rem/1.2 var(--serif); color:var(--ink); overflow-wrap:anywhere; }
+.tale-book { list-style:none; margin:0; padding:0; display:grid; gap:.9rem; }
+.tale { padding:1rem 1.1rem 1rem; border-radius:16px; background:rgb(255 255 255 / .42); border:1px solid rgb(var(--abyss-rgb) / .14); }
+.tale.current { border-color:rgb(var(--abyss-rgb) / .5); }
+.tale-head { display:flex; align-items:baseline; flex-wrap:wrap; gap:.3rem .6rem; }
+.tale h2 { margin:0; font:italic 400 1.5rem/1.2 var(--serif); color:var(--ink); overflow-wrap:anywhere; }
 .save-badge { font:600 .62rem var(--sans); letter-spacing:.12em; text-transform:uppercase; color:var(--ink); border:1px solid rgb(var(--abyss-rgb) / .5); border-radius:99px; padding:.1rem .5rem; }
-.story-meta { margin:.35rem 0 0; color:var(--ink); font:500 .9rem var(--sans); font-variant-numeric:tabular-nums; }
-.story-detail { margin:.15rem 0 0; color:rgb(var(--abyss-rgb) / .62); font:.8rem var(--sans); }
-.story-actions { display:flex; align-items:center; gap:.6rem; margin-top:.8rem; }
+.tale-meta { margin:.35rem 0 0; color:var(--ink); font:500 .9rem var(--sans); font-variant-numeric:tabular-nums; }
+.tale-detail { margin:.15rem 0 0; color:rgb(var(--abyss-rgb) / .62); font:.8rem var(--sans); }
+.tale-actions { display:flex; align-items:center; gap:.6rem; margin-top:.8rem; }
 .umb-play { flex:1; min-height:52px; border:0; border-radius:999px; background:rgb(var(--abyss-rgb) / .88); color:var(--frost); font:italic 400 1.15rem var(--serif); box-shadow:0 10px 26px rgb(var(--abyss-rgb) / .22); }
 .umb-more { flex:none; width:52px; min-height:52px; padding:0; border-radius:50%; border:1px solid rgb(var(--abyss-rgb) / .3); background:transparent; color:var(--ink); font-size:1.5rem; line-height:1; }
-.story-menu { display:grid; margin-top:.5rem; border-top:1px solid rgb(var(--abyss-rgb) / .16); }
-.story-menu button { min-height:48px; padding:.4rem .2rem; border:0; border-bottom:1px solid rgb(var(--abyss-rgb) / .1); background:transparent; border-radius:0; color:var(--ink); text-align:left; font:italic 400 1.05rem var(--serif); }
-.story-menu button.danger { color:var(--danger-ink); }
-.umb-play:focus-visible, .umb-more:focus-visible, .story-menu button:focus-visible, .umb-link:focus-visible { outline:2px solid var(--abyss); outline-offset:3px; }
+.tale-menu { display:grid; margin-top:.5rem; border-top:1px solid rgb(var(--abyss-rgb) / .16); }
+.tale-menu button { min-height:48px; padding:.4rem .2rem; border:0; border-bottom:1px solid rgb(var(--abyss-rgb) / .1); background:transparent; border-radius:0; color:var(--ink); text-align:left; font:italic 400 1.05rem var(--serif); }
+.tale-menu button.danger { color:var(--danger-ink); }
+.umb-play:focus-visible, .umb-more:focus-visible, .tale-menu button:focus-visible, .umb-link:focus-visible { outline:2px solid var(--abyss); outline-offset:3px; }
 
 /* Ajustes: Juego · Narrador · Desarrollo. El mismo componente sirve en el Umbral (tinta clara→oscura) y en la pausa del juego (variables --set-*). */
 .set { --set-text:var(--ink); --set-muted:rgb(var(--abyss-rgb) / .76); --set-line:rgb(var(--abyss-rgb) / .24); --set-field:rgb(255 255 255 / .5); --set-on-bg:var(--abyss); --set-on-fg:var(--frost); --set-error:var(--danger-ink); color:var(--set-text); }

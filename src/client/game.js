@@ -5,7 +5,7 @@ import { askConfirm } from './dialogs.js';
 import { sceneMarkup, sceneFor, applySky, SCENE_META } from './scenes.js';
 import { openWorldMap } from './worldmap.js';
 import { renderActionBar, closeSheet, SHEET_HTML } from './actionbar.js';
-import { TEXTBOX_HTML, bindTextbox, setSpeaker, setThinking, setEnd, refreshOverflow, showChanges, historyEntries } from './textbox.js';
+import { formatNpc, actionRanges, plainText, TEXTBOX_HTML, bindTextbox, setSpeaker, setThinking, setEnd, refreshOverflow, showChanges, historyEntries } from './textbox.js';
 import { threadView as chatThreadView, bindChat } from './chat.js';
 import { feedView, notificationsView, setupView, profileView, meButton, bindFeed, enterFeed, markRead } from './northlife.js';
 
@@ -267,8 +267,13 @@ function setEmotion(emotion) {
 
 // Muestra la respuesta poco a poco; las marcas de emoción cambian el sprite en el momento exacto. Un toque la completa.
 async function revealLine(node, segments, token, { keep = false, onDone } = {}) {
-  const textNode = document.createTextNode(''); node.append(textNode);
+  let textNode = document.createTextNode(''); node.append(textNode);
   const story = node.closest('.story');
+  // Las acciones (*así*) se escriben en un <span class="act"> sin sus asteriscos; el resto, como diálogo normal.
+  const full = segments.map((segment) => segment.text).join('');
+  const marks = new Set(actionRanges(full).flat()); const starts = new Set(actionRanges(full).map(([start]) => start));
+  let at = 0; let acting = false;
+  const openPiece = () => { textNode = document.createTextNode(''); if (acting) { const span = document.createElement('span'); span.className = 'act'; span.append(textNode); node.append(span); } else node.append(textNode); };
   ui.skipReveal = reducedMotion();
   clearTimeout(ui.holdTimer);
   let count = 0; let shown = 'default';
@@ -280,6 +285,8 @@ async function revealLine(node, segments, token, { keep = false, onDone } = {}) 
     shown = segment.emotion;
     for (const character of segment.text) {
       if (ui.revealToken !== token) return;
+      const here = at; at += character.length;
+      if (marks.has(here)) { acting = starts.has(here); openPiece(); continue; }
       textNode.data += character;
       if (++count % 6 === 0) story.scrollTop = story.scrollHeight;
       if (!ui.skipReveal) await sleep(typingDelay(character));
@@ -316,7 +323,7 @@ function renderConversation(story) {
     const index = from + offset;
     if (line.who === 'system') return `<div class="contact-card" ${fresh >= 0 && index > fresh ? 'hidden data-after' : ''}><small>${escapeHtml(line.text)}</small><strong>${escapeHtml(line.handle)}</strong><button type="button" data-copy="${escapeHtml(line.handle)}">Copiar</button><small>Guárdalo en tu Diario o escríbelo en Mensajes para agregarla.</small></div>`;
     if (line.who === 'narrator') return `<p class="dlg narr">${escapeHtml(line.text)}</p>`;
-    if (line.who === 'npc') return `<p class="dlg npc">${line.gesture ? `<em>${escapeHtml(line.gesture)}</em>` : ''}<span data-index="${index}">${index === fresh ? '' : escapeHtml(line.text)}</span></p>`;
+    if (line.who === 'npc') return `<p class="dlg npc">${line.gesture ? `<em>${escapeHtml(line.gesture)}</em>` : ''}<span data-index="${index}">${index === fresh ? '' : formatNpc(line.text)}</span></p>`;
     return `<p class="dlg you">${formatSpeech(line.text)}</p>`;
   });
   setSpeaker(root, ui.pendingLine ? 'you' : lastNpc >= 0 ? 'npc' : 'narrator', ui.pendingLine ? 'Tú' : npc.name);
@@ -329,7 +336,7 @@ function renderConversation(story) {
     revealLine(story.querySelector(`[data-index="${fresh}"]`), line.segments?.length ? line.segments : [{ emotion: 'default', text: line.text }], token, {
       keep: Boolean(state.run.encounter.closed),
       onDone: () => {
-        announce(`${npc.name}: ${line.text}`);
+        announce(`${npc.name}: ${plainText(line.text)}`);
         story.querySelectorAll('[data-after]').forEach((card) => { card.hidden = false; });
         story.scrollTop = story.scrollHeight;
         setEnd(root, true); refreshOverflow(root);

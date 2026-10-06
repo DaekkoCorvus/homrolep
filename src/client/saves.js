@@ -17,29 +17,29 @@ export async function openSaves({ onBack, play, newGame }) {
     const current = run.id === state.run?.id;
     const meta = [`Día ${run.world.day} · ${clock}`, here].filter(Boolean).join(' · ');
     const detail = [run.title ? run.playerName : '', when(run.updatedAt) ? `Última vez: ${when(run.updatedAt)}` : '', run.contacts ? `${run.contacts} contacto${run.contacts === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
-    return `<li class="story${current ? ' current' : ''}" data-id="${run.id}"><div class="story-head"><h2>${escapeHtml(label(run))}</h2>${current ? '<span class="save-badge">en curso</span>' : ''}</div>
-      <p class="story-meta">${escapeHtml(meta)}</p>${detail ? `<p class="story-detail">${escapeHtml(detail)}</p>` : ''}
-      <div class="story-actions"><button type="button" class="umb-play" data-play>Jugar</button><button type="button" class="umb-more" data-more aria-haspopup="menu" aria-expanded="false" aria-label="Más opciones de «${escapeHtml(label(run))}»"><span aria-hidden="true">⋯</span></button></div>
-      <div class="story-menu" role="menu" hidden><button type="button" role="menuitem" data-rename>Renombrar</button><button type="button" role="menuitem" data-copy>Duplicar</button><button type="button" role="menuitem" class="danger" data-delete>Eliminar…</button></div></li>`;
+    return `<li class="tale${current ? ' current' : ''}" data-id="${run.id}"><div class="tale-head"><h2>${escapeHtml(label(run))}</h2>${current ? '<span class="save-badge">en curso</span>' : ''}</div>
+      <p class="tale-meta">${escapeHtml(meta)}</p>${detail ? `<p class="tale-detail">${escapeHtml(detail)}</p>` : ''}
+      <div class="tale-actions"><button type="button" class="umb-play" data-play>Jugar</button><button type="button" class="umb-more" data-more aria-haspopup="menu" aria-expanded="false" aria-label="Más opciones de «${escapeHtml(label(run))}»"><span aria-hidden="true">⋯</span></button></div>
+      <div class="tale-menu" role="menu" hidden><button type="button" role="menuitem" data-rename>Renombrar</button><button type="button" role="menuitem" data-copy>Duplicar</button><button type="button" role="menuitem" class="danger" data-delete>Eliminar…</button></div></li>`;
   };
-  app.innerHTML = `<main class="threshold umb-page book"><section class="threshold-content umb-panel scene-enter"><p class="eyebrow">Tus historias</p><h1>Partidas</h1>${runs.length ? `<ol class="story-book">${runs.map(story).join('')}</ol>` : '<p class="umb-empty">Todavía no hay historias escritas. La primera te espera al otro lado.</p>'}<div class="umb-actions"><button type="button" class="umb-link" data-new>✧ Nueva partida</button><button type="button" class="umb-link" data-back>Volver</button></div></section></main>`;
+  app.innerHTML = `<main class="threshold umb-page book"><section class="threshold-content umb-panel scene-enter"><p class="eyebrow">Tus historias</p><h1>Partidas</h1>${runs.length ? `<ol class="tale-book">${runs.map(story).join('')}</ol>` : '<p class="umb-empty">Todavía no hay historias escritas. La primera te espera al otro lado.</p>'}<div class="umb-actions"><button type="button" class="umb-link" data-new>✧ Nueva partida</button><button type="button" class="umb-link" data-back>Volver</button></div></section></main>`;
   window.scrollTo(0, 0);
-  const closeMenus = () => app.querySelectorAll('.story-menu:not([hidden])').forEach((menu) => { menu.hidden = true; menu.closest('.story').querySelector('[data-more]').setAttribute('aria-expanded', 'false'); });
+  const closeMenus = () => app.querySelectorAll('.tale-menu:not([hidden])').forEach((menu) => { menu.hidden = true; menu.closest('.tale').querySelector('[data-more]').setAttribute('aria-expanded', 'false'); });
   app.querySelector('[data-back]').onclick = () => onBack();
   app.querySelector('[data-new]').onclick = newGame;
   const refresh = () => openSaves({ onBack, play, newGame });
   const root = app.querySelector('.book');
-  root.addEventListener('keydown', (event) => { if (event.key === 'Escape' && app.querySelector('.story-menu:not([hidden])')) { const open = app.querySelector('.story-menu:not([hidden])').closest('.story').querySelector('[data-more]'); closeMenus(); open.focus(); } });
+  root.addEventListener('keydown', (event) => { if (event.key === 'Escape' && app.querySelector('.tale-menu:not([hidden])')) { const open = app.querySelector('.tale-menu:not([hidden])').closest('.tale').querySelector('[data-more]'); closeMenus(); open.focus(); } });
   root.addEventListener('click', async (event) => {
     const button = event.target.closest('button');
     if (!button) { closeMenus(); return; }
-    const item = button.closest('.story');
+    const item = button.closest('.tale');
     if (!item) return;
     const run = runs.find(({ id }) => id === item.dataset.id);
     const slot = (body) => request(`/api/runs/${run.id}/slot`, { method: 'POST', body: JSON.stringify(body) });
     try {
       if (button.matches('[data-more]')) {
-        const menu = item.querySelector('.story-menu'); const wasOpen = !menu.hidden;
+        const menu = item.querySelector('.tale-menu'); const wasOpen = !menu.hidden;
         closeMenus();
         if (!wasOpen) { menu.hidden = false; button.setAttribute('aria-expanded', 'true'); menu.querySelector('button').focus(); }
       } else if (button.matches('[data-play]')) {

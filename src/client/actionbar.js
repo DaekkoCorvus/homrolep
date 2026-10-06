@@ -2,6 +2,7 @@
 // Lo que antes eran 6 botones en una fila que había que deslizar se reparte así: Hablar y las personas presentes abren una conversación; Explorar reúne las
 // acciones de ambientación del lugar; Ir abre el mapa; Esperar reúne esperar, dormir y trabajar. Todo queda a un toque, sin deslizar a ciegas.
 import { escapeHtml } from './core.js';
+import { askConfirm } from './dialogs.js';
 
 const icon = (path) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
 const ICONS = {
@@ -53,8 +54,11 @@ export function renderActionBar(root, ctx) {
     people.hidden = true;
     verbs.innerHTML = encounter.closed
       ? '<button type="button" class="verb wide primary-verb" data-kind="leave">Volver</button>'
-      : '<button type="button" class="verb wide" data-kind="end">Despedirte</button>';
-    verbs.querySelector('button').onclick = encounter.closed ? actions.leave : actions.end;
+      : '<button type="button" class="verb leave" data-kind="end">Despedirte</button>';
+    verbs.querySelector('button').onclick = encounter.closed ? actions.leave : async () => {
+      const who = run.encounterNpc?.name;
+      if (await askConfirm({ title: who ? `¿Despedirte de ${who}?` : '¿Despedirte?', text: 'La conversación terminará aquí.', confirmLabel: 'Despedirte', cancelLabel: 'Seguir hablando' })) actions.end();
+    };
     return;
   }
   const here = run.presence ?? [];

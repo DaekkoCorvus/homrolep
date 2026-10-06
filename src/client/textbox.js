@@ -3,6 +3,15 @@
 // No sabe nada de la partida: game.js le dice qué mostrar. Todo el texto que muestra lo escapa quien lo llama (aquí solo se escapan nombres y avisos).
 import { escapeHtml } from './core.js';
 
+// Texto de un personaje: lo que va entre *asteriscos* es una acción (cursiva tenue, sin los asteriscos); lo demás es diálogo. Un asterisco sin pareja se deja tal cual.
+export const actionRanges = (text) => { const out = []; const pattern = /\*([^*\n]+)\*/g; let match; while ((match = pattern.exec(text))) out.push([match.index, match.index + match[0].length - 1]); return out; };
+export const plainText = (text) => String(text ?? '').replace(/\*([^*\n]+)\*/g, '$1');
+export function formatNpc(text) {
+  const source = String(text ?? ''); let out = ''; let last = 0;
+  for (const [start, end] of actionRanges(source)) { out += escapeHtml(source.slice(last, start)) + `<span class="act">${escapeHtml(source.slice(start + 1, end))}</span>`; last = end + 1; }
+  return out + escapeHtml(source.slice(last));
+}
+
 export const TEXTBOX_HTML = `
   <section class="tb" data-speaker="narrator" aria-label="Texto de la historia">
     <div class="tb-notes" aria-hidden="true"></div>
@@ -68,7 +77,7 @@ function renderHistory(root, entries) {
   const list = q(root, '.th-list');
   list.innerHTML = entries.length ? entries.map((entry) => {
     const who = escapeHtml(entry.name || '');
-    if (entry.who === 'npc') return `<article class="th npc"><b>${who}</b>${entry.gesture ? `<em>${escapeHtml(entry.gesture)}</em>` : ''}<p>${escapeHtml(entry.text)}</p></article>`;
+    if (entry.who === 'npc') return `<article class="th npc"><b>${who}</b>${entry.gesture ? `<em>${escapeHtml(entry.gesture)}</em>` : ''}<p>${formatNpc(entry.text)}</p></article>`;
     if (entry.who === 'you') return `<article class="th you"><b>Tú</b><p>${escapeHtml(entry.text)}</p></article>`;
     return `<article class="th narrator">${entry.label ? `<b>${escapeHtml(entry.label)}</b>` : ''}<p>${escapeHtml(entry.text)}</p></article>`;
   }).join('') : '<p class="th-empty">Todavía no hay nada que recordar.</p>';
