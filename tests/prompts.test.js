@@ -9,6 +9,7 @@ import { characterPlan, evaluationPlan, socialPlan } from '../src/server/ai/plan
 import { createPromptStore } from '../src/server/ai/promptStore.js';
 import { createNanoGPT } from '../src/server/ai/provider.js';
 import { createAppServer } from '../src/server/index.js';
+import { fixtureGeography } from './support/world.js';
 import { createRun } from '../src/server/game/run.js';
 
 const npc = { id: 'luna_serp', name: 'Luna Serp', role: 'Barista', summary: 'Dueña del café.', personality: { traits: ['cálida'] }, appearance: 'Ojos verdes', knowledge: [], secrets: [], connections: [] };
@@ -90,7 +91,7 @@ test('normalisation protects what the engine needs: format and task are always p
   assert.equal(format.enabled, true); assert.equal(format.modes, undefined);
   assert.ok(messy.modules.some((item) => item.auto === 'task'), 'la instrucción del turno se restaura');
   assert.equal(messy.tasks.evaluation.length, 60000);
-  assert.ok(messy.tasks.narration, 'lo que falta se completa con la fábrica');
+  assert.ok(messy.tasks.free, 'lo que falta se completa con la fábrica');
   assert.deepEqual(messy.params, { top_p: 0.9 }, 'temperatura fuera de rango se descarta');
   assert.deepEqual(normalizePreset('social', 'no es un objeto').modules.map((item) => item.auto ?? item.id), defaultPreset('social').modules.map((item) => item.auto ?? item.id));
 });
@@ -167,7 +168,7 @@ test('dev API: list, edit, preview, import, log and reset prompts (and it stays 
   const prompts = createPromptStore(dir);
   const runs = new Map();
   const run = createRun({ name: 'Mara', age: 24, gender: 'woman', race: 'human' }); run.player.locationId = 'cafe'; run.world.hour = 9; runs.set(run.id, run);
-  const server = createAppServer({ prompts, ai: { npcReply: async () => ({ say: 'x' }) }, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (item) => runs.set(item.id, structuredClone(item)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
+  const server = createAppServer({ geography: fixtureGeography(), prompts, ai: { npcReply: async () => ({ say: 'x' }) }, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (item) => runs.set(item.id, structuredClone(item)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}`;

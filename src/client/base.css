@@ -1,0 +1,72 @@
+/* Tokens: la ÚNICA fuente de colores y tipografía de la interfaz. Cada color tiene su variable y su versión -rgb (para transparencias: rgb(var(--lamp-rgb) / .4)). */
+/* Fuentes incluidas en el proyecto (woff2, subconjunto latino; licencia SIL OFL en /fonts): funcionan sin conexión y se ven igual en Android y en PC. */
+@font-face { font-family:'Spectral'; src:url('/fonts/spectral-latin-300-normal.woff2') format('woff2'); font-weight:300; font-style:normal; font-display:swap; }
+@font-face { font-family:'Spectral'; src:url('/fonts/spectral-latin-400-normal.woff2') format('woff2'); font-weight:400; font-style:normal; font-display:swap; }
+@font-face { font-family:'Spectral'; src:url('/fonts/spectral-latin-400-italic.woff2') format('woff2'); font-weight:400; font-style:italic; font-display:swap; }
+@font-face { font-family:'Spectral'; src:url('/fonts/spectral-latin-600-normal.woff2') format('woff2'); font-weight:600; font-style:normal; font-display:swap; }
+@font-face { font-family:'Spectral'; src:url('/fonts/spectral-latin-600-italic.woff2') format('woff2'); font-weight:600; font-style:italic; font-display:swap; }
+@font-face { font-family:'Spectral'; src:url('/fonts/spectral-latin-700-normal.woff2') format('woff2'); font-weight:700; font-style:normal; font-display:swap; }
+@font-face { font-family:'Inter'; src:url('/fonts/inter-latin-wght-normal.woff2') format('woff2'); font-weight:100 900; font-style:normal; font-display:swap; }
+:root {
+  color-scheme:dark;
+  --serif:'Spectral',Georgia,serif;  /* narración y diálogo */
+  --sans:'Inter',system-ui,sans-serif;  /* interfaz */
+  --mono:ui-monospace,Consolas,monospace;  /* solo desarrollo */
+  --void:#04060c;  --void-rgb:4 6 12;
+  --abyss:#0b0e1c;  --abyss-rgb:11 14 28;
+  --abyss-2:#0f1626;  --abyss-2-rgb:15 22 38;
+  --dusk:#1a2032;  --dusk-rgb:26 32 50;
+  --dusk-2:#2a2d42;  --dusk-2-rgb:42 45 66;
+  --indigo:#20264d;  --indigo-rgb:32 38 77;
+  --plum:#3b2b57;  --plum-rgb:59 43 87;
+  --plum-2:#6a3f5a;  --plum-2-rgb:106 63 90;
+  --mauve:#6b5a73;  --mauve-rgb:107 90 115;
+  --cream:#f3ead9;  --cream-rgb:243 234 217;
+  --lamp:#f2d6a8;  --lamp-rgb:242 214 168;
+  --lamp-deep:#c89369;  --lamp-deep-rgb:200 147 105;
+  --lamp-soft:#d8ccb4;  --lamp-soft-rgb:216 204 180;
+  --paper:#e6dacd;  --paper-rgb:230 218 205;
+  --ink-text:#1a1208;  --ink-text-rgb:26 18 8;
+  --mist:#a9a3b6;  --mist-rgb:169 163 182;
+  --haze:#8f93a8;  --haze-rgb:143 147 168;
+  --smoke:#c9c2d6;  --smoke-rgb:201 194 214;
+  --frost:#e8edf8;  --frost-rgb:232 237 248;
+  --danger:#ffb4a6;  --danger-rgb:255 180 166;
+  --danger-deep:#e5383b;  --danger-deep-rgb:229 56 59;
+  --danger-ink:#8f1d2b;  --danger-ink-rgb:143 29 43;
+  --flame:#ff8f6b;  --flame-rgb:255 143 107;
+  --dev:#9af0b1;  --dev-rgb:154 240 177;
+  --dev-ink:#06170d;  --dev-ink-rgb:6 23 13;
+  --ok:#9fe0b4;  --ok-rgb:159 224 180;
+  --warn:#ffd9a0;  --warn-rgb:255 217 160;
+  --nl:#2f8fff;  --nl-rgb:47 143 255;
+  --nl-link:#58a6ff;  --nl-link-rgb:88 166 255;
+  --rose:#f4527c;  --rose-rgb:244 82 124;
+  --mint:#3ddc97;  --mint-rgb:61 220 151;
+  --sky:#8ec5ff;  --sky-rgb:142 197 255;
+  --amber:#f5c97a;  --amber-rgb:245 201 122;
+  --pink:#ff9fd0;  --pink-rgb:255 159 208;
+  /* alias semánticos */
+  --bg:var(--void); --panel:var(--abyss-2); --panel2:var(--dusk); --text:var(--cream); --muted:var(--mist); --accent:var(--lamp);
+  --line:rgb(255 255 255 / .14); --glass:rgb(var(--void-rgb) / .72); --ink:var(--abyss); --ink-soft:var(--dusk); --halo:rgb(244 249 255 / .9);
+  font-family:var(--sans);
+}
+* { box-sizing:border-box; }
+body { margin:0; min-width:280px; min-height:100dvh; color:var(--text); background:radial-gradient(circle at 50% -10%,var(--dusk) 0,var(--abyss-2) 37%,var(--bg) 76%); }
+button,input,textarea,select { font:inherit; }
+button { min-height:48px; border:1px solid var(--line); border-radius:12px; color:var(--text); background:var(--panel2); padding:.75rem 1rem; cursor:pointer; transition:transform .2s ease,border-color .2s ease,background-color .2s ease,box-shadow .2s ease; }
+button.primary { color:var(--ink-text); border-color:transparent; font-weight:800; background:linear-gradient(135deg,var(--lamp),var(--lamp-deep)); box-shadow:0 6px 24px rgb(var(--lamp-deep-rgb) / .21); }
+button:disabled { opacity:.45; }
+input,textarea,select { width:100%; color:var(--text); background:var(--abyss); border:1px solid var(--line); border-radius:10px; padding:.85rem; }
+textarea { resize:vertical; min-height:88px; }
+label { display:grid; gap:.4rem; color:var(--muted); font-size:.9rem; }
+h1,h2,h3,p { margin-top:0; }
+.card { background:linear-gradient(145deg,var(--panel),var(--abyss-2)); border:1px solid var(--line); border-radius:16px; padding:1rem; margin-bottom:1rem; border-color:var(--plum); box-shadow:0 14px 40px rgb(0 0 0 / .27); animation:rise-in .55s ease both; }
+#toast { position:fixed; left:50%; bottom:90px; transform:translateX(-50%) translateY(20px); opacity:0; visibility:hidden; pointer-events:none; background:var(--cream); color:var(--ink-text); padding:.75rem 1rem; border-radius:10px; transition:opacity .2s, transform .2s, visibility 0s .2s; z-index:10; width:max-content; max-width:90%; }
+#toast.show { opacity:1; visibility:visible; transform:translateX(-50%) translateY(0); transition-delay:0s; }
+#toast:empty { display:none; }
+.error { color:var(--danger); }
+[hidden] { display:none !important; }
+button:active:not(:disabled) { transform:translateY(0); }
+button:focus-visible,input:focus-visible,textarea:focus-visible { outline:2px solid var(--lamp); outline-offset:3px; }
+.visually-hidden { position:absolute!important; width:1px!important; height:1px!important; padding:0!important; margin:-1px!important; overflow:hidden!important; clip:rect(0,0,0,0)!important; white-space:nowrap!important; border:0!important; }

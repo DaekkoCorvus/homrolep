@@ -2,6 +2,9 @@
 // rellenan los módulos automáticos (data), las macros ({{char}}…) y el formato de salida que exige el motor.
 // El compositor (composer.js) lo convierte en mensajes. Separado del proveedor para poder previsualizar el prompt sin llamar al modelo.
 import { characterFormat, GM_FORMATS, SOCIAL_FORMATS } from './prompts.js';
+import { coreOf, deepEntries, selectDeep, queryFrom, deepView } from './context/card.js';
+import { windowOf } from './context/history.js';
+import { noticesSince } from './context/notices.js';
 
 export const personaOf = (npc) => ({
   nombre: npc.name, edad: npc.age, genero: npc.gender, raza: npc.race, rol: npc.role, resumen: npc.summary,
@@ -14,8 +17,12 @@ const playerGender = (player) => (player.gender === 'custom' ? player.genderCust
 const clock = (world) => (world ? `Día ${world.day}, ${String(world.hour).padStart(2, '0')}:${String(world.minute).padStart(2, '0')}` : '');
 
 // PERSONAJE (en persona) o TEXTO (chat): solo recibe lo que ese personaje sabe.
+const WINDOW = { person: 16, chat: 12 }; // intervenciones que se reenvían; lo importante ya quedó en recuerdos, datos y pendientes
 export function characterPlan({ npc, player, location, relationship, attitude, transcript, mode = 'reply', temporal, memories, history, emotions = [], stickyEmotions = [], currentExpression = null, contact, intent, commitments, instruction }) {
+  // Broker de contexto: ficha en dos capas (la profunda solo si viene al caso), escena en una línea de texto y ventana de conversación.
   const chat = mode === 'chat';
+  const deep = selectDeep(deepEntries(npc), queryFrom(transcript, intent));
+  const spoken = windowOf(transcript.filter((line) => line.who === 'player' || line.who === 'npc'), chat ? WINDOW.chat : WINDOW.person);
   const canShare = contact?.yaCompartido !== true;
   const sees = { edadAparente: player.age, genero: playerGender(player), apariencia: player.appearance };
   const user = relationship.knownName || 'la otra persona';
@@ -24,9 +31,9 @@ export function characterPlan({ npc, player, location, relationship, attitude, t
     format: characterFormat({ canShare, mode }),
     macros: { char: npc.name, user, location: chat ? '' : location?.name ?? '', time: temporal.ahora },
     data: {
-      tu: personaOf(npc),
-      ahora: temporal.ahora,
-      lugar: chat ? undefined : { nombre: location?.name, descripcion: location?.description },
+      tu: coreOf(npc),
+      tuMemoria: deepView(deep),
+      escena: `Ahora: ${temporal.ahora}.${chat || !location?.name ? '' : ` Lugar: ${location.name}${location.description ? ` — ${location.description.replace(/[.\s]+$/, '')}` : ''}.`}`,
       loQueSabesDeLaOtraPersona: { nombreQueTeDio: relationship.knownName || null, loQueVes: chat ? undefined : sees, cosasQueTeHaContado: relationship.knows?.length ? relationship.knows : undefined },
       vuestraRelacion: { actitud: attitude, primerEncuentro: !relationship.encounters, ultimaConversacion: temporal.ultimaConversacion, recuerdosPrivados: memories, resumenesPrevios: history },
       pendientesConEstaPersona: commitments?.length ? commitments : undefined,
@@ -35,7 +42,7 @@ export function characterPlan({ npc, player, location, relationship, attitude, t
       emocionesQueSeMantienen: !chat && stickyEmotions.length ? stickyEmotions : undefined,
       expresionActual: currentExpression || undefined,
       tuIntencionAnterior: intent || undefined,
-      conversacion: transcript.filter((line) => line.who === 'player' || line.who === 'npc').map((line) => ({ quien: line.who === 'player' ? 'la otra persona' : npc.name, texto: line.text }))
+      conversacion: [...(spoken.omitted ? [{ nota: `Antes de esto hubo ${spoken.omitted} intervenciones más; lo importante ya está en tus recuerdos y pendientes.` }] : []), ...spoken.lines.map((line) => ({ ...(line.n ? { n: line.n } : {}), quien: line.who === 'player' ? 'la otra persona' : npc.name, texto: line.text, ...(line.replyTo?.text ? { respondeA: String(line.replyTo.text).slice(0, 120) } : {}) }))]
     }
   };
 }
@@ -55,40 +62,38 @@ export function evaluationPlan({ npc, player, relationship, attitude, transcript
   };
 }
 
-// GM narrando una acción. `freeform` puede activar un encuentro con alguien presente.
-export function narrationPlan(mode, before, after, worldData, present = []) {
+const playerView = (player) => ({ nombre: player.name, edad: player.age, genero: player.gender, genderCustom: player.genderCustom, raza: player.race, origen: player.origin, ocupacion: player.occupation, aspiracion: player.aspiration, dinero: player.money, reputacion: player.reputation });
+
+// GM narrando una acción que el motor ya aplicó (viajar, esperar, dormir, trabajar).
+export function narrationPlan(mode, before, after, worldData, npcs = new Map()) {
   const player = after.player;
   const here = worldData.locations.find(({ id }) => id === player.locationId);
   return {
     kind: 'gm', mode, format: GM_FORMATS[mode],
     macros: { player: player.name, user: player.name, location: here?.name ?? '', time: clock(after.world) },
-    data: {
-      jugador: { nombre: player.name, edad: player.age, genero: player.gender, genderCustom: player.genderCustom, raza: player.race, origen: player.origin, ocupacion: player.occupation, aspiracion: player.aspiration, dinero: player.money, reputacion: player.reputation },
-      mundo: after.world, lugar: here, prologo: before.prologue?.text, sucesosRecientes: before.eventLog.slice(-12), accion: after.eventLog.at(-1), lugarAnterior: before.player.locationId,
-      personasPresentes: mode === 'narration' ? present : undefined
-    }
+    data: { jugador: playerView(player), mundo: after.world, lugar: here, prologo: before.prologue?.text, sucesosRecientes: noticesSince(before, { worldData, npcs, max: 8 }), accion: after.eventLog.at(-1), lugarAnterior: before.player.locationId }
   };
 }
 
-// GM procesando chats pendientes (todos los personajes en una sola llamada).
-export function chatsPlan({ chats, locations = [], ahora, playerName = '' }) {
+// GM en el mundo libre: recibe la cabecera ambiente (texto calculado por el motor) y la acción escrita; actúa con herramientas.
+export function worldPlan(run, worldData, header) {
+  const player = run.player;
+  const here = worldData.locations.find(({ id }) => id === player.locationId);
   return {
-    kind: 'gm', mode: 'chats', format: GM_FORMATS.chats,
-    macros: { player: playerName, user: playerName, time: ahora },
-    data: {
-      ahora, lugares: locations,
-      chats: chats.map((item) => ({ npcId: item.npcId, personaje: item.name, pendientes: item.commitments, mensajes: item.lines.map((line) => ({ quien: line.who === 'player' ? 'jugador' : item.name, texto: line.text })) }))
-    }
+    kind: 'gm', mode: 'free', format: GM_FORMATS.free,
+    macros: { player: player.name, user: player.name, location: here?.name ?? '', time: clock(run.world) },
+    // Los sucesos recientes van en la cabecera (avisos desde la última intervención); aquí solo la última narración, para continuar la historia.
+    data: { cabecera: header, jugador: playerView(player), prologo: run.prologue?.text, ultimaNarracion: run.narrative?.text ? run.narrative.text.slice(0, 700) : undefined, accion: run.eventLog.at(-1) }
   };
 }
 
 // SOCIAL (NorthLife): genera publicaciones del feed (mode 'post') o reacciona a lo que hizo el jugador (mode 'reply').
 // `input` lo prepara game/social.js → socialInput().
 export function socialPlan(input) {
-  const { mode, ahora, dia, ciudad, lugares, cuentas, recientes, jugador, publicacion, accionDelJugador, respuestasEsperadas } = input;
+  const { mode, ahora, dia, ciudad, lugares, avisos, cuentas, recientes, jugador, publicacion, accionDelJugador, respuestasEsperadas } = input;
   return {
     kind: 'social', mode, format: SOCIAL_FORMATS[mode],
     macros: { player: jugador?.nombre ?? '', time: ahora },
-    data: { ahora, dia, ciudad, lugares, cuentas, jugador, recientes, publicacion, accionDelJugador, respuestasEsperadas }
+    data: { ahora, dia, ciudad, lugares, avisos, cuentas, jugador, recientes, publicacion, accionDelJugador, respuestasEsperadas }
   };
 }

@@ -17,9 +17,11 @@ export async function request(url, options = {}) {
   return body;
 }
 
+// Aviso breve. Nunca bloquea los toques (`pointer-events:none` en el CSS) y, al ocultarse, no deja su texto ocupando sitio.
 export function notify(message) {
+  clearTimeout(notify.timer); clearTimeout(notify.clear);
   toast.textContent = message; toast.classList.add('show');
-  clearTimeout(notify.timer); notify.timer = setTimeout(() => toast.classList.remove('show'), 2400);
+  notify.timer = setTimeout(() => { toast.classList.remove('show'); notify.clear = setTimeout(() => { if (!toast.classList.contains('show')) toast.textContent = ''; }, 260); }, 2400);
 }
 
 export function period(hour) {
@@ -31,6 +33,13 @@ export function period(hour) {
 export const clockText = (world) => `${String(world.hour).padStart(2,'0')}:${String(world.minute).padStart(2,'0')}`;
 export const timeText = (world) => `Día ${world.day} · ${clockText(world)} · ${period(world.hour)}`;
 export const place = (id) => state.world.locations.find((item) => item.id === id);
+// Un lugar que el mapa del cliente aún no conoce (el autor lo añadió o lo borró mientras se jugaba) nunca rompe la pantalla.
+export const placeOrUnknown = (id) => place(id) ?? { id, name: id, district: state.world?.name ?? '', kind: 'other', description: '', hours: null };
+// Los lugares y sus nombres salen del mapa que el autor edita: se vuelven a pedir cuando cambia su versión (p. ej. al abrir el mapa del juego).
+export async function refreshWorld() {
+  try { state.world = await request('/api/world'); } catch { /* se queda con el mundo que ya tenía */ }
+  return state.world;
+}
 export function escapeHtml(value='') { const node=document.createElement('span'); node.textContent=value; return node.innerHTML.replace(/"/g, '&quot;'); }
 
 // Utilidades del modo desarrollador compartidas por sus paneles (devtools.js, prompteditor.js).

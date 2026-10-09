@@ -2,6 +2,8 @@
 // de texto (editables, con macros) o automáticos (datos del juego que rellena el motor). Funciona sobre un borrador:
 // nada cambia hasta pulsar «Guardar».
 import { state, notify, escapeHtml, dreq, layer } from './core.js';
+import { describeMeta, openStats } from './aitrace.js';
+import { askConfirm } from './dialogs.js';
 
 const ROLES = [['system', 'Sistema'], ['user', 'Usuario'], ['assistant', 'Asistente']];
 const roleLabel = Object.fromEntries(ROLES);
@@ -58,9 +60,10 @@ export async function openPromptEditor(startKind = 'character') {
   const sheet = node.querySelector('.dev-sheet'); const body = node.querySelector('.pe-body'); const tabs = node.querySelector('.tabs'); const error = node.querySelector('[data-error]');
 
   // Cerrar (× o tocar fuera) pregunta si hay cambios sin guardar.
-  const guard = () => !infos.some((item) => dirty(item.kind)) || confirm('Hay cambios sin guardar en los prompts. ¿Cerrar sin guardarlos?');
-  node.querySelectorAll('[data-close]').forEach((button) => { button.onclick = () => { if (guard()) node.remove(); }; });
-  node.addEventListener('click', (event) => { if (event.target === node && !guard()) event.stopImmediatePropagation(); }, true);
+  const unsaved = () => infos.some((item) => dirty(item.kind));
+  const guard = async () => !unsaved() || askConfirm({ title: '¿Cerrar sin guardar?', text: 'Hay cambios sin guardar en los prompts.', confirmLabel: 'Cerrar sin guardar', cancelLabel: 'Seguir editando', danger: true });
+  node.querySelectorAll('[data-close]').forEach((button) => { button.onclick = async () => { if (await guard()) node.remove(); }; });
+  node.addEventListener('click', async (event) => { if (event.target !== node || !unsaved()) return; event.stopImmediatePropagation(); if (await guard()) node.remove(); }, true);
 
   const modeLabel = (id) => info[kind].modes.find((mode) => mode.id === id)?.label ?? id;
   const autoOf = (module) => info[kind].autos.find(({ key }) => key === module.auto);
@@ -70,10 +73,10 @@ export async function openPromptEditor(startKind = 'character') {
   }
 
   function moduleRow(module, index, total) {
-    const required = module.auto === 'format' || module.auto === 'task';
+    const required = module.auto === 'format' || module.auto === 'task' || autoOf(module)?.required === true;
     const isOpen = opened.has(module.id);
     const scope = module.modes?.length ? ` · solo: ${module.modes.map(modeLabel).join(', ')}` : '';
-    const meta = module.type === 'auto' ? `automático · ${roleLabel[module.role]}${scope}${module.auto === 'format' ? ' · obligatorio' : module.auto === 'task' ? ' · obligatorio' : ''}` : `texto · ${roleLabel[module.role]}${scope}`;
+    const meta = module.type === 'auto' ? `automático · ${roleLabel[module.role]}${scope}${required ? ' · obligatorio' : ''}` : `texto · ${roleLabel[module.role]}${scope}`;
     const modesField = required ? '' : `<div class="dev-field"><span>Se envía en</span><div class="pm-modes">${info[kind].modes.map((mode) => `<label><input type="checkbox" data-mode="${mode.id}" ${module.modes?.includes(mode.id) ? 'checked' : ''}>${escapeHtml(mode.label)}</label>`).join('')}</div><small>Sin marcar = en todos los tipos de turno.</small></div>`;
     const content = module.type === 'auto'
       ? `<p class="dev-hint">${escapeHtml(autoOf(module)?.description ?? '')}</p>`
@@ -117,7 +120,7 @@ export async function openPromptEditor(startKind = 'character') {
       <p class="dev-hint">Déjalos vacíos para usar los valores del modelo. Algunos modelos con razonamiento los ignoran.</p>
       <h3>Ver lo que recibe el modelo</h3>
       <div class="dev-buttons"><select data-preview-mode aria-label="Tipo de turno">${spec.modes.map((mode) => `<option value="${mode.id}" ${previewMode[kind] === mode.id ? 'selected' : ''}>${escapeHtml(mode.label)}</option>`).join('')}</select>
-        <button type="button" data-preview>Vista previa</button><button type="button" data-sent>Último enviado</button></div>
+        <button type="button" data-preview>Vista previa</button><button type="button" data-sent>Último enviado</button><button type="button" data-stats>Estadísticas</button></div>
       <p class="dev-hint">La vista previa usa tu partida abierta y el borrador actual, sin llamar al modelo.</p>`;
     // Los valores se asignan como propiedades (sin pasar por el HTML) para no romper con comillas ni saltos de línea.
     body.querySelectorAll('.pm.open').forEach((row) => {
@@ -187,10 +190,10 @@ export async function openPromptEditor(startKind = 'character') {
       draft.modules.splice(draft.modules.indexOf(module) + 1, 0, copy); opened.add(copy.id); touch(); draw();
     } else if (button.dataset.act === 'restore') {
       const module = moduleOf(button); const original = info[kind].defaults.modules.find((item) => item.id === module.id);
-      if (original && confirm('¿Restaurar el texto de fábrica de este módulo? Se pierde tu edición no guardada.')) { module.content = original.content; touch(); draw(); }
+      if (original && await askConfirm({ title: '¿Restaurar el texto de fábrica?', text: 'Se pierde tu edición no guardada de este módulo.', confirmLabel: 'Restaurar' })) { module.content = original.content; touch(); draw(); }
     } else if (button.dataset.act === 'delete') {
       const module = moduleOf(button);
-      if (module.type === 'text' && module.content.trim() && !confirm(`¿Quitar «${module.name}»?`)) return;
+      if (module.type === 'text' && module.content.trim() && !await askConfirm({ title: `¿Quitar «${module.name}»?`, confirmLabel: 'Quitar', danger: true })) return;
       draft.modules.splice(draft.modules.indexOf(module), 1); opened.delete(module.id); touch(); draw();
     } else if (button.dataset.restoreTask) {
       draft.tasks[button.dataset.restoreTask] = info[kind].defaults.tasks[button.dataset.restoreTask]; touch(); draw();
@@ -204,6 +207,8 @@ export async function openPromptEditor(startKind = 'character') {
         const result = await dreq(`/api/dev/prompts/${kind}/preview`, { method: 'POST', body: JSON.stringify({ runId: state.run.id, mode: previewMode[kind], preset: draft }) });
         viewer(`${info[kind].label} · ${modeLabelOf(result.mode)}`, `${result.messages.length} mensajes · ${result.chars} caracteres · ~${result.approxTokens} tokens (estimado). Así quedaría con tu borrador.`, result.messages);
       } catch (failure) { notify(failure.message); }
+    } else if (button.matches('[data-stats]')) {
+      openStats();
     } else if (button.matches('[data-sent]')) {
       try {
         const { entries } = await dreq('/api/dev/prompts/log');
@@ -211,7 +216,7 @@ export async function openPromptEditor(startKind = 'character') {
         if (!mine.length) { notify('Aún no se ha enviado nada con este prompt en esta sesión del servidor.'); return; }
         const show = (entry) => {
           const tail = `<article class="pv-msg"><header><span class="pv-role r-answer">${entry.error ? 'Error' : 'Respuesta del modelo'}</span><small>${(entry.response ?? entry.error ?? '').length} caracteres</small></header><pre data-answer></pre></article>`;
-          const node2 = viewer(`${info[kind].label} · ${modeLabelOf(entry.mode)}`, `Enviado el ${new Date(entry.at).toLocaleString('es')}. Es exactamente lo que recibió el modelo.${mine.length > 1 ? ' <button type="button" class="pm-link" data-older>ver el anterior</button>' : ''}`, entry.messages, tail);
+          const node2 = viewer(`${info[kind].label} · ${modeLabelOf(entry.mode)}`, `Enviado el ${new Date(entry.at).toLocaleString('es')}. Es exactamente lo que recibió el modelo.${entry.meta ? `<br><small>${escapeHtml(describeMeta(entry.meta))}</small>` : ''}${mine.length > 1 ? ' <button type="button" class="pm-link" data-older>ver el anterior</button>' : ''}`, entry.messages, tail);
           node2.querySelector('[data-answer]').textContent = entry.response ?? entry.error ?? '';
           node2.querySelector('[data-older]')?.addEventListener('click', () => { const next = mine[(mine.indexOf(entry) + 1) % mine.length]; node2.remove(); show(next); });
         };
@@ -229,7 +234,7 @@ export async function openPromptEditor(startKind = 'character') {
     } catch (failure) { error.textContent = failure.message; }
   };
   node.querySelector('[data-reset]').onclick = async () => {
-    if (!confirm(`¿Restablecer el prompt «${info[kind].label}» a los valores de fábrica? Se pierden tus módulos guardados.`)) return;
+    if (!await askConfirm({ title: `¿Restablecer «${info[kind].label}»?`, text: 'Vuelve a los valores de fábrica y se pierden tus módulos guardados.', confirmLabel: 'Restablecer', danger: true })) return;
     try {
       const result = await dreq(`/api/dev/prompts/${kind}`, { method: 'DELETE' });
       info[kind] = result; drafts[kind] = structuredClone(result.preset); saved[kind] = JSON.stringify(result.preset); report = []; opened.clear();
@@ -249,7 +254,7 @@ export async function openPromptEditor(startKind = 'character') {
       const text = await file.text(); let json;
       try { json = JSON.parse(text); } catch { throw new Error('El archivo no es un JSON válido.'); }
       if (Array.isArray(json?.prompts)) {
-        if (!confirm(`Se reemplazarán los módulos del borrador «${info[kind].label}» por los del preset de SillyTavern (aún sin guardar). ¿Continuar?`)) return;
+        if (!await askConfirm({ title: '¿Importar el preset?', text: `Se reemplazarán los módulos del borrador «${info[kind].label}» por los del preset de SillyTavern (aún sin guardar).`, confirmLabel: 'Importar' })) return;
         const result = await dreq(`/api/dev/prompts/${kind}/import`, { method: 'POST', body: JSON.stringify({ text }) });
         drafts[kind] = result.preset; report = result.report; opened.clear();
       } else if (Array.isArray(json?.modules)) {

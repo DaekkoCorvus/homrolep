@@ -1,5 +1,6 @@
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { normalizeStage } from '../../shared/stage.js';
 
 // Fichas de NPC: validación, importación (nativa y formato «character card» de Tavern), retratos.
 const ID = /^[a-z][a-z0-9_]{1,40}$/;
@@ -55,6 +56,7 @@ export function validateNpcCard(input, locationIds) {
   }));
   if (connections.length > 30) throw new Error('Se admiten 30 conexiones como máximo.');
   if (connections.some((link) => link.npcId === id)) throw new Error('Un personaje no puede conectarse consigo mismo.');
+  const stage = normalizeStage(input.stage);
   return {
     id, name, age, role: text(input.role, 120, 'el rol'), gender: text(input.gender, 30, 'el género'), race,
     tier: TIERS.has(input.tier) ? input.tier : 'civil',
@@ -80,7 +82,9 @@ export function validateNpcCard(input, locationIds) {
     schedule, connections,
     // Emociones que no vuelven solas a la neutra: se quedan hasta que el GM ponga otra (escenas largas, sprites especiales).
     emotionsStay: list(input.emotionsStay, 60, 20, 'las emociones que se mantienen').map((name) => name.toLowerCase()).filter((name) => /^[a-z]{1,20}$/.test(name)),
-    contact: { handle, conditions: list(input.contact?.conditions, 20, 500, 'las condiciones de contacto') }
+    contact: { handle, conditions: list(input.contact?.conditions, 20, 500, 'las condiciones de contacto') },
+    // Encuadre en escena (tamaño y posición por emoción); la clave solo existe si hay algo que guardar.
+    ...(stage && { stage })
   };
 }
 
@@ -99,6 +103,39 @@ export function fromForeignCard(raw, defaultLocation) {
     personality: { traits: [], speech: data.first_mes ? `Su primer saludo de referencia: ${String(data.first_mes).slice(0, 500)}` : '', likes: [], dislikes: [], boundaries: '', warmsUpWhen: '', coolsDownWhen: '', loveLanguage: '' },
     knowledge: [], secrets: [], contact: { conditions: ['Que el jugador se haya ganado su confianza.'] }
   };
+}
+
+// Campos de una ficha que una importación puede sustituir (etiqueta en español para decirle al creador qué cambió). `id` y las imágenes nunca se tocan.
+const OVERWRITABLE = {
+  name: 'Nombre', age: 'Edad', role: 'Rol', gender: 'Género', race: 'Raza', tier: 'Categoría', summary: 'Resumen', home: 'Lugar de casa', appearance: 'Apariencia',
+  clothingLikes: 'Prendas que le agradan', clothingDislikes: 'Prendas que evita', exampleDialogue: 'Ejemplo de voz', background: 'Trasfondo', knowledge: 'Conocimientos',
+  secrets: 'Secretos', schedule: 'Horario', connections: 'Conexiones', emotionsStay: 'Expresiones que se mantienen', stage: 'Encuadre'
+};
+const PERSONALITY_LABELS = { traits: 'Rasgos', speech: 'Forma de hablar', likes: 'Gustos', dislikes: 'Lo que le desagrada', boundaries: 'Límites', warmsUpWhen: 'Cuándo se abre', coolsDownWhen: 'Cuándo se cierra', loveLanguage: 'Lenguaje del amor' };
+const CONTACT_LABELS = { handle: 'Usuario de contacto', conditions: 'Condiciones de contacto' };
+
+// Sustituye en `base` (la ficha que se está editando) SOLO lo que el archivo `raw` trae: JSON propio (completo o parcial) o «character card» de Tavern.
+// En una card de Tavern solo cuentan los datos que existen de verdad (nombre, descripción, escenario, ejemplos, primer saludo), no los de relleno que
+// inventa fromForeignCard (rol, horario, contacto…), para no borrar lo ya trabajado. Devuelve la ficha fusionada SIN validar y las etiquetas de lo sustituido.
+export function importOver(base, raw, defaultLocation) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('El archivo no contiene una ficha válida.');
+  const foreign = Boolean(raw.spec || raw.data || raw.description !== undefined || raw.first_mes !== undefined || raw.mes_example !== undefined);
+  const top = {}; const personality = {}; const contact = {};
+  if (foreign) {
+    const data = raw.data ?? raw; const draft = fromForeignCard(raw, defaultLocation);
+    top.name = draft.name;
+    if (String(data.personality ?? data.description ?? '').trim()) top.summary = draft.summary;
+    if (draft.background) top.background = draft.background;
+    if (draft.exampleDialogue) top.exampleDialogue = draft.exampleDialogue;
+    if (data.first_mes) personality.speech = draft.personality.speech;
+  } else {
+    for (const key of Object.keys(OVERWRITABLE)) if (raw[key] !== undefined) top[key] = raw[key];
+    for (const key of Object.keys(PERSONALITY_LABELS)) if (raw.personality?.[key] !== undefined) personality[key] = raw.personality[key];
+    for (const key of Object.keys(CONTACT_LABELS)) if (raw.contact?.[key] !== undefined) contact[key] = raw.contact[key];
+  }
+  const replaced = [...Object.keys(top).map((key) => OVERWRITABLE[key]), ...Object.keys(personality).map((key) => PERSONALITY_LABELS[key]), ...Object.keys(contact).map((key) => CONTACT_LABELS[key])];
+  if (!replaced.length) throw new Error('El archivo no trae ningún dato de ficha que se pueda importar.');
+  return { card: { ...base, ...top, personality: { ...base.personality, ...personality }, contact: { ...base.contact, ...contact } }, replaced };
 }
 
 // Las fichas PNG de Tavern guardan el JSON en base64 dentro de un chunk tEXt («chara» o «ccv3»).
@@ -145,8 +182,8 @@ export async function savePortrait(assetDir, npcId, buffer, emotion = 'default')
   return kind;
 }
 
-// Devuelve {emotion: url}. `default` es el retrato base; el resto queda listo para cuando se añadan emociones.
-export async function listPortraits(assetDir, npcId) {
+// La mejor imagen de cada emoción (la más ligera si hay varias): [{ emotion, name, ext, file }] ordenado por emoción. Sin carpeta, lista vacía.
+export async function bestPortraitFiles(assetDir, npcId) {
   const directory = path.join(assetDir, 'portraits', npcId);
   const best = new Map();
   try {
@@ -156,10 +193,17 @@ export async function listPortraits(assetDir, npcId) {
       if (rank < 0 || !EMOTION.test(emotion)) continue;
       if (!best.has(emotion) || rank < best.get(emotion).rank) best.set(emotion, { rank, name });
     }
-    const out = {};
-    for (const [emotion, { name }] of [...best].sort()) out[emotion] = `/assets/portraits/${npcId}/${name}?v=${Math.round((await stat(path.join(directory, name))).mtimeMs)}`;
-    return out;
-  } catch { return {}; } // sin carpeta: aún no hay retratos
+  } catch { return []; }
+  return [...best].sort().map(([emotion, { name }]) => ({ emotion, name, ext: path.extname(name).toLowerCase(), file: path.join(directory, name) }));
+}
+
+// Devuelve {emotion: url}. `default` es el retrato base; el resto queda listo para cuando se añadan emociones.
+export async function listPortraits(assetDir, npcId) {
+  const out = {};
+  try {
+    for (const { emotion, name, file } of await bestPortraitFiles(assetDir, npcId)) out[emotion] = `/assets/portraits/${npcId}/${name}?v=${Math.round((await stat(file)).mtimeMs)}`;
+  } catch { return {}; }
+  return out;
 }
 
 const portraitFiles = async (directory, emotion) => (await readdir(directory).catch(() => [])).filter((name) => path.parse(name).name === emotion && PORTRAIT_PRIORITY.includes(path.parse(name).ext.toLowerCase()));

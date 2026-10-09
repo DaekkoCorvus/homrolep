@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRun, setPrologue, applyAction } from '../src/server/game/run.js';
+import { createRun, setPrologue } from '../src/server/game/run.js';
+import { applyAction } from '../src/server/ai/tools/game.js';
 import { publishPlayerPost, saveProfile } from '../src/server/game/social.js';
+import { worldData as world } from './support/world.js';
 
-const world = { locations: [
-  { id:'apartment', travelMinutes:0 },
-  { id:'cafe', travelMinutes:20 }
+const bareWorld = { locations: [
+  { id:'apartment' },
+  { id:'cafe' }
 ] };
 const character = { name:'Mara', age:'24', gender:'woman', race:'human', origin:'Llegué a la ciudad buscando respuestas.' };
 
@@ -26,7 +28,7 @@ test('character creation validates identity, race and backstory', () => {
 });
 
 test('prologue location is constrained by the world data', () => {
-  const run = setPrologue(createRun(character), { text:'Una nueva llegada.', locationId:'unofficial', source:'ai' }, world);
+  const run = setPrologue(createRun(character), { text:'Una nueva llegada.', locationId:'unofficial', source:'ai' }, bareWorld);
   assert.equal(run.player.locationId, 'apartment');
   assert.equal(run.prologue.locationId, 'apartment');
   assert.equal(run.eventLog.at(-1).type, 'prologue_created');

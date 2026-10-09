@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { loadNpcs } from '../src/server/game/npcs.js';
 import { createRun } from '../src/server/game/run.js';
 import { createAppServer } from '../src/server/index.js';
+import { fixtureGeography } from './support/world.js';
 import { validateAvatarUrls, createSocialCatalog, validateSeeds } from '../src/server/game/socialCatalog.js';
 import { applyGeneratedPosts, applyReactions, wipeFeed, feedDue, saveProfile, socialView, socialInput, withAvatars, pickAvatar, publishPlayerPost, threadFor, PROMPT_LIMITS, MAX_GENERATED_POSTS } from '../src/server/game/social.js';
 import { SOCIAL_TASKS } from '../src/server/ai/prompts.js';
@@ -209,7 +210,7 @@ test('API: avatars reach the client only through the validated view, and old sav
   legacy.social = { posts: [{ id: 'p1', handle: '@vecina_vieja', name: 'Vecina', text: 'Hola desde una partida antigua', minutes: 8 * 60, time: 'DAY_1_08:00', likes: 4, reposts: 0, replies: [] }], accounts: { '@vecina_vieja': { handle: '@vecina_vieja', name: 'Vecina', popularity: 8, verified: false } }, notifications: [], profile: legacy.social.profile };
   runs.set(legacy.id, legacy);
   let snapshot = { seeds, avatars: catalog.slice(0, 2), avatarSet: new Set(catalog.slice(0, 2)), warnings: [] };
-  const server = createAppServer({ socialCatalog: { current: () => snapshot, refresh: async () => snapshot }, ai: {}, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (item) => runs.set(item.id, structuredClone(item)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
+  const server = createAppServer({ geography: fixtureGeography(), socialCatalog: { current: () => snapshot, refresh: async () => snapshot }, ai: {}, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (item) => runs.set(item.id, structuredClone(item)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -246,7 +247,7 @@ test('dev tool: wiping the feed removes posts, generated accounts and notificati
 
   // API: solo con las herramientas de desarrollo activadas
   const runs = new Map([[run.id, run]]);
-  const server = createAppServer({ ai: {}, socialCatalog: { current: () => ({ seeds, avatars: catalog, avatarSet: new Set(catalog), warnings: [] }), refresh: async () => {} }, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (item) => runs.set(item.id, structuredClone(item)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
+  const server = createAppServer({ geography: fixtureGeography(), ai: {}, socialCatalog: { current: () => ({ seeds, avatars: catalog, avatarSet: new Set(catalog), warnings: [] }), refresh: async () => {} }, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (item) => runs.set(item.id, structuredClone(item)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const call = async (dev) => { const response = await fetch(`http://127.0.0.1:${server.address().port}/api/runs/${run.id}/dev`, { method: 'POST', headers: { 'content-type': 'application/json', ...(dev ? { 'x-hom-dev': '1' } : {}) }, body: JSON.stringify({ op: 'social_wipe' }) }); return { status: response.status, body: await response.json() }; };

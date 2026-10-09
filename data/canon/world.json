@@ -1,0 +1,8 @@
+{
+  "id": "northfortress",
+  "mapId": "northfortress",
+  "spawn": "station",
+  "walkMetersPerMinute": 80,
+  "minTravelMinutes": 2,
+  "maxWalkMinutes": 180
+}

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createNanoGPT } from '../src/server/ai/provider.js';
 import { createAppServer } from '../src/server/index.js';
+import { fixtureGeography } from './support/world.js';
 import { createRun } from '../src/server/game/run.js';
 
 const completion = (content) => ({ ok: true, json: async () => ({ choices: [{ message: { content }, finish_reason: 'stop' }] }) });
@@ -20,7 +21,7 @@ test('slow models are never cut off, and stopping aborts the upstream call witho
     await new Promise((resolve) => setTimeout(resolve, 400)); // un modelo lento: sin límite de tiempo propio
     return completion('{"say":"Buenos días.","gesture":"sonríe"}');
   };
-  const server = createAppServer({
+  const server = createAppServer({ geography: fixtureGeography(),
     ai: createNanoGPT(fetchImpl), settings: { require: async () => ({ apiKey: 'k', model: 'm' }) },
     store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] }
   });
@@ -36,7 +37,8 @@ test('slow models are never cut off, and stopping aborts the upstream call witho
   mode = 'hang';
   const controller = new AbortController();
   const pending = talk({ op: 'start', npcId: 'luna_serp' }, controller.signal).catch((error) => error);
-  await new Promise((resolve) => setTimeout(resolve, 150));
+  while (calls < 1) await new Promise((resolve) => setTimeout(resolve, 10)); // espera a que la llamada upstream haya empezado (no un tiempo fijo: con carga era frágil)
+  await new Promise((resolve) => setTimeout(resolve, 30));
   controller.abort();
   assert.equal((await pending).name, 'AbortError');
   await new Promise((resolve) => setTimeout(resolve, 100));

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createAppServer } from '../src/server/index.js';
+import { fixtureGeography } from './support/world.js';
 import { createRun } from '../src/server/game/run.js';
 import { summarizeRun } from '../src/server/saves/store.js';
 
@@ -18,7 +19,7 @@ test('save slots: list summaries, rename, duplicate (an independent copy) and de
     listRuns: async () => [...runs.values()].map(summarizeRun).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     deleteRun: async (id) => { runs.delete(id); }
   };
-  const server = createAppServer({ ai: {}, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store });
+  const server = createAppServer({ geography: fixtureGeography(), ai: {}, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}`;

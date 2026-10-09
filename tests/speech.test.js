@@ -5,6 +5,7 @@ import { rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { parseSpeech, stripMarks } from '../src/server/game/npcs.js';
 import { createAppServer } from '../src/server/index.js';
+import { fixtureGeography } from './support/world.js';
 
 const BS = '\\'; // las marcas de emoción llevan una barra invertida: [\feliz]
 
@@ -47,7 +48,7 @@ test('the character receives emotions and contact status (never the player\'s pr
     evaluateEncounter: async () => ({ notes: [], summary: 'ok' }),
     prologue: async () => ({ text: 'x', locationId: 'station' })
   };
-  const server = createAppServer({ ai, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
+  const server = createAppServer({ geography: fixtureGeography(), ai, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -59,7 +60,7 @@ test('the character receives emotions and contact status (never the player\'s pr
 
   const opened = await call(`/api/runs/${id}/talk`, { op: 'start', npcId: 'luna_serp' });
   const context = seen.at(-1);
-  assert.deepEqual(context.emotions, ['zztest'], 'el motor ofrece las emociones que existen como imagen');
+  assert.ok(context.emotions.includes('zztest') && !context.emotions.includes('default'), 'el motor ofrece las emociones que existen como imagen (las reales de Luna y la de prueba)');
   assert.equal(context.events, undefined, 'el personaje no recibe lo que el jugador hace por el mundo');
   assert.equal(JSON.stringify(context).includes('prisa por la lluvia'), false, 'ni sus acciones privadas');
   assert.equal(context.contact.yaCompartido, false);

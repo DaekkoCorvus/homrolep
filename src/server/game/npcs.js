@@ -1,5 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { normalizeStage } from '../../shared/stage.js';
 
 // Reglas sociales deterministas. La IA propone impresiones; este módulo decide qué se acepta.
 export const MAX_NOTES = 30;
@@ -149,7 +150,7 @@ export function presentNpcs(npcs, locationId, world) {
   return [...npcs.values()].filter((npc) => scheduleFor(npc, world)?.locationId === locationId);
 }
 
-export const publicNpc = (npc) => ({ id: npc.id, name: npc.name, role: npc.role, stickyEmotions: npc.emotionsStay ?? [] });
+export const publicNpc = (npc) => ({ id: npc.id, name: npc.name, role: npc.role, stickyEmotions: npc.emotionsStay ?? [], stage: normalizeStage(npc.stage) });   // loadNpcs lee el JSON sin validar: se normaliza antes de llegar al cliente
 
 // Expresión que sigue activa desde la última línea del NPC si es de las que se mantienen (si no, null).
 export function stickyFrom(lines, npc) {

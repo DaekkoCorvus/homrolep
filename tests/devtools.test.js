@@ -8,6 +8,7 @@ import { validateNpcCard, fromForeignCard, parsePngCard, savePortrait, listPortr
 import { createRun, startEncounter, addExchange, endEncounter, rewindEncounter, replaceLastNpcLine, setWorldTime } from '../src/server/game/run.js';
 import { loadNpcs, emptyRelationship } from '../src/server/game/npcs.js';
 import { createAppServer } from '../src/server/index.js';
+import { fixtureGeography } from './support/world.js';
 
 const locations = ['cafe', 'park'];
 const card = () => ({
@@ -106,7 +107,7 @@ test('dev API is closed by default and supports restart, regenerate and time cha
     evaluateEncounter: async () => { ++evaluations; return { notes: [{ text: `Nota ${evaluations}`, valence: 1, evidence: 'Hola' }], summary: 'ok' }; },
     narrate: async () => 'Narración nueva.', prologue: async () => ({ text: 'Llegas.', locationId: 'station' })
   };
-  const server = createAppServer({ ai, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
+  const server = createAppServer({ geography: fixtureGeography(), ai, settings: { require: async () => ({ apiKey: 'k', model: 'm' }) }, store: { saveRun: async (run) => runs.set(run.id, structuredClone(run)), loadRun: async (id) => structuredClone(runs.get(id)), listRuns: async () => [] } });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -127,7 +128,10 @@ test('dev API is closed by default and supports restart, regenerate and time cha
   const stored = runs.get(id); stored.player.locationId = 'cafe'; stored.world.hour = 9; runs.set(id, stored);
   assert.equal((await call(`/api/runs/${id}/dev`, { op: 'restart' }, false)).status, 403);
 
-  await call(`/api/runs/${id}/talk`, { op: 'start', npcId: 'luna_serp' });
+  assert.equal((await fetch(`${base}/shared/stage.js`)).status, 200, 'el módulo de encuadre se sirve al cliente');
+  assert.equal((await fetch(`${base}/framing.js`)).status, 200, 'la vista de encuadre se sirve al cliente');
+  const talk = await call(`/api/runs/${id}/talk`, { op: 'start', npcId: 'luna_serp' });
+  assert.equal(talk.body.encounterNpc.stage, null, 'Luna no tiene encuadre: el cliente usa el render clásico');
   await call(`/api/runs/${id}/talk`, { op: 'say', text: 'Hola' });
   const regen = await call(`/api/runs/${id}/dev`, { op: 'regen' });
   assert.equal(regen.status, 200);

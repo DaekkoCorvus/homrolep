@@ -40,12 +40,14 @@ export function dueLabel(due) {
   return due.exact ? `${day}, ${pad(due.hour)}:${pad(due.minute)}` : `${day}, antes de que acabe`;
 }
 
-export function validateAgreements(raw, lines, world, locationIds) {
+// `npcAccepts`: el propio personaje declara su aceptación con la herramienta `agree_plan` (su respuesta ES la aceptación), así que solo se exige la
+// cita literal del jugador. Con la reflexión del GM al cerrar se siguen exigiendo las dos citas.
+export function validateAgreements(raw, lines, world, locationIds, { npcAccepts = false } = {}) {
   const out = [];
   for (const item of Array.isArray(raw) ? raw.slice(0, 3) : []) {
     const text = typeof item?.text === 'string' ? item.text.trim().slice(0, 200) : '';
     // Sin aceptación explícita del personaje (y cita del jugador) no hay acuerdo: así no nacen promesas fantasma.
-    if (text.length < 3 || !quoted(lines, 'player', item.playerQuote) || !quoted(lines, 'npc', item.npcQuote)) continue;
+    if (text.length < 3 || !quoted(lines, 'player', item.playerQuote) || (!npcAccepts && !quoted(lines, 'npc', item.npcQuote))) continue;
     let kind = KINDS.has(item.kind) ? item.kind : 'other';
     let priority = PRIORITIES.includes(item.priority) ? item.priority : 'low';
     const place = locationIds.includes(item.place) ? item.place : null;
@@ -62,7 +64,9 @@ export function addCommitments(run, npcId, agreements) {
   const next = run;
   next.commitments ??= [];
   for (const agreement of agreements) {
-    const duplicate = next.commitments.some((item) => item.status === 'active' && item.npcId === npcId && normalize(item.text) === normalize(agreement.text));
+    // Mismo acuerdo dicho con otras palabras (el personaje lo anota al momento y el GM lo repite al cerrar): mismo tipo, lugar y hora.
+    const sameSlot = (item) => agreement.due?.dueMin != null && item.dueMin === agreement.due.dueMin && item.kind === agreement.kind && item.place === agreement.place;
+    const duplicate = next.commitments.some((item) => item.status === 'active' && item.npcId === npcId && (normalize(item.text) === normalize(agreement.text) || sameSlot(item)));
     if (duplicate) continue;
     next.commitments.push({
       id: randomUUID(), npcId, text: agreement.text, kind: agreement.kind, priority: agreement.priority, place: agreement.place,
