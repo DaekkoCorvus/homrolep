@@ -4,6 +4,8 @@ import { setTextSpeed } from './game.js';
 import { openPromptEditor } from './prompteditor.js';
 import { openProbe, openStats, openIntents } from './aitrace.js';
 import { askConfirm, askText } from './dialogs.js';
+import { openFraming } from './framing.js';
+import { alphaBounds } from '/shared/stage.js';
 
 const COMMANDS = [
   ['/dev', 'Activa o desactiva las herramientas de desarrollo'],
@@ -27,7 +29,7 @@ const COMMANDS = [
   ['/fx lite|full|auto', 'Calidad de efectos de la escena (lite congela las animaciones)']
 ];
 const DAYS = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
-const PORTRAIT_MAX_HEIGHT = 1200;
+const PORTRAIT_MAX_HEIGHT = 2048;   // cualquier lienzo vale: el tamaño en pantalla se ajusta con «Encuadrar»
 const norm = (value) => String(value ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
 const lines = (value) => (Array.isArray(value) ? value.join('\n') : '');
 
@@ -107,9 +109,9 @@ export async function openPanel() {
     <section><h3>Modelos y medición</h3><div class="dev-buttons"><button type="button" data-probe>Sonda de modelos</button><button type="button" data-stats>Estadísticas de llamadas</button><button type="button" data-intents>Intenciones sin mecánica</button></div>
       <p class="dev-hint">Compara modelos (herramientas nativas, JSON, tiempos) y mira cuántos tokens y segundos cuesta cada tipo de llamada. El modelo se cambia en Ajustes sin necesidad de comprobarlo.</p></section>
     <section><h3>Mapas</h3><div class="dev-buttons"><a class="dev-link" href="/mapeditor.html" target="_blank" rel="noopener">Abrir el editor de mapas</a></div><p class="dev-hint">Sube la imagen del mapa, calibra la escala, dibuja distritos y coloca lugares. Es una herramienta de PC; guarda en <code>data/canon/maps/</code>.</p></section>
-    <section><h3>Fichas de NPC</h3><div class="dev-list">${cards.map((card) => `<div class="dev-row"><span><strong>${escapeHtml(card.name)}</strong><small>${escapeHtml(card.id)} · ${escapeHtml(card.role || 'sin rol')}</small></span><button type="button" data-edit="${escapeHtml(card.id)}">Editar</button><button type="button" data-export="${escapeHtml(card.id)}">Exportar</button></div>`).join('')}</div>
-      <div class="dev-buttons"><button type="button" data-new>Nuevo NPC</button><label class="file-button">Importar ficha<input type="file" accept=".json,.png,application/json,image/png" hidden data-import></label></div>
-      <p class="dev-hint">Importa JSON propio, fichas «character card» v1/v2/v3 (JSON o PNG). También puedes dejar archivos en <code>data/canon/npcs/</code> y <code>assets/portraits/&lt;id&gt;/default.png</code> y reiniciar el servidor.</p></section>
+    <section><h3>Fichas de NPC</h3><div class="dev-list">${cards.map((card) => `<div class="dev-row"><span><strong>${escapeHtml(card.name)}</strong><small>${escapeHtml(card.id)} · ${escapeHtml(card.role || 'sin rol')}</small></span><div class="dev-row-actions"><button type="button" data-edit="${escapeHtml(card.id)}">Editar</button><button type="button" class="primary-dev" data-bundle="${escapeHtml(card.id)}">Exportar personaje completo</button><button type="button" data-export="${escapeHtml(card.id)}">Solo ficha (JSON)</button></div></div>`).join('')}</div>
+      <div class="dev-buttons"><button type="button" data-new>Nuevo NPC</button><label class="file-button">Importar ficha o personaje<input type="file" accept=".json,.png,application/json,image/png" hidden data-import></label></div>
+      <p class="dev-hint">«Exportar personaje completo» baja un <code>.hom.json</code> con la ficha, todas las imágenes, el encuadre y las expresiones que se mantienen; al importarlo se recupera todo. También se importan JSON propios y fichas «character card» v1/v2/v3 (JSON o PNG). También puedes dejar archivos en <code>data/canon/npcs/</code> y <code>assets/portraits/&lt;id&gt;/default.png</code> y reiniciar el servidor.</p></section>
     <section><h3>Comandos de chat</h3><dl class="dev-commands">${COMMANDS.map(([c, d]) => `<div><dt>${escapeHtml(c)}</dt><dd>${escapeHtml(d)}</dd></div>`).join('')}</dl></section></div>`);
   node.querySelector('[data-act=restart]').onclick = () => { node.remove(); hooks.perform(() => hooks.runDev({ op: 'restart' }), { animate: true }); };
   node.querySelector('[data-act=regen]').onclick = () => { node.remove(); hooks.perform(() => hooks.runDev({ op: 'regen' }), { animate: true }); };
@@ -118,6 +120,7 @@ export async function openPanel() {
   node.querySelector('[data-act=hour]').onclick = () => { const w = state.run.world; node.remove(); hooks.perform(() => hooks.runDev({ op: 'set_time', hour: (w.hour + 1) % 24, minute: w.minute, day: w.day + (w.hour === 23 ? 1 : 0) })); };
   node.querySelectorAll('[data-edit]').forEach((button) => button.onclick = () => openEditor(cards.find((card) => card.id === button.dataset.edit)));
   node.querySelectorAll('[data-export]').forEach((button) => button.onclick = () => exportCard(cards.find((card) => card.id === button.dataset.export)));
+  node.querySelectorAll('[data-bundle]').forEach((button) => button.onclick = () => exportBundle(button.dataset.bundle));
   node.querySelector('[data-new]').onclick = () => openEditor(null);
   node.querySelector('[data-probe]').onclick = () => openProbe();
   node.querySelector('[data-stats]').onclick = () => openStats();
@@ -142,31 +145,61 @@ async function wipeFeed() {
   catch (error) { notify(error.message); }
 }
 
-function exportCard(card) {
-  const { portraits, ...clean } = card;
-  const url = URL.createObjectURL(new Blob([`${JSON.stringify(clean, null, 2)}\n`], { type: 'application/json' }));
-  const link = Object.assign(document.createElement('a'), { href: url, download: `${card.id}.json` });
+const kb = (bytes) => (bytes >= 1e6 ? `${(bytes / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1000))} KB`);
+const MAX_IMPORT_BYTES = 45_000_000;   // lo que admite el servidor en una importación
+
+function download(name, text) {
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = Object.assign(document.createElement('a'), { href: url, download: name });
   document.body.append(link); link.click(); link.remove(); URL.revokeObjectURL(url);
-  notify(`Exportada ${card.id}.json`);
+  return blob.size;
 }
 
-const kb = (bytes) => (bytes >= 1e6 ? `${(bytes / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1000))} KB`);
+// Solo la ficha: JSON sin imágenes.
+function exportCard(card) {
+  const { portraits, warnings, ...clean } = card;
+  download(`${card.id}.json`, `${JSON.stringify(clean, null, 2)}\n`);
+  notify(`Exportada ${card.id}.json (solo la ficha, sin imágenes)`);
+}
+
+// Personaje completo: ficha, todas las imágenes de sus emociones, encuadre y expresiones que se mantienen, en un solo `<id>.hom.json`.
+// `card` (opcional) sustituye a la ficha guardada en el servidor, para incluir lo que se está editando sin guardar. Las imágenes siempre son las del servidor.
+async function exportBundle(id, card = null) {
+  try {
+    const bundle = await dreq(`/api/dev/npcs/${id}/bundle`);
+    if (card) { const { portraits, warnings: ignored, ...clean } = card; bundle.card = clean; }
+    const warnings = bundle.warnings ?? []; delete bundle.warnings;
+    const size = download(`${id}.hom.json`, `${JSON.stringify(bundle)}\n`);
+    notify(`Exportado ${id}.hom.json · ${Object.keys(bundle.images).length} imágenes · ${kb(size)}${warnings.length ? ` — ${warnings.join(' ')}` : ''}`);
+  } catch (error) { notify(error.message); }
+}
 
 // Reduce a la altura útil y recodifica a WebP con transparencia, en el navegador (sin dependencias).
 // Si el resultado no pesa menos, o el navegador no sabe codificar WebP, se conserva el archivo original.
-async function optimizeImage(file, quality) {
+// `trim` recorta los márgenes transparentes (ahorra peso y memoria en el móvil y facilita el encuadre).
+async function optimizeImage(file, quality, { trim = false } = {}) {
   if (quality === 'original') return { blob: file, note: 'sin cambios' };
   const bitmap = await createImageBitmap(file);
   const scale = Math.min(1, PORTRAIT_MAX_HEIGHT / bitmap.height);
-  const canvas = document.createElement('canvas');
+  let canvas = document.createElement('canvas');
   canvas.width = Math.round(bitmap.width * scale); canvas.height = Math.round(bitmap.height * scale);
   const context = canvas.getContext('2d');
   context.imageSmoothingQuality = 'high';
   context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
   bitmap.close?.();
+  let trimmed = false;
+  if (trim) {
+    const box = alphaBounds(context.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
+    if (box && (box.w < canvas.width || box.h < canvas.height)) {
+      const cut = document.createElement('canvas'); cut.width = box.w; cut.height = box.h;
+      cut.getContext('2d').drawImage(canvas, box.x, box.y, box.w, box.h, 0, 0, box.w, box.h);
+      canvas = cut; trimmed = true;
+    }
+  }
   const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', quality === 'max' ? 1 : 0.92));
-  if (!blob || blob.type !== 'image/webp' || (blob.size >= file.size && scale === 1)) return { blob: file, note: 'se conservó el original (ya era ligero)' };
-  return { blob, note: `${kb(file.size)} → ${kb(blob.size)} · ${canvas.width}×${canvas.height}` };
+  if (!blob || blob.type !== 'image/webp' || (blob.size >= file.size && scale === 1 && !trimmed)) return { blob: file, note: 'se conservó el original (ya era ligero)' };
+  return { blob, note: `${kb(file.size)} → ${kb(blob.size)} · ${canvas.width}×${canvas.height}${trimmed ? ' · márgenes recortados' : ''}` };
 }
 
 const toBase64 = (file) => new Promise((resolve, reject) => {
@@ -178,11 +211,12 @@ const toBase64 = (file) => new Promise((resolve, reject) => {
 
 async function importFile(file, overwrite = false) {
   if (!file) return;
+  if (file.size > MAX_IMPORT_BYTES) { notify(`El archivo pesa ${kb(file.size)} y el servidor solo admite ${kb(MAX_IMPORT_BYTES)}. Reduce las imágenes del personaje y vuelve a exportarlo.`); return; }
   try {
     const isPng = /\.png$/i.test(file.name) || file.type === 'image/png';
     const body = isPng ? { kind: 'png', data: await toBase64(file) } : { kind: 'json', text: await file.text() };
-    const card = await dreq('/api/dev/npcs/import', { method: 'POST', body: JSON.stringify({ ...body, overwrite }) });
-    notify(`Importada: ${card.name}`);
+    const { warnings = [], ...card } = await dreq('/api/dev/npcs/import', { method: 'POST', body: JSON.stringify({ ...body, overwrite }) });
+    notify(`Importada: ${card.name}${warnings.length ? ` — ${warnings.join(' ')}` : ''}`);
     hooks.reload();
     openEditor(card);
   } catch (error) {
@@ -286,7 +320,7 @@ export async function openEditor(card) {
     <nav class="tabs" role="tablist">${TABS.map(([id, label]) => `<button type="button" role="tab" data-tab="${id}">${label}</button>`).join('')}</nav>
     <div class="tab-body"></div><datalist id="npc-ids">${others.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join('')}</datalist>
     <p class="error" data-error role="alert"></p>
-    <footer><button type="button" data-export-now>Exportar JSON</button><button type="submit" class="primary-dev">Guardar</button></footer></form>`);
+    <footer>${isNew ? '' : '<button type="button" data-export-bundle>Exportar personaje completo</button>'}<button type="button" data-export-now>Solo ficha (JSON)</button><button type="submit" class="primary-dev">Guardar</button></footer></form>`);
   const form = node.querySelector('form'); const body = node.querySelector('.tab-body');
 
   const portraitPreview = () => {
@@ -294,20 +328,26 @@ export async function openEditor(card) {
     return `<section class="dev-portrait"><div class="portrait-preview">${portrait ? `<img src="${portrait}" alt="">` : '<span>Sin retrato</span>'}</div><p class="dev-hint">Las imágenes del personaje (retrato y emociones) se gestionan en la pestaña <strong>Emociones</strong>.</p></section>`;
   };
 
+  const framesOf = () => model.stage?.frames ?? {};
+  const frameLabel = (name) => (Object.hasOwn(framesOf(), name) ? ['set', 'Encuadre propio'] : Object.hasOwn(framesOf(), 'default') ? ['', 'Usa el de default'] : ['', 'Sin encuadre']);
+
   const emotionsSection = () => {
     const portraits = model.portraits ?? {};
     const names = Object.keys(portraits);
     if (isNew) return '<p class="dev-hint">Guarda el personaje primero para poder subir su retrato y sus emociones.</p>';
-    return `<p class="dev-hint">Cada imagen es una emoción o acción de <strong>una palabra</strong> (solo letras). El GM la invoca escribiendo su nombre entre llaves en mitad de la frase, por ejemplo <code>{feliz}</code>, y el sprite cambia justo ahí. Lo que ve el GM: <strong>${names.join(', ') || 'nada todavía'}</strong>. Usa el mismo lienzo y encuadre que el retrato por defecto.</p>
+    return `<p class="dev-hint">Cada imagen es una emoción o acción de <strong>una palabra</strong> (solo letras). El GM la invoca escribiendo su nombre entre llaves en mitad de la frase, por ejemplo <code>{feliz}</code>, y el sprite cambia justo ahí. Lo que ve el GM: <strong>${names.join(', ') || 'nada todavía'}</strong>. Cada imagen puede tener su propio lienzo y tamaño: ajusta cómo se ve en pantalla con <strong>Encuadrar</strong>.</p>
+      ${field('Estatura (cm)', 'stage.heightCm', { kind: 'number', hint: 'Solo es una guía: dibuja la regla del encuadre y sirve para calibrar con dos toques. Por sí sola no cambia nada en el juego.' })}
       <div class="emotion-grid">${names.map((name) => `<figure class="emotion" data-emotion="${escapeHtml(name)}"><img src="${portraits[name]}" alt=""><figcaption><strong>${escapeHtml(name)}</strong></figcaption>
+        <span class="emotion-frame ${frameLabel(name)[0]}">${frameLabel(name)[1]}</span>
         <label class="stay"><input type="checkbox" data-stay ${(model.emotionsStay ?? []).includes(name) ? 'checked' : ''} ${name === 'default' ? 'disabled' : ''}><span>Se mantiene</span></label>
-        <div class="emotion-actions"><button type="button" data-replace>Reemplazar</button>${name === 'default' ? '' : '<button type="button" data-rename>Renombrar</button><button type="button" data-delete class="danger">Eliminar</button>'}</div></figure>`).join('')}</div>
+        <div class="emotion-actions"><button type="button" data-frame>Encuadrar</button><button type="button" data-replace>Reemplazar</button>${name === 'default' ? '' : '<button type="button" data-rename>Renombrar</button><button type="button" data-delete class="danger">Eliminar</button>'}</div></figure>`).join('')}</div>
       <h3>Añadir emoción</h3>
       <div class="emotion-add"><input data-new-emotion placeholder="feliz" maxlength="20" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="Nombre de la emoción">
         <select data-quality aria-label="Calidad"><option value="balanced">WebP 92%</option><option value="max">WebP sin pérdida</option><option value="original">Tal cual</option></select>
-        <label class="file-button">Subir imagen<input type="file" accept="image/png,image/webp,image/jpeg" hidden data-new-file></label></div>
+        <label class="file-button">Subir imagen<input type="file" accept="image/png,image/webp,image/jpeg" hidden data-new-file></label>
+        <label class="trim-option"><input type="checkbox" data-trim checked><span>Recortar márgenes transparentes</span></label></div>
       <input type="file" accept="image/png,image/webp,image/jpeg" hidden data-replace-file>
-      <p class="dev-hint">Se convierte a WebP con transparencia y se guarda con el nombre que escribas. Si ya existe, se reemplaza.</p>
+      <p class="dev-hint">Se convierte a WebP con transparencia (hasta 2048 px de alto) y se guarda con el nombre que escribas. Si ya existe, se reemplaza; si tenía encuadre propio, se abre para que lo revises.</p>
       <p class="dev-hint"><strong>Se mantiene:</strong> por defecto cada expresión vuelve a la neutra unos segundos después de terminar la respuesta. Márcala si debe quedarse (escenas largas o íntimas) hasta que el GM ponga otra; no olvides pulsar Guardar.</p>`;
   };
 
@@ -362,13 +402,43 @@ export async function openEditor(card) {
   async function sendPortrait(emotion, file) {
     const name = normalizeEmotion(emotion);
     if (!name) { notify('Escribe un nombre para la emoción usando solo letras.'); return; }
+    const hadFrame = Object.hasOwn(framesOf(), name);   // si la imagen cambia de lienzo, su encuadre propio deja de valer
     try {
-      const { blob, note } = await optimizeImage(file, body.querySelector('[data-quality]')?.value ?? 'balanced');
+      const { blob, note } = await optimizeImage(file, body.querySelector('[data-quality]')?.value ?? 'balanced', { trim: body.querySelector('[data-trim]')?.checked ?? false });
       const saved = await dreq(`/api/dev/npcs/${model.id}/portrait`, { method: 'POST', body: JSON.stringify({ data: await toBase64(blob), emotion: name }) });
       model.portraits = saved.portraits; show('emotions'); hooks.reload();
       notify(`Emoción «${name}» guardada: ${note}`);
+      if (hadFrame) { notify(`Revisa el encuadre de «${name}»: la imagen cambió.`); frame(name); }
     } catch (failure) { notify(failure.message); }
   }
+
+  // Guarda la ficha completa (la misma petición que el botón Guardar). Devuelve la ficha ya validada por el servidor.
+  async function persist() {
+    const body = clean(); body.id = String(body.id ?? '').trim();
+    return dreq(`/api/dev/npcs/${body.id}`, { method: 'PUT', body: JSON.stringify(body) });
+  }
+
+  // Abre la vista de encuadre de una imagen. «Guardar encuadre» guarda la ficha entera para no perder trabajo, pero deja abierto el editor.
+  function frame(name) {
+    openFraming({
+      model, emotion: name, others,
+      onSave: async (stage) => {
+        if (stage) model.stage = stage; else delete model.stage;
+        const saved = await persist();
+        if (saved.stage) model.stage = saved.stage; else delete model.stage;
+        model.portraits = saved.portraits;
+        hooks.reload(); notify('Encuadre guardado.');
+        if (tab === 'emotions') show('emotions');
+      }
+    });
+  }
+
+  // Un frame huérfano es inofensivo pero ensucia la ficha: al renombrar o eliminar una emoción se mueve o se quita con ella.
+  const moveFrame = (from, to) => {
+    if (!model.stage?.frames || !Object.hasOwn(model.stage.frames, from)) return;
+    if (to) model.stage.frames[to] = model.stage.frames[from];
+    delete model.stage.frames[from];
+  };
 
   function bindEmotions() {
     const input = body.querySelector('[data-new-emotion]');
@@ -386,16 +456,17 @@ export async function openEditor(card) {
     body.querySelectorAll('.emotion').forEach((card) => {
       const name = card.dataset.emotion;
       card.querySelector('[data-stay]').onchange = (event) => { const stay = new Set(model.emotionsStay ?? []); if (event.target.checked) stay.add(name); else stay.delete(name); model.emotionsStay = [...stay]; };
+      card.querySelector('[data-frame]').onclick = () => frame(name);
       card.querySelector('[data-replace]').onclick = () => { target = name; replaceInput.click(); };
       card.querySelector('[data-rename]')?.addEventListener('click', async () => {
         const to = normalizeEmotion(await askText({ title: 'Nuevo nombre', text: 'Solo letras.', value: name, confirmLabel: 'Renombrar' }) ?? '');
         if (!to || to === name) return;
-        try { const saved = await dreq(`/api/dev/npcs/${model.id}/portrait/${name}/rename`, { method: 'POST', body: JSON.stringify({ to }) }); model.portraits = saved.portraits; model.emotionsStay = (model.emotionsStay ?? []).map((item) => (item === name ? to : item)); show('emotions'); hooks.reload(); notify(`«${name}» ahora es «${to}». Pulsa Guardar para conservar los cambios.`); }
+        try { const saved = await dreq(`/api/dev/npcs/${model.id}/portrait/${name}/rename`, { method: 'POST', body: JSON.stringify({ to }) }); model.portraits = saved.portraits; model.emotionsStay = (model.emotionsStay ?? []).map((item) => (item === name ? to : item)); moveFrame(name, to); show('emotions'); hooks.reload(); notify(`«${name}» ahora es «${to}». Pulsa Guardar para conservar los cambios.`); }
         catch (failure) { notify(failure.message); }
       });
       card.querySelector('[data-delete]')?.addEventListener('click', async () => {
         if (!await askConfirm({ title: `¿Eliminar la emoción «${name}»?`, confirmLabel: 'Eliminar', danger: true })) return;
-        try { const saved = await dreq(`/api/dev/npcs/${model.id}/portrait/${name}`, { method: 'DELETE' }); model.portraits = saved.portraits; model.emotionsStay = (model.emotionsStay ?? []).filter((item) => item !== name); show('emotions'); hooks.reload(); notify(`«${name}» eliminada.`); }
+        try { const saved = await dreq(`/api/dev/npcs/${model.id}/portrait/${name}`, { method: 'DELETE' }); model.portraits = saved.portraits; model.emotionsStay = (model.emotionsStay ?? []).filter((item) => item !== name); moveFrame(name, null); show('emotions'); hooks.reload(); notify(`«${name}» eliminada.`); }
         catch (failure) { notify(failure.message); }
       });
     });
@@ -404,12 +475,12 @@ export async function openEditor(card) {
   const clean = () => { const { portraits, ...rest } = model; return rest; };
   form.querySelectorAll('[data-tab]').forEach((button) => { button.onclick = () => show(button.dataset.tab); });
   form.querySelector('[data-export-now]').onclick = () => exportCard(clean());
+  form.querySelector('[data-export-bundle]')?.addEventListener('click', () => exportBundle(model.id, clean()));
   form.onsubmit = async (event) => {
     event.preventDefault();
     const error = form.querySelector('[data-error]'); error.textContent = '';
     try {
-      const body = clean(); body.id = String(body.id ?? '').trim();
-      const saved = await dreq(`/api/dev/npcs/${body.id}`, { method: 'PUT', body: JSON.stringify(body) });
+      const saved = await persist();
       notify(`Guardada: ${saved.name}`);
       node.remove(); hooks.reload();
     } catch (failure) { error.textContent = failure.message; }

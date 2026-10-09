@@ -128,7 +128,10 @@ test('dev API is closed by default and supports restart, regenerate and time cha
   const stored = runs.get(id); stored.player.locationId = 'cafe'; stored.world.hour = 9; runs.set(id, stored);
   assert.equal((await call(`/api/runs/${id}/dev`, { op: 'restart' }, false)).status, 403);
 
-  await call(`/api/runs/${id}/talk`, { op: 'start', npcId: 'luna_serp' });
+  assert.equal((await fetch(`${base}/shared/stage.js`)).status, 200, 'el módulo de encuadre se sirve al cliente');
+  assert.equal((await fetch(`${base}/framing.js`)).status, 200, 'la vista de encuadre se sirve al cliente');
+  const talk = await call(`/api/runs/${id}/talk`, { op: 'start', npcId: 'luna_serp' });
+  assert.equal(talk.body.encounterNpc.stage, null, 'Luna no tiene encuadre: el cliente usa el render clásico');
   await call(`/api/runs/${id}/talk`, { op: 'say', text: 'Hola' });
   const regen = await call(`/api/runs/${id}/dev`, { op: 'regen' });
   assert.equal(regen.status, 200);

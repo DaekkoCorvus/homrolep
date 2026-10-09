@@ -114,6 +114,10 @@ body:has(.game) { background:var(--void); overflow:hidden; }
 .vn-layer { position:absolute; left:0; right:0; z-index:1; display:flex; justify-content:center; align-items:flex-end; pointer-events:none; opacity:0; transition:opacity .7s ease; top:0; overflow:hidden; bottom:var(--dock-h,132px); }
 .vn-layer img { position:relative; width:auto; max-width:none; max-height:none; object-fit:contain; transform-origin:50% 100%; opacity:0; filter:drop-shadow(0 0 1.5px rgb(var(--cream-rgb) / .7)) drop-shadow(0 16px 24px rgb(0 0 0 / .73)); height:min(calc(var(--app-h,100dvh) * 78 / 100),170vw); }
 .vn-layer img:not([src]) { display:none; }
+/* Encuadre por personaje (src/shared/stage.js): todo en alturas de escenario (1 = alto de la capa). `translate` y no `transform`, para componerse con vn-enter/vn-breathe.
+   Esta regla es la única fuente de verdad: el editor de encuadre usa la misma clase .pf-stage. */
+.pf-stage { container-type:size; }
+.pf-stage img.framed { height:calc(var(--pf-h) * 100cqh); translate:calc(var(--pf-x) * 100cqh) calc(var(--pf-y) * -100cqh); }
 .game.talking.has-portrait .vn-layer { opacity:1; }
 .game.talking.has-portrait .scene-art { filter:brightness(.42) saturate(.85) blur(4px); }
 .vn-layer::before { content:''; position:absolute; left:50%; bottom:8%; width:min(120vw,620px); aspect-ratio:1; transform:translateX(-50%); border-radius:50%; background:radial-gradient(circle,rgb(var(--lamp-rgb) / .2) 0,rgb(var(--lamp-deep-rgb) / .12) 34%,transparent 68%); opacity:0; transition:opacity 1s ease .2s; }

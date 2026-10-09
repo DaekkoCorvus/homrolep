@@ -8,6 +8,7 @@ import { renderActionBar, closeSheet, SHEET_HTML } from './actionbar.js';
 import { formatNpc, actionRanges, plainText, TEXTBOX_HTML, bindTextbox, setSpeaker, setThinking, setEnd, refreshOverflow, showChanges, historyEntries } from './textbox.js';
 import { threadView as chatThreadView, bindChat } from './chat.js';
 import { feedView, notificationsView, setupView, profileView, meButton, bindFeed, enterFeed, markRead } from './northlife.js';
+import { frameFor } from '/shared/stage.js';
 
 const ui = { phoneOpen:false, phoneView:'home', busy:false, sceneKey:null, mapOpen:false, map:null, holdTitle:false, pendingTitle:null, pendingChanges:[], tb:null, hooks:{} };
 const PHONE_APPS = [
@@ -42,7 +43,7 @@ export function enterGame(hooks) {
   document.getElementById('vortex-layer')?.contentWindow?.postMessage({ type:'vortex', zoom:1, flash:0, rate:2 }, location.origin);
   app.innerHTML = `<main class="game">
     <div class="scene" aria-hidden="true"><div class="scene-art"></div><div class="scene-dust"></div><div class="scene-vignette"></div></div>
-    <div class="vn-layer" aria-hidden="true"><img class="vn-main" alt=""></div>
+    <div class="vn-layer pf-stage" aria-hidden="true"><img class="vn-main" alt=""></div>
     <div class="place-title" aria-live="polite"></div>
     <header class="hud">
       <div class="hud-left"><div class="hud-row"><div class="clock-pill" role="status"><span class="clock-dot"></span><span class="hud-lines"><strong class="hud-place"></strong><small class="clock-text"></small></span><span class="hud-money" title="Dinero"></span></div><button type="button" class="dev-pill" data-dev hidden>DEV</button></div><button type="button" class="hud-next" data-next hidden></button></div>
@@ -181,16 +182,27 @@ function renderPortrait(root) {
     return;
   }
   for (const other of Object.values(npc.portraits ?? {})) preloadImage(other);
+  // Encuadre de la imagen que realmente se muestra (si falta la emoción se cae a «default», y con ella su frame).
+  const frame = frameFor(npc.stage, npc.portraits?.[currentEmotion()] ? currentEmotion() : 'default');
   const shown = img.getAttribute('src');
-  if (shown === url) { root.classList.add('has-portrait'); return; }
+  if (shown === url) { applyFrame(img, frame); root.classList.add('has-portrait'); return; }
   if (shown && root.classList.contains('has-portrait')) {
     // Cambio de expresión: corte limpio, sin mezclar fotogramas (las poses no coinciden). Se decodifica antes para evitar parpadeos.
+    // El encuadre cambia en el mismo instante que el `src`: antes o después el sprite saltaría un fotograma.
     const probe = new Image(); probe.src = url;
-    const swap = () => { if (img.getAttribute('src') !== url) { img.dataset.swap = '1'; img.src = url; } };
+    const swap = () => { if (img.getAttribute('src') !== url) { img.dataset.swap = '1'; applyFrame(img, frame); img.src = url; } };
     (probe.decode ? probe.decode() : Promise.resolve()).then(swap, swap);
     return;
   }
-  img.classList.remove('in'); img.src = url;
+  img.classList.remove('in'); applyFrame(img, frame); img.src = url;
+}
+
+// Pone (o quita) el encuadre del sprite: variables en alturas de escenario que lee `.pf-stage img.framed` (mundo.css).
+export function applyFrame(img, frame) {
+  img.classList.toggle('framed', Boolean(frame));
+  for (const [key, value] of [['--pf-h', frame?.h], ['--pf-x', frame?.x], ['--pf-y', frame?.y]]) {
+    if (frame) img.style.setProperty(key, String(value)); else img.style.removeProperty(key);
+  }
 }
 
 const preloaded = new Set();

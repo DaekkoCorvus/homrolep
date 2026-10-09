@@ -1,5 +1,6 @@
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { normalizeStage } from '../../shared/stage.js';
 
 // Fichas de NPC: validación, importación (nativa y formato «character card» de Tavern), retratos.
 const ID = /^[a-z][a-z0-9_]{1,40}$/;
@@ -55,6 +56,7 @@ export function validateNpcCard(input, locationIds) {
   }));
   if (connections.length > 30) throw new Error('Se admiten 30 conexiones como máximo.');
   if (connections.some((link) => link.npcId === id)) throw new Error('Un personaje no puede conectarse consigo mismo.');
+  const stage = normalizeStage(input.stage);
   return {
     id, name, age, role: text(input.role, 120, 'el rol'), gender: text(input.gender, 30, 'el género'), race,
     tier: TIERS.has(input.tier) ? input.tier : 'civil',
@@ -80,7 +82,9 @@ export function validateNpcCard(input, locationIds) {
     schedule, connections,
     // Emociones que no vuelven solas a la neutra: se quedan hasta que el GM ponga otra (escenas largas, sprites especiales).
     emotionsStay: list(input.emotionsStay, 60, 20, 'las emociones que se mantienen').map((name) => name.toLowerCase()).filter((name) => /^[a-z]{1,20}$/.test(name)),
-    contact: { handle, conditions: list(input.contact?.conditions, 20, 500, 'las condiciones de contacto') }
+    contact: { handle, conditions: list(input.contact?.conditions, 20, 500, 'las condiciones de contacto') },
+    // Encuadre en escena (tamaño y posición por emoción); la clave solo existe si hay algo que guardar.
+    ...(stage && { stage })
   };
 }
 
@@ -145,8 +149,8 @@ export async function savePortrait(assetDir, npcId, buffer, emotion = 'default')
   return kind;
 }
 
-// Devuelve {emotion: url}. `default` es el retrato base; el resto queda listo para cuando se añadan emociones.
-export async function listPortraits(assetDir, npcId) {
+// La mejor imagen de cada emoción (la más ligera si hay varias): [{ emotion, name, ext, file }] ordenado por emoción. Sin carpeta, lista vacía.
+export async function bestPortraitFiles(assetDir, npcId) {
   const directory = path.join(assetDir, 'portraits', npcId);
   const best = new Map();
   try {
@@ -156,10 +160,17 @@ export async function listPortraits(assetDir, npcId) {
       if (rank < 0 || !EMOTION.test(emotion)) continue;
       if (!best.has(emotion) || rank < best.get(emotion).rank) best.set(emotion, { rank, name });
     }
-    const out = {};
-    for (const [emotion, { name }] of [...best].sort()) out[emotion] = `/assets/portraits/${npcId}/${name}?v=${Math.round((await stat(path.join(directory, name))).mtimeMs)}`;
-    return out;
-  } catch { return {}; } // sin carpeta: aún no hay retratos
+  } catch { return []; }
+  return [...best].sort().map(([emotion, { name }]) => ({ emotion, name, ext: path.extname(name).toLowerCase(), file: path.join(directory, name) }));
+}
+
+// Devuelve {emotion: url}. `default` es el retrato base; el resto queda listo para cuando se añadan emociones.
+export async function listPortraits(assetDir, npcId) {
+  const out = {};
+  try {
+    for (const { emotion, name, file } of await bestPortraitFiles(assetDir, npcId)) out[emotion] = `/assets/portraits/${npcId}/${name}?v=${Math.round((await stat(file)).mtimeMs)}`;
+  } catch { return {}; }
+  return out;
 }
 
 const portraitFiles = async (directory, emotion) => (await readdir(directory).catch(() => [])).filter((name) => path.parse(name).name === emotion && PORTRAIT_PRIORITY.includes(path.parse(name).ext.toLowerCase()));

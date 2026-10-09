@@ -6,6 +6,7 @@ import { createRun, setPrologue, relocateIfMissing, startEncounter, addExchange,
 import { advanceTime, timeKey } from './game/clock.js';
 import { validateAgreements, addCommitments, applyUpdates, settleCommitments, keepMeetings, meetingNpcIds, commitmentsFor } from './game/commitments.js';
 import { validateNpcCard, fromForeignCard, parsePngCard, savePortrait, listPortraits, saveNpcCard, imageKind, removePortrait, renamePortrait, normalizeEmotion } from './game/cards.js';
+import { BUNDLE_FORMAT, buildBundle, parseBundle, installBundle, sanitizeLocations } from './game/bundle.js';
 import { loadNpcs, presentNpcs, publicNpc, relationshipOf, affinityOf, attitudeOf, validateEvaluation, validateFacts, scheduleFor, minutesOfWorld, applyEvaluation, debugView, temporalContext, timedNotes, timedHistory, contactAllowed, findNpcByHandle, parseSpeech, stripMarks, contactInfo, stickyFrom } from './game/npcs.js';
 import { createNanoGPT, AIError } from './ai/provider.js';
 import { gameRegistry, applyAction } from './ai/tools/game.js';
@@ -29,27 +30,27 @@ import { ensureChatIds, typingMs, readMs, quoteText, MAX_UNANSWERED } from './ga
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const publicDir = path.join(root, 'public');
-const assetDir = path.join(root, 'assets');
+const defaultAssetDir = path.join(root, 'assets');
 const clientDir = path.join(root, 'src/client');
-const npcDir = path.join(root, 'data/canon/npcs');
+const defaultNpcDir = path.join(root, 'data/canon/npcs');
 const sharedDir = path.join(root, 'src/shared');
 // Editor de mapas (modo desarrollo): los mapas del canon viven en data/canon/maps y sus imágenes en assets/maps.
-const defaultMapStore = createMapStore({ dir: path.join(root, 'data/canon/maps'), assetDir: path.join(assetDir, 'maps') });
+const defaultMapStore = createMapStore({ dir: path.join(root, 'data/canon/maps'), assetDir: path.join(defaultAssetDir, 'maps') });
 // Lugares, distancias y tiempos de viaje: UNA sola fuente (el mapa que designa data/canon/world.json), con recarga en caliente al guardarlo en el editor.
 const defaultGeography = createGeography({ worldFile: path.join(root, 'data/canon/world.json'), mapsDir: path.join(root, 'data/canon/maps'), warn: (message) => console.warn(`[mapa] ${message}`) });
 await defaultGeography.refresh(true);
-const npcs = await loadNpcs(npcDir);
+const defaultNpcs = await loadNpcs(defaultNpcDir);
 // Datos locales de la red social: cuentas canónicas (popularidad e imagen fijas, p. ej. @RexNova) y catálogo de avatares https para las
 // cuentas aleatorias. Todo lo demás lo inventa el modelo y lo valida el motor. Se relee solo si cambian los archivos.
-const defaultSocialCatalog = createSocialCatalog({ dir: path.join(root, 'data/canon/social'), assetDir });
+const defaultSocialCatalog = createSocialCatalog({ dir: path.join(root, 'data/canon/social'), assetDir: defaultAssetDir });
 await defaultSocialCatalog.refresh(true);
 const port = Number(process.env.PORT) || 3000;
 // HOM_DEBUG=1 (lo activa scripts/dev-local.mjs): registra en consola las peticiones /api y los errores del servidor.
 const debug = process.env.HOM_DEBUG === '1';
 
-const clientFiles = new Set(['/index.html', '/app.js', '/core.js', '/game.js', '/devtools.js', '/prompteditor.js', '/aitrace.js', '/northlife.js', '/chat.js', '/scenes.js', '/base.css', '/umbral.css', '/mundo.css', '/objetos.css', '/desarrollo.css', '/mapeditor.html', '/mapeditor.js', '/mapeditor.css', '/mapview.js', '/maprender.js', '/mapatlas.js', '/worldmap.js', '/textbox.js', '/actionbar.js', '/dialogs.js', '/settings.js', '/saves.js']);
+const clientFiles = new Set(['/index.html', '/app.js', '/core.js', '/game.js', '/devtools.js', '/framing.js', '/prompteditor.js', '/aitrace.js', '/northlife.js', '/chat.js', '/scenes.js', '/base.css', '/umbral.css', '/mundo.css', '/objetos.css', '/desarrollo.css', '/mapeditor.html', '/mapeditor.js', '/mapeditor.css', '/mapview.js', '/maprender.js', '/mapatlas.js', '/worldmap.js', '/textbox.js', '/actionbar.js', '/dialogs.js', '/settings.js', '/saves.js']);
 // Módulos que comparten el navegador y el motor (geometría y esquema del mapa): se sirven tal cual para que el editor valide igual que el servidor.
-const sharedFiles = new Set(['geo.js', 'mapSchema.js', 'mapDefaults.js', 'mapGen.js', 'mapSelect.js', 'mapStyle.js', 'mapTerrain.js', 'mapTravel.js', 'mapLayers.js', 'polygonClipping.js']);
+const sharedFiles = new Set(['geo.js', 'mapSchema.js', 'mapDefaults.js', 'mapGen.js', 'mapSelect.js', 'mapStyle.js', 'mapTerrain.js', 'mapTravel.js', 'mapLayers.js', 'polygonClipping.js', 'stage.js']);
 const mimeTypes = { '.png':'image/png', '.webp':'image/webp', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.json':'application/json; charset=utf-8', '.svg':'image/svg+xml', '.woff2':'font/woff2', '.txt':'text/plain; charset=utf-8' };
 
 function sendJson(response, status, body) {
@@ -66,7 +67,7 @@ async function readBody(request, limit = 32_000) {
   return raw ? JSON.parse(raw) : {};
 }
 
-export function createAppServer({ maps = defaultMapStore, geography = defaultGeography, socialCatalog = defaultSocialCatalog, prompts = createPromptStore(), ai = createNanoGPT(fetch, { prompts }), settings = createSettingsStore(), store = { saveRun, loadRun, listRuns, deleteRun } } = {}) {
+export function createAppServer({ npcs = defaultNpcs, npcDir = defaultNpcDir, assetDir = defaultAssetDir, maps = defaultMapStore, geography = defaultGeography, socialCatalog = defaultSocialCatalog, prompts = createPromptStore(), ai = createNanoGPT(fetch, { prompts }), settings = createSettingsStore(), store = { saveRun, loadRun, listRuns, deleteRun } } = {}) {
 // Una partida solo admite una operación a la vez. Las del jugador se rechazan si hay otra en curso; el trabajo de fondo (evaluar una
 // conversación, generar el feed) hace su llamada al modelo SIN tener la partida y solo espera su turno para aplicar el resultado
 // (cargar, aplicar, guardar: milisegundos), así que nunca pisa lo que el jugador hizo mientras tanto ni lo bloquea.
@@ -436,7 +437,9 @@ async function devRoutes(request, response, pathname) {
   if (pathname.startsWith('/api/dev/maps')) return mapRoutes(request, response, pathname);
   if (request.method === 'GET' && pathname === '/api/dev/npcs') return sendJson(response, 200, await Promise.all([...npcs.values()].map(withPortraits)));
   if (request.method === 'POST' && pathname === '/api/dev/npcs/import') {
-    const body = await readBody(request, 12_000_000);
+    // 45 MB: un paquete completo (ficha + todas las imágenes en base64) pesa bastante más que una ficha suelta.
+    const body = await readBody(request, 45_000_000);
+    const fallbackLocation = locationIds.includes(world().spawn) ? world().spawn : locationIds[0];
     let raw; let portrait = null;
     if (body.kind === 'png') {
       portrait = Buffer.from(String(body.data ?? ''), 'base64');
@@ -444,13 +447,27 @@ async function devRoutes(request, response, pathname) {
     } else {
       try { raw = JSON.parse(String(body.text ?? '')); } catch { throw new Error('El archivo no es un JSON válido.'); }
     }
+    const exists = (id) => npcs.has(id) && !body.overwrite;
+    if (raw?.format === BUNDLE_FORMAT) {
+      const { card, images, warnings } = parseBundle(raw, { locationIds, fallbackLocation });
+      if (exists(card.id)) throw Object.assign(new Error(`Ya existe «${card.id}». Si lo sobrescribes se reemplazan la ficha y TODAS sus imágenes (las emociones que el paquete no traiga desaparecen; los originales de source/ se conservan). ¿Continuar?`), { status: 409, code: 'NPC_EXISTS' });
+      await installBundle({ npcDir, assetDir, card, images });
+      npcs.set(card.id, card);
+      return sendJson(response, 200, { ...(await withPortraits(card)), warnings });
+    }
     const native = raw && typeof raw === 'object' && raw.schedule && raw.personality;
-    const card = validateNpcCard(native ? raw : fromForeignCard(raw, locationIds.includes('cafe') ? 'cafe' : locationIds[0]), locationIds);
-    if (npcs.has(card.id) && !body.overwrite) throw Object.assign(new Error(`Ya existe «${card.id}». ¿Sobrescribirlo?`), { status: 409, code: 'NPC_EXISTS', card });
+    const { card: source, warnings } = native ? sanitizeLocations(raw, locationIds, fallbackLocation) : { card: fromForeignCard(raw, locationIds.includes('cafe') ? 'cafe' : locationIds[0]), warnings: [] };
+    const card = validateNpcCard(source, locationIds);
+    if (exists(card.id)) throw Object.assign(new Error(`Ya existe «${card.id}». ¿Sobrescribirlo?`), { status: 409, code: 'NPC_EXISTS', card });
     await saveNpcCard(npcDir, card);
     npcs.set(card.id, card);
     if (portrait) await savePortrait(assetDir, card.id, portrait);
-    return sendJson(response, 200, await withPortraits(card));
+    return sendJson(response, 200, { ...(await withPortraits(card)), warnings });
+  }
+  const bundleRoute = pathname.match(/^\/api\/dev\/npcs\/([a-z][a-z0-9_]{1,40})\/bundle$/);
+  if (bundleRoute && request.method === 'GET') {
+    if (!npcs.has(bundleRoute[1])) throw Object.assign(new Error('NPC desconocido.'), { status: 404 });
+    return sendJson(response, 200, await buildBundle(assetDir, npcs.get(bundleRoute[1])));
   }
   const match = pathname.match(/^\/api\/dev\/npcs\/([a-z][a-z0-9_]{1,40})(\/portrait)?(?:\/([a-z]{1,20})(\/rename)?)?$/);
   if (match && request.method === 'PUT' && !match[2]) {
