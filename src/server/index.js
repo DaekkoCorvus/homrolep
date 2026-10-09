@@ -5,8 +5,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRun, setPrologue, relocateIfMissing, startEncounter, addExchange, endEncounter, rewindEncounter, replaceLastNpcLine, reapplyEnding, setWorldTime, addContact, grantContact, leaveEncounter, MAX_PLAYER_TEXT } from './game/run.js';
 import { advanceTime, timeKey } from './game/clock.js';
 import { validateAgreements, addCommitments, applyUpdates, settleCommitments, keepMeetings, meetingNpcIds, commitmentsFor } from './game/commitments.js';
-import { validateNpcCard, fromForeignCard, parsePngCard, savePortrait, listPortraits, saveNpcCard, imageKind, removePortrait, renamePortrait, normalizeEmotion } from './game/cards.js';
-import { BUNDLE_FORMAT, buildBundle, parseBundle, installBundle, sanitizeLocations } from './game/bundle.js';
+import { validateNpcCard, fromForeignCard, importOver, parsePngCard, savePortrait, listPortraits, saveNpcCard, imageKind, removePortrait, renamePortrait, normalizeEmotion } from './game/cards.js';
+import { BUNDLE_FORMAT, BUNDLE_VERSION, buildBundle, parseBundle, installBundle, sanitizeLocations } from './game/bundle.js';
 import { loadNpcs, presentNpcs, publicNpc, relationshipOf, affinityOf, attitudeOf, validateEvaluation, validateFacts, scheduleFor, minutesOfWorld, applyEvaluation, debugView, temporalContext, timedNotes, timedHistory, contactAllowed, findNpcByHandle, parseSpeech, stripMarks, contactInfo, stickyFrom } from './game/npcs.js';
 import { createNanoGPT, AIError } from './ai/provider.js';
 import { gameRegistry, applyAction } from './ai/tools/game.js';
@@ -468,6 +468,28 @@ async function devRoutes(request, response, pathname) {
   if (bundleRoute && request.method === 'GET') {
     if (!npcs.has(bundleRoute[1])) throw Object.assign(new Error('NPC desconocido.'), { status: 404 });
     return sendJson(response, 200, await buildBundle(assetDir, npcs.get(bundleRoute[1])));
+  }
+  // Importar sobre una ficha existente: lee el archivo (JSON propio, paquete .hom.json o character card) y devuelve la ficha ya fusionada con `base`
+  // (lo que el editor tiene ahora). NO escribe nada: el editor la muestra y el creador decide si pulsa Guardar.
+  const overRoute = pathname.match(/^\/api\/dev\/npcs\/([a-z][a-z0-9_]{1,40})\/import-over$/);
+  if (overRoute && request.method === 'POST') {
+    if (!npcs.has(overRoute[1])) throw Object.assign(new Error('NPC desconocido.'), { status: 404 });
+    const body = await readBody(request, 45_000_000);
+    let raw;
+    if (body.kind === 'png') raw = parsePngCard(Buffer.from(String(body.data ?? ''), 'base64'));
+    else { try { raw = JSON.parse(String(body.text ?? '')); } catch { throw new Error('El archivo no es un JSON válido.'); } }
+    const warnings = [];
+    if (raw?.format === BUNDLE_FORMAT) {
+      if (!Number.isInteger(raw.version) || raw.version > BUNDLE_VERSION) throw new Error('Este personaje se exportó con una versión más nueva del juego. Actualiza el juego para poder importarlo.');
+      if (Object.keys(raw.images ?? {}).length) warnings.push('Las imágenes del paquete no se importan aquí; para traerlas usa «Importar ficha o personaje» en el panel de fichas.');
+      raw = raw.card;
+    }
+    const fallbackLocation = locationIds.includes(world().spawn) ? world().spawn : locationIds[0];
+    const base = body.base && typeof body.base === 'object' ? body.base : npcs.get(overRoute[1]);
+    const { card: merged, replaced } = importOver(base, raw, locationIds.includes('cafe') ? 'cafe' : locationIds[0]);
+    const { card: sanitized, warnings: placeWarnings } = sanitizeLocations(merged, locationIds, fallbackLocation);
+    const card = validateNpcCard({ ...sanitized, id: overRoute[1] }, locationIds);
+    return sendJson(response, 200, { card, replaced, warnings: [...warnings, ...placeWarnings] });
   }
   const match = pathname.match(/^\/api\/dev\/npcs\/([a-z][a-z0-9_]{1,40})(\/portrait)?(?:\/([a-z]{1,20})(\/rename)?)?$/);
   if (match && request.method === 'PUT' && !match[2]) {

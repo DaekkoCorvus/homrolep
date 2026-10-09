@@ -328,6 +328,28 @@ export async function openEditor(card) {
     return `<section class="dev-portrait"><div class="portrait-preview">${portrait ? `<img src="${portrait}" alt="">` : '<span>Sin retrato</span>'}</div><p class="dev-hint">Las imágenes del personaje (retrato y emociones) se gestionan en la pestaña <strong>Emociones</strong>.</p></section>`;
   };
 
+  // Importar un archivo SOBRE esta ficha: sustituye los datos que el archivo trae y deja el resto. No guarda hasta pulsar Guardar.
+  const importOverSection = () => (isNew ? '' : `<section class="dev-import"><div class="dev-buttons"><button type="button" data-import-over>Importar card sobre esta ficha…</button></div>
+    <input type="file" accept=".json,.png,application/json,image/png" hidden data-import-over-file>
+    <p class="dev-hint">Sustituye los datos de esta ficha por los de un archivo: JSON propio, paquete <code>.hom.json</code> o «character card» v1/v2/v3 (JSON o PNG). Solo cambia lo que el archivo trae; el identificador y las imágenes no se tocan, y no se guarda hasta que pulses Guardar.</p></section>`);
+
+  async function importOverFile(file) {
+    if (!file) return;
+    if (file.size > MAX_IMPORT_BYTES) { notify(`El archivo pesa ${kb(file.size)} y el servidor solo admite ${kb(MAX_IMPORT_BYTES)}.`); return; }
+    try {
+      const isPng = /\.png$/i.test(file.name) || file.type === 'image/png';
+      const source = isPng ? { kind: 'png', data: await toBase64(file) } : { kind: 'json', text: await file.text() };
+      const { card, replaced, warnings = [] } = await dreq(`/api/dev/npcs/${model.id}/import-over`, { method: 'POST', body: JSON.stringify({ ...source, base: clean() }) });
+      if (!await askConfirm({ title: `¿Sustituir datos de ${model.name || model.id}?`, text: `Se sustituirán: ${replaced.join(', ')}. Lo demás no cambia. Verás el resultado en el editor y no se guarda hasta que pulses Guardar.`, confirmLabel: 'Sustituir' })) return;
+      const { id, portraits } = model;
+      for (const key of Object.keys(model)) delete model[key];
+      Object.assign(model, card, { id, portraits });   // el mismo objeto: los demás controles del editor lo siguen usando
+      node.querySelector('header h2').textContent = model.name;
+      show(tab);
+      notify(`Datos importados (${replaced.length} campos). Revisa y pulsa Guardar.${warnings.length ? ` ${warnings.join(' ')}` : ''}`);
+    } catch (error) { notify(error.message); }
+  }
+
   const framesOf = () => model.stage?.frames ?? {};
   const frameLabel = (name) => (Object.hasOwn(framesOf(), name) ? ['set', 'Encuadre propio'] : Object.hasOwn(framesOf(), 'default') ? ['', 'Usa el de default'] : ['', 'Sin encuadre']);
 
@@ -352,7 +374,7 @@ export async function openEditor(card) {
   };
 
   const sections = {
-    identity: () => portraitPreview() + field('Identificador (solo modo dev)', 'id', { readonly: !isNew, hint: 'Minúsculas, números y _. No se muestra al jugador.' }) + field('Nombre', 'name') + field('Edad', 'age', { kind: 'number' }) + field('Rol', 'role', { placeholder: 'Dueña y barista de…' })
+    identity: () => importOverSection() + portraitPreview() + field('Identificador (solo modo dev)', 'id', { readonly: !isNew, hint: 'Minúsculas, números y _. No se muestra al jugador.' }) + field('Nombre', 'name') + field('Edad', 'age', { kind: 'number' }) + field('Rol', 'role', { placeholder: 'Dueña y barista de…' })
       + field('Género', 'gender', { kind: 'select', options: (GENDER_OPTIONS.includes(model.gender) || !model.gender ? GENDER_OPTIONS : [...GENDER_OPTIONS, model.gender]).map((value) => [value, value]) })
       + field('Raza', 'race', { kind: 'select', options: RACE_OPTIONS }) + field('Resumen', 'summary', { kind: 'area', rows: 4, hint: 'Quién es, en pocas líneas.' }),
     personality: () => tagsField('Rasgos', 'personality.traits') + field('Forma de hablar', 'personality.speech', { kind: 'area', rows: 4 }) + tagsField('Le gusta', 'personality.likes') + tagsField('Le desagrada', 'personality.dislikes')
@@ -397,6 +419,11 @@ export async function openEditor(card) {
       bind();
     }
     if (name === 'emotions') bindEmotions();
+    if (name === 'identity' && !isNew) {
+      const picker = body.querySelector('[data-import-over-file]');
+      body.querySelector('[data-import-over]').onclick = () => picker.click();
+      picker.onchange = () => { const file = picker.files[0]; picker.value = ''; importOverFile(file); };
+    }
   }
 
   async function sendPortrait(emotion, file) {
